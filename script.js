@@ -888,6 +888,8 @@ function drawElementBody(world, sFront, sBack, apRegion) {
 }
 
 function drawElementsClosed(world, surfaces) {
+  let minNonOverlap = Infinity;
+
   for (let i = 0; i < surfaces.length - 1; i++) {
     const sA = surfaces[i];
     const sB = surfaces[i + 1];
@@ -903,20 +905,26 @@ function drawElementsClosed(world, surfaces) {
 
     const apA = Math.max(0, Number(sA.ap || 0));
     const apB = Math.max(0, Number(sB.ap || 0));
+
     // Drawing safety clamp: never draw beyond spherical existence
     const limA = maxApForSurface(sA);
     const limB = maxApForSurface(sB);
+
     let apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
 
-// extra: prevent “snoeppapiertje” (self-intersection)
-const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
-apRegion = Math.min(apRegion, nonOverlap);
+    // extra: prevent “snoeppapiertje” (self-intersection)
+    const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
+    minNonOverlap = Math.min(minNonOverlap, nonOverlap);
+    apRegion = Math.min(apRegion, nonOverlap);
 
-drawElementBody(world, sA, sB, apRegion);
+    drawElementBody(world, sA, sB, apRegion);
   }
-}
-if (nonOverlap < 0.5 && ui.footerWarn) {
-  ui.footerWarn.textContent = "WARNING: element surfaces overlap (negative thickness) — increase t or reduce curvature/aperture.";
+
+  // one global warning (optional)
+  if (minNonOverlap < 0.5 && ui.footerWarn) {
+    ui.footerWarn.textContent =
+      "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
+  }
 }
 function drawSurface(world, s) {
   ctx.save();
