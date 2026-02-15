@@ -303,3 +303,118 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
   .layout{ grid-template-columns: 1fr; height: auto; }
   .left{ min-width: 0; }
 }
+
+
+
+
+/* ===== MODAL FORM: make it not ugly ===== */
+.modalCard{
+  color: var(--text);
+}
+
+/* label styling */
+.modalCard label{
+  display:block;
+  font-size:12px;
+  color: var(--muted);
+  margin-bottom:6px;
+}
+
+/* universal control styling in modal (fixes white inputs like "Glass note") */
+.modalCard input,
+.modalCard select,
+.modalCard textarea{
+  width:100%;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.28);
+  color: var(--text);
+  padding:10px 12px;
+  outline:none;
+  font-family: var(--sans);
+  font-size:13px;
+}
+
+.modalCard textarea{
+  min-height:84px;
+  resize: vertical;
+  font-family: var(--mono);
+  color: rgba(255,255,255,.82);
+}
+
+/* focus */
+.modalCard input:focus,
+.modalCard select:focus,
+.modalCard textarea:focus{
+  border-color: rgba(42,110,242,.60);
+  box-shadow: 0 0 0 4px rgba(42,110,242,.16);
+}
+
+/* nicer selects on mac */
+.modalCard select{
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(255,255,255,.65) 50%),
+    linear-gradient(135deg, rgba(255,255,255,.65) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 12px) 50%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+
+/* groups / rows inside modal */
+.modalGrid{
+  padding:16px;
+  gap:14px;
+}
+.modalGrid > div{
+  padding:12px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;
+  background: rgba(0,0,0,.14);
+}
+
+/* header close button (if it's just a button/link) */
+.modalHeader button,
+.modalHeader .closeBtn{
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  width:34px;
+  height:34px;
+  border-radius:12px;
+  cursor:pointer;
+}
+.modalHeader button:hover,
+.modalHeader .closeBtn:hover{
+  border-color: rgba(255,255,255,.22);
+  transform: translateY(-1px);
+}
+
+/* actions row - make "Insert" actually look like a primary action */
+.modalActions{
+  padding:14px 16px;
+  gap:10px;
+  display:flex;
+  justify-content:flex-end;
+  border-top:1px solid rgba(255,255,255,.10);
+  background: linear-gradient(180deg, rgba(0,0,0,.00), rgba(0,0,0,.18));
+}
+
+.modalActions .btn,
+.modalActions button{
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  padding:10px 12px;
+  border-radius:14px;
+  font-size:12px;
+  cursor:pointer;
+}
+
+.modalActions .btnPrimary{
+  border-color: rgba(42,110,242,.55);
+  background: linear-gradient(180deg, rgba(42,110,242,.42), rgba(42,110,242,.20));
+}
