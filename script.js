@@ -1,15 +1,15 @@
-/* Meridional Raytracer (2D) — TVL Rebuild
+/* Meridional Raytracer (2D) — TVL Rebuild (FULL SCRIPT)
    - Optical axis: +x, height: y
    - Surfaces: spherical (R!=0) or plane (R=0)
    - Thickness t: distance to next surface vertex (along x)
    - Aperture ap: clear semi-diameter at surface
    - Glass column = medium AFTER the surface (OSLO-ish)
-   - Rays sampled at a reference plane (front surface by default) so you see edge behavior
-   - Stop-aware: STOP is still meaningful for T-approx and chief ray definition
-   - EFL/BFL via paraxial method (closer to OSLO)
-   - T-stop sanity approx: T ≈ EFL / (2*StopAp) (entrance pupil not modeled)
-   - FOV computed from EFL + sensor W/H (rectilinear)
-   - Coverage test (MERIDIONAL ONLY): max field angle before chief ray misses sensor half-height or vignettes
+   - Rays fill a REFERENCE PLANE (front element by default) so you see edge hits too
+   - Stop-aware is still possible (chief ray uses STOP center)
+   - EFL/BFL via paraxial (skip IMS clip)
+   - T-stop sanity approx: T ≈ EFL / (2*StopAp)  (entrance pupil not modeled)
+   - FOV from EFL + sensor W/H (rectilinear)
+   - Coverage YES/NO: compares required half-angle (H/V/Diag) vs traced maxField (meridional)
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -18,14 +18,17 @@ const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev,
 const canvas = $("#canvas");
 const ctx = canvas.getContext("2d");
 
+// -------------------- UI --------------------
 const ui = {
   tbody: $("#surfTbody"),
   status: $("#statusText"),
+
   efl: $("#badgeEfl"),
   bfl: $("#badgeBfl"),
   tstop: $("#badgeT"),
   vig: $("#badgeVig"),
   fov: $("#badgeFov"),
+  cov: $("#badgeCov"),
 
   footerWarn: $("#footerWarn"),
   metaInfo: $("#metaInfo"),
@@ -34,6 +37,7 @@ const ui = {
   bflTop: $("#badgeBflTop"),
   tstopTop: $("#badgeTTop"),
   fovTop: $("#badgeFovTop"),
+  covTop: $("#badgeCovTop"),
 
   sensorPreset: $("#sensorPreset"),
   sensorW: $("#sensorW"),
@@ -57,8 +61,8 @@ const SENSOR_PRESETS = {
 };
 
 function getSensorWH() {
-  const w = Number(ui.sensorW.value || 36.7);
-  const h = Number(ui.sensorH.value || 25.54);
+  const w = Number(ui.sensorW?.value || 36.7);
+  const h = Number(ui.sensorH?.value || 25.54);
   return { w, h, halfH: Math.max(0.1, h * 0.5) };
 }
 
@@ -72,8 +76,8 @@ function applySensorToIMS() {
 
 function applyPreset(name) {
   const p = SENSOR_PRESETS[name] || SENSOR_PRESETS["ARRI Alexa Mini LF (LF)"];
-  ui.sensorW.value = p.w.toFixed(2);
-  ui.sensorH.value = p.h.toFixed(2);
+  if (ui.sensorW) ui.sensorW.value = p.w.toFixed(2);
+  if (ui.sensorH) ui.sensorH.value = p.h.toFixed(2);
   applySensorToIMS();
 }
 
@@ -90,8 +94,7 @@ const GLASS_DB = {
   "S-LAM3":  { nd: 1.717004, Vd: 47.927969 },
   "S-BAH11": { nd: 1.666718, Vd: 48.325247 },
 
-   const GLASSES = {
-  CZJ_1: { n: 1.5182, v: 63.8 },
+    CZJ_1: { n: 1.5182, v: 63.8 },
   CZJ_2: { n: 1.6465, v: 47.5 },
   CZJ_3: { n: 1.6055, v: 60.4 },
   CZJ_4: { n: 1.7343, v: 28.1 },
@@ -212,6 +215,7 @@ function enforceSingleStop(changedIndex) {
 
 function buildTable() {
   clampSelected();
+  if (!ui.tbody) return;
   ui.tbody.innerHTML = "";
 
   lens.surfaces.forEach((s, idx) => {
@@ -306,16 +310,13 @@ function intersectSurface(ray, surf) {
   const R = surf.R;
   const ap = Math.max(0, surf.ap);
 
-  // plane at x=vx
+  // plane
   if (Math.abs(R) < 1e-9) {
     const t = (vx - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     const hit = add(ray.p, mul(ray.d, t));
-    const vignetted = (Math.abs(hit.y) > ap + 1e-9);
-
-    // plane normal: point to -x (arbitrary but consistent)
-    const normal = {x:-1, y:0};
-    return { hit, t, vignetted, normal };
+    if (Math.abs(hit.y) > ap + 1e-9) return { hit, t, vignetted:true, normal:{x:-1,y:0} };
+    return { hit, t, vignetted:false, normal:{x:-1,y:0} };
   }
 
   // sphere
@@ -363,6 +364,7 @@ function findStopSurfaceIndex(surfaces) {
   return surfaces.findIndex(s => !!s.stop);
 }
 
+// -------------------- tracing --------------------
 function traceRayThroughLens(ray, surfaces, wavePreset) {
   const pts = [{ x: ray.p.x, y: ray.p.y }];
   let vignetted = false;
@@ -436,14 +438,14 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
   return { pts, vignetted, tir, endRay: ray };
 }
 
-// -------------------- ray sampling --------------------
+// -------------------- ray bundles (reference plane) --------------------
 function getRayReferencePlane(surfaces) {
-  // prefer first real surface after OBJ; fallback to stop
+  // choose first surface after OBJ that is not IMS; fallback to STOP or OBJ
   const stopIdx = findStopSurfaceIndex(surfaces);
 
   let refIdx = 1;
   if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") {
-    refIdx = stopIdx >= 0 ? stopIdx : 0;
+    refIdx = (stopIdx >= 0) ? stopIdx : 0;
   }
 
   const s = surfaces[refIdx] || surfaces[0];
@@ -455,13 +457,13 @@ function getRayReferencePlane(surfaces) {
 }
 
 function buildRays(surfaces, fieldAngleDeg, count) {
-  const n = Math.max(5, Math.min(101, count|0)); // min 5 so edges always exist
+  const n = Math.max(3, Math.min(101, count|0));
   const theta = (fieldAngleDeg * Math.PI) / 180;
   const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
 
   const xStart = (surfaces[0]?.vx ?? 0) - 80;
 
-  // sample at front reference plane so you see edge behavior in glass
+  // reference plane = front element (so rays hit edges too)
   const { xRef, apRef } = getRayReferencePlane(surfaces);
 
   const hMax = apRef * 0.98;
@@ -469,27 +471,13 @@ function buildRays(surfaces, fieldAngleDeg, count) {
 
   const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
 
-  // ensure edge rays are included
-  const sample = [];
-  sample.push(-1);
-  sample.push(-0.75);
-  sample.push(-0.5);
-
-  // fill middle evenly
-  const midCount = Math.max(0, n - 6);
-  for (let k=0;k<midCount;k++){
-    const a = (k/(midCount-1 || 1))*1.0 - 0.5; // -0.5..+0.5
-    sample.push(a);
-  }
-
-  sample.push(0.5);
-  sample.push(0.75);
-  sample.push(1);
-
-  for (let k=0;k<sample.length;k++){
-    const a = sample[k];
+  for (let k=0;k<n;k++){
+    const a = (k/(n-1))*2 - 1;
     const yAtRef = a * hMax;
+
+    // start y so ray is at yAtRef when x==xRef
     const y0 = yAtRef - tanT * (xRef - xStart);
+
     rays.push({ p:{x:xStart, y:y0}, d:dir });
   }
 
@@ -508,13 +496,12 @@ function buildChiefRay(surfaces, fieldAngleDeg){
 
   const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
 
-  // chief ray: through center of STOP (yAtStop=0)
+  // chief ray through stop center (y=0 at stop)
   const y0 = 0 - tanT * (xStop - xStart);
 
   return { p:{x:xStart, y:y0}, d:dir };
 }
 
-// Coverage (MERIDIONAL): max field where chief ray still lands within sensor half-height and does not vignette/tir
 function rayHitYAtX(endRay, x) {
   if (!endRay?.d || Math.abs(endRay.d.x) < 1e-9) return null;
   const t = (x - endRay.p.x) / endRay.d.x;
@@ -522,16 +509,16 @@ function rayHitYAtX(endRay, x) {
   return endRay.p.y + t * endRay.d.y;
 }
 
+// crude but useful: max field angle (meridional) that still lands within sensor half-height
 function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH){
-  let lo = 0, hi = 80; // generous bracket
+  let lo = 0, hi = 60;
   let best = 0;
 
-  for (let iter=0; iter<20; iter++){
+  for (let iter=0; iter<18; iter++){
     const mid = (lo + hi) * 0.5;
     const ray = buildChiefRay(surfaces, mid);
     const tr = traceRayThroughLens(structuredClone(ray), surfaces, wavePreset);
-
-    if (!tr || tr.vignetted || tr.tir || !tr.endRay) { hi = mid; continue; }
+    if (!tr || tr.vignetted || tr.tir) { hi = mid; continue; }
 
     const y = rayHitYAtX(tr.endRay, sensorX);
     if (y == null) { hi = mid; continue; }
@@ -556,6 +543,8 @@ function lastPhysicalVertexX(surfaces) {
 }
 
 function estimateEflBflParaxial(surfaces, wavePreset) {
+  // Paraxial: f = -y / u_out  where u_out = dy/dx after last surface (in air)
+  // BFL: axis crossing location relative to last physical vertex.
   const lastVx = lastPhysicalVertexX(surfaces);
   const xStart = (surfaces[0]?.vx ?? 0) - 160;
 
@@ -578,6 +567,7 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
     const f = -y0 / uOut;
     if (Number.isFinite(f)) fVals.push(f);
 
+    // axis crossing
     if (Math.abs(dy) > 1e-12) {
       const t = -er.p.y / dy;
       const xCross = er.p.x + t * dx;
@@ -618,6 +608,21 @@ function computeFovDeg(efl, sensorW, sensorH) {
   return { hfov: rad2deg(hfov), vfov: rad2deg(vfov), dfov: rad2deg(dfov) };
 }
 
+// Coverage YES/NO (simple, pragmatic)
+function coversSensorYesNo({ fov, maxField, mode="diag", marginDeg=0.5 }) {
+  // NOTE: maxField is meridional (vertical) capability.
+  // mode decides what the sensor "requires" as half-angle.
+  if (!fov || !Number.isFinite(maxField)) return { ok:false, req:null };
+
+  let req = null;
+  if (mode === "h") req = fov.hfov * 0.5;
+  else if (mode === "v") req = fov.vfov * 0.5;
+  else req = fov.dfov * 0.5; // strict
+
+  const ok = (maxField + marginDeg) >= req;
+  return { ok, req };
+}
+
 // -------------------- autofocus --------------------
 function spotRmsAtSensorX(traces, sensorX) {
   const ys = [];
@@ -636,9 +641,9 @@ function spotRmsAtSensorX(traces, sensorX) {
 function autoFocusSensorOffset() {
   computeVertices(lens.surfaces);
 
-  const fieldAngle = Number(ui.fieldAngle.value || 0);
-  const rayCount   = Number(ui.rayCount.value || 31);
-  const wavePreset = ui.wavePreset.value;
+  const fieldAngle = Number(ui.fieldAngle?.value || 0);
+  const rayCount   = Number(ui.rayCount?.value || 31);
+  const wavePreset = ui.wavePreset?.value || "d";
 
   const rays   = buildRays(lens.surfaces, fieldAngle, rayCount);
   const traces = rays.map(r => traceRayThroughLens(structuredClone(r), lens.surfaces, wavePreset));
@@ -646,7 +651,7 @@ function autoFocusSensorOffset() {
   const ims = lens.surfaces[lens.surfaces.length - 1];
   const baseX = ims?.vx ?? 0;
 
-  const current = Number(ui.sensorOffset.value || 0);
+  const current = Number(ui.sensorOffset?.value || 0);
   const range = 80;
   const coarseStep = 0.5;
   const fineStep = 0.05;
@@ -668,12 +673,12 @@ function autoFocusSensorOffset() {
   if (Number.isFinite(best.rms)) scan(best.off, 3.0, fineStep);
 
   if (!Number.isFinite(best.rms) || best.n < 5) {
-    ui.footerWarn.textContent = "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
+    if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
     return;
   }
 
-  ui.sensorOffset.value = best.off.toFixed(2);
-  ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+  if (ui.sensorOffset) ui.sensorOffset.value = best.off.toFixed(2);
+  if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
   renderAll();
 }
 
@@ -697,7 +702,7 @@ function makeWorldTransform() {
   const r = canvas.getBoundingClientRect();
   const cx = r.width/2 + view.panX;
   const cy = r.height/2 + view.panY;
-  const base = Number(ui.renderScale.value) * 3.2;
+  const base = Number(ui.renderScale?.value || 1.25) * 3.2;
   const s = base * view.zoom;
   return { cx, cy, s };
 }
@@ -841,7 +846,8 @@ function drawSensor(world, sensorX, halfH) {
 
 function drawTitleOverlay(text) {
   ctx.save();
-  ctx.font = "14px " + getComputedStyle(document.documentElement).getPropertyValue("--mono");
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
+  ctx.font = "14px " + mono;
   ctx.fillStyle = "#333";
   ctx.fillText(text, 14, 20);
   ctx.restore();
@@ -849,7 +855,7 @@ function drawTitleOverlay(text) {
 
 // -------------------- render --------------------
 function renderAll() {
-  ui.footerWarn.textContent = "";
+  if (ui.footerWarn) ui.footerWarn.textContent = "";
 
   applySensorToIMS();
   computeVertices(lens.surfaces);
@@ -857,10 +863,10 @@ function renderAll() {
 
   const { w: sensorW, h: sensorH, halfH } = getSensorWH();
 
-  const fieldAngle = Number(ui.fieldAngle.value || 0);
-  const rayCount   = Number(ui.rayCount.value || 31);
-  const wavePreset = ui.wavePreset.value;
-  const sensorOffset = Number(ui.sensorOffset.value || 0);
+  const fieldAngle = Number(ui.fieldAngle?.value || 0);
+  const rayCount   = Number(ui.rayCount?.value || 31);
+  const wavePreset = ui.wavePreset?.value || "d";
+  const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
   const ims = lens.surfaces[lens.surfaces.length - 1];
   const sensorX = (ims?.vx ?? 0) + sensorOffset;
@@ -878,25 +884,34 @@ function renderAll() {
   const fov = computeFovDeg(efl, sensorW, sensorH);
   const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-  // ✅ MERIDIONAL coverage: max field before chief ray misses sensor half-height
+  // coverage (meridional) test
   const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
-  const covTxt = `COV(V): ±${maxField.toFixed(1)}°`;
 
-  ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-  ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-  ui.tstop.textContent = `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
-  ui.vig.textContent = `Vignette: ${vigPct}%`;
-  ui.fov.textContent = fovTxt;
+  // "diag" is strictest; set to "h" if you only want width-driven YES/NO
+  const covMode = "diag"; // "h" | "v" | "diag"
+  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+  const covTxt = `COV(V): ±${maxField.toFixed(1)}° • REQ(${covMode.toUpperCase()}): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
-  if (ui.eflTop) ui.eflTop.textContent = ui.efl.textContent;
-  if (ui.bflTop) ui.bflTop.textContent = ui.bfl.textContent;
-  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop.textContent;
+  if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
+  if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
+  if (ui.fov) ui.fov.textContent = fovTxt;
+
+  if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
+
+  if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
   if (ui.fovTop) ui.fovTop.textContent = fovTxt;
+  if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-  if (tirCount > 0) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
-  ui.status.textContent =
-    `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
+  if (ui.status) {
+    ui.status.textContent =
+      `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
+  }
 
   if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
@@ -1037,7 +1052,7 @@ on("#btnRemove", "click", ()=>{
   clampSelected();
   if (lens.surfaces.length <= 2) return;
   if (isProtectedIndex(selectedIndex)) {
-    ui.footerWarn.textContent = "OBJ/IMS kun je niet deleten.";
+    if (ui.footerWarn) ui.footerWarn.textContent = "OBJ/IMS kun je niet deleten.";
     return;
   }
   lens.surfaces.splice(selectedIndex, 1);
@@ -1059,8 +1074,13 @@ on("#btnSave", "click", ()=>{
 
 on("#btnAutoFocus", "click", ()=> autoFocusSensorOffset());
 
-on("#btnLoadOmit", "click", ()=> loadLens(omit50ConceptV1()));
-on("#btnLoadDemo", "click", ()=> loadLens(demoLensSimple()));
+on("#btnLoadOmit", "click", ()=>{
+  loadLens(omit50ConceptV1());
+});
+
+on("#btnLoadDemo", "click", ()=>{
+  loadLens(demoLensSimple());
+});
 
 on("#fileLoad", "change", async (e)=>{
   const file = e.target.files?.[0];
@@ -1070,6 +1090,7 @@ on("#fileLoad", "change", async (e)=>{
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
+    // optional: glass_note import
     if (obj.glass_note && typeof obj.glass_note === "object") {
       for (const [k, v] of Object.entries(obj.glass_note)) {
         const nd = Number(v?.nd);
@@ -1083,7 +1104,7 @@ on("#fileLoad", "change", async (e)=>{
 
     loadLens(obj);
   }catch(err){
-    ui.footerWarn.textContent = `Load failed: ${err.message}`;
+    if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err.message}`;
   }finally{
     e.target.value = "";
   }
@@ -1104,7 +1125,7 @@ window.addEventListener("resize", renderAll);
 
 // -------------------- init --------------------
 function init() {
-  applyPreset(ui.sensorPreset.value);
+  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
   loadLens(lens);
   buildTable();
   bindViewControls();
