@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Meridional Raytracer (2D) — TVL Style</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="appTop">
+    <div class="brand">
+      <div class="brandDot"></div>
+      <div class="brandText">
+        <div class="title">Meridional Raytracer (2D)</div>
+        <div class="sub">OSLO-ish lens doorsnede + rays • spheres/planes • apertures • sensor plane</div>
+      </div>
+    </div>
+
+    <div class="topActions">
+      <button id="btnReset" class="btn">Load demo lens</button>
+      <button id="btnAdd" class="btn">+ Surface</button>
+      <button id="btnRemove" class="btn danger">– Last</button>
+      <button id="btnSave" class="btn">Save JSON</button>
+      <label class="btn fileBtn">
+        Load JSON
+        <input id="fileLoad" type="file" accept="application/json" />
+      </label>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panelLeft">
+      <div class="panelHeader">
+        <div class="panelTitle">Surface Data</div>
+        <div class="panelHint">R in mm, thickness naar volgende surface, aperture = clear semi-diameter</div>
+      </div>
+
+      <div class="panelBody">
+        <div class="controlsGrid">
+          <div class="ctl">
+            <label>Field angle (deg)</label>
+            <input id="fieldAngle" type="number" step="0.1" value="0" />
+          </div>
+          <div class="ctl">
+            <label># Rays</label>
+            <input id="rayCount" type="number" min="3" max="101" step="2" value="31" />
+          </div>
+          <div class="ctl">
+            <label>Wavelength preset</label>
+            <select id="wavePreset">
+              <option value="d">d-line (587.6nm) — simple n</option>
+              <option value="g">g-line (435.8nm) — approx</option>
+              <option value="c">c-line (656.3nm) — approx</option>
+            </select>
+          </div>
+          <div class="ctl">
+            <label>Sensor offset (mm)</label>
+            <input id="sensorOffset" type="number" step="0.1" value="0" />
+          </div>
+          <div class="ctl span2">
+            <label>Render scale</label>
+            <input id="renderScale" type="range" min="0.6" max="2.4" step="0.01" value="1.25" />
+          </div>
+        </div>
+
+        <div class="tableWrap">
+          <table class="surfTable" id="surfTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Type</th>
+                <th>Radius R</th>
+                <th>Thickness</th>
+                <th>Aperture</th>
+                <th>Glass</th>
+                <th>Stop?</th>
+              </tr>
+            </thead>
+            <tbody id="surfTbody"></tbody>
+          </table>
+        </div>
+
+        <div class="statusBar">
+          <div id="statusText" class="statusText">Ready.</div>
+          <div class="statusRight">
+            <span class="badge" id="badgeEfl">EFL: —</span>
+            <span class="badge" id="badgeBfl">BFL: —</span>
+            <span class="badge" id="badgeVig">Vignette: —</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panelRight">
+      <div class="viewerHeader">
+        <div class="viewerTitle">Autodraw</div>
+        <div class="viewerMeta">
+          <span id="metaUnits">UNITS: mm</span>
+          <span>•</span>
+          <span id="metaInfo">2D meridional trace</span>
+        </div>
+      </div>
+
+      <div class="viewerCanvasWrap">
+        <canvas id="canvas" width="1200" height="700"></canvas>
+      </div>
+
+      <div class="viewerFooter">
+        <div class="footerLeft">
+          <span class="kbd">drag</span> pan • <span class="kbd">wheel</span> zoom • <span class="kbd">dblclick</span> reset view
+        </div>
+        <div class="footerRight" id="footerWarn"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="./script.js"></script>
+</body>
+</html>
