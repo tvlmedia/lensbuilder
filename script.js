@@ -301,29 +301,133 @@ function buildRays(surfaces, fieldAngleDeg, count) {
 }
 
 function estimateEflBfl(surfaces, wavePreset) {
-  const rays = [
-    { p:{x: surfaces[0].vx - 30, y: 1.0}, d: normalize({x:1,y:0}) },
-    { p:{x: surfaces[0].vx - 30, y: 2.0}, d: normalize({x:1,y:0}) },
-  ];
+  // Robuust: meerdere paraxiale on-axis rays -> focal x = gemiddelde axis-crossing
+  // Let op: dit is een "sanity EFL/BFL" voor infinity focus (fieldAngle=0).
+  // BFL = afstand vanaf laatste fysieke vertex (vóór IMS) naar focal crossing.
+
+  const xStart = (surfaces[0]?.vx ?? 0) - 60;
+
+  // meerdere kleine heights (paraxiaal)
+  const heights = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+  const rays = heights.map(h => ({
+    p: { x: xStart, y: h },
+    d: normalize({ x: 1, y: 0 })
+  }));
+
   const traces = rays.map(r => traceRayThroughLens(structuredClone(r), surfaces, wavePreset));
-  if (traces.some(t=>t.vignetted||t.tir)) return { efl:null, bfl:null };
+  if (traces.some(t => t.vignetted || t.tir)) return { efl: null, bfl: null };
 
-  const xs = [];
-  for (const tr of traces){
+  const xCrosses = [];
+  for (const tr of traces) {
     const er = tr.endRay;
-    const dy = er.d.y;
-    if (Math.abs(dy) < 1e-9) continue;
-    const t = -er.p.y / dy;
-    const xCross = er.p.x + t*er.d.x;
-    if (Number.isFinite(xCross)) xs.push(xCross);
-  }
-  if (xs.length < 1) return { efl:null, bfl:null };
+    const dy = er?.d?.y ?? 0;
+    const dx = er?.d?.x ?? 0;
 
-  const xFocal = xs.reduce((a,b)=>a+b,0)/xs.length;
-  const lastVx = surfaces[surfaces.length-1].vx;
+    // als dy ~ 0 => ray blijft bijna parallel => negeer
+    if (Math.abs(dy) < 1e-9 || Math.abs(dx) < 1e-9) continue;
+
+    // x waar lijn y=0 kruist
+    const t = -er.p.y / dy;
+    const xCross = er.p.x + t * dx;
+    if (Number.isFinite(xCross)) xCrosses.push(xCross);
+  }
+
+  if (xCrosses.length < 2) return { efl: null, bfl: null };
+
+  const xFocal = xCrosses.reduce((a,b)=>a+b,0) / xCrosses.length;
+
+  const lastVx = lastPhysicalVertexX(surfaces);
   const bfl = xFocal - lastVx;
+
+  // EFL: in jouw tool (zonder principal planes) houden we 'm als sanity gelijk aan bfl.
   const efl = bfl;
+
   return { efl, bfl };
+}
+
+function lastPhysicalVertexX(surfaces) {
+  // laatste echte surface vóór IMS (want IMS is geen glas-oppervlak in de praktijk)
+  if (!surfaces?.length) return 0;
+  const last = surfaces[surfaces.length - 1];
+  const isIMS = String(last?.type || "").toUpperCase() === "IMS";
+  const idx = isIMS ? surfaces.length - 2 : surfaces.length - 1;
+  return surfaces[Math.max(0, idx)]?.vx ?? 0;
+}
+
+function rayHitYAtX(endRay, x) {
+  if (!endRay?.d || Math.abs(endRay.d.x) < 1e-9) return null;
+  const t = (x - endRay.p.x) / endRay.d.x;
+  if (!Number.isFinite(t)) return null;
+  return endRay.p.y + t * endRay.d.y;
+}
+
+function spotRmsAtSensorX(traces, sensorX) {
+  // RMS van y op sensor plane, over alle geldige rays
+  const ys = [];
+  for (const tr of traces) {
+    if (!tr || tr.vignetted || tr.tir) continue;
+    const y = rayHitYAtX(tr.endRay, sensorX);
+    if (y == null) continue;
+    ys.push(y);
+  }
+  if (ys.length < 5) return { rms: null, n: ys.length };
+
+  const mean = ys.reduce((a,b)=>a+b,0) / ys.length;
+  const rms = Math.sqrt(ys.reduce((acc,y)=>acc + (y-mean)*(y-mean),0) / ys.length);
+  return { rms, n: ys.length };
+}
+
+function autoFocusSensorOffset() {
+  // trace 1x, evalueer RMS op verschillende sensorOffset waarden
+  relabelTypes();
+  computeVertices(lens.surfaces);
+
+  const fieldAngle = Number(ui.fieldAngle.value || 0);
+  const rayCount   = Number(ui.rayCount.value || 31);
+  const wavePreset = ui.wavePreset.value;
+
+  const rays   = buildRays(lens.surfaces, fieldAngle, rayCount);
+  const traces = rays.map(r => traceRayThroughLens(structuredClone(r), lens.surfaces, wavePreset));
+
+  const ims = lens.surfaces[lens.surfaces.length - 1];
+  const baseX = ims?.vx ?? 0;
+
+  const current = Number(ui.sensorOffset.value || 0);
+
+  // coarse -> fine search rond huidige waarde
+  const range = 80;         // mm rondom current
+  const coarseStep = 0.5;   // mm
+  const fineStep   = 0.05;  // mm
+
+  let best = { off: current, rms: Infinity, n: 0 };
+
+  function scan(center, halfRange, step) {
+    const start = center - halfRange;
+    const end   = center + halfRange;
+    for (let off = start; off <= end + 1e-9; off += step) {
+      const sensorX = baseX + off;
+      const { rms, n } = spotRmsAtSensorX(traces, sensorX);
+      if (rms == null) continue;
+      if (rms < best.rms) best = { off, rms, n };
+    }
+  }
+
+  // coarse scan
+  scan(current, range, coarseStep);
+
+  // refine scan rond beste coarse
+  if (Number.isFinite(best.rms)) {
+    scan(best.off, 3.0, fineStep);
+  }
+
+  if (!Number.isFinite(best.rms) || best.n < 5) {
+    ui.footerWarn.textContent = "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
+    return;
+  }
+
+  ui.sensorOffset.value = best.off.toFixed(2);
+  ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+  renderAll();
 }
 
 // -------------------- drawing --------------------
@@ -683,6 +787,10 @@ $("#btnSave").addEventListener("click", ()=>{
   a.download = (lens.name || "lens") + ".json";
   a.click();
   URL.revokeObjectURL(url);
+});
+
+$("#btnAutoFocus").addEventListener("click", ()=>{
+  autoFocusSensorOffset();
 });
 
 $("#fileLoad").addEventListener("change", async (e)=>{
