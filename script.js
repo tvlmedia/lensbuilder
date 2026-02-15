@@ -496,7 +496,7 @@ function maxNonOverlappingSemiDiameter(sFront, sBack, minCT = 0.10) {
   return Math.max(0.01, lo);
 }
 
-const AUTO_AP_FROM_OVERLAP = true;
+const AUTO_AP_FROM_OVERLAP = false;
 function enforceElementAperturesFromGeometry(surfaces, minCT = 0.10) {
   if (!Array.isArray(surfaces)) return;
 
