@@ -1,16 +1,9 @@
-/* Meridional Raytracer (2D) — TVL Rebuild (FULL SCRIPT)
-   ✅ FIXED: input focus/caret no longer jumps out while typing (no rebuildTable on "input")
-   - Optical axis: +x, height: y
-   - Surfaces: spherical (R!=0) or plane (R=0)
-   - Thickness t: distance to next surface vertex (along x)
-   - Aperture ap: clear semi-diameter at surface
-   - Glass column = medium AFTER the surface (OSLO-ish)
-   - Rays fill a REFERENCE PLANE (front element by default) so you see edge hits too
-   - Stop-aware is still possible (chief ray uses STOP center)
-   - EFL/BFL via paraxial (skip IMS clip)
-   - T-stop sanity approx: T ≈ EFL / (2*StopAp)  (entrance pupil not modeled)
-   - FOV from EFL + sensor W/H (rectilinear)
-   - Coverage YES/NO: compares required half-angle (H/V/Diag) vs traced maxField (meridional)
+/* Meridional Raytracer (2D) — TVL Lens Builder (patched)
+   Patch: Element modal upgraded for achromats
+   - Adds FRONT AIR (mm) input (injected into modal UI; no HTML edit needed)
+   - Adds Achromat (cemented, 3 surfaces) + Achromat (air-spaced, 4 surfaces)
+   - Removes the old 0.01mm "hack" surface for cemented achromats
+   - Front air is inserted as an AIR gap surface BEFORE the element chunk
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -20,7 +13,7 @@ const on = (sel, ev, fn) => {
   return el;
 };
 
-// structuredClone fallback (older browsers)
+// structuredClone fallback
 const clone = (obj) =>
   typeof structuredClone === "function" ? structuredClone(obj) : JSON.parse(JSON.stringify(obj));
 
@@ -71,11 +64,8 @@ const SENSOR_PRESETS = {
 
 function populateSensorPresetsSelect() {
   if (!ui.sensorPreset) return;
-
   const keys = Object.keys(SENSOR_PRESETS);
   ui.sensorPreset.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
-
-  // ensure valid value
   const cur = ui.sensorPreset.value;
   if (!SENSOR_PRESETS[cur]) ui.sensorPreset.value = keys[0] || "ARRI Alexa Mini LF (LF)";
 }
@@ -88,11 +78,9 @@ function getSensorWH() {
 
 function syncIMSCellApertureToUI() {
   if (!ui.tbody || !lens?.surfaces?.length) return;
-
   const i = lens.surfaces.length - 1;
   const s = lens.surfaces[i];
   if (!s || String(s.type).toUpperCase() !== "IMS") return;
-
   const apInput = ui.tbody.querySelector(`input.cellInput[data-k="ap"][data-i="${i}"]`);
   if (apInput) apInput.value = Number(s.ap || 0).toFixed(2);
 }
@@ -142,7 +130,7 @@ function glassN(glassName, preset /* d,g,c */) {
   const strength = 1.0 / Math.max(10.0, g.Vd);
   if (preset === "g") return base + 35.0 * strength;
   if (preset === "c") return base - 20.0 * strength;
-  return base; // d-line
+  return base;
 }
 
 // -------------------- built-in lenses --------------------
@@ -217,19 +205,11 @@ function sanitizeLens(obj) {
     stop: Boolean(s?.stop ?? false),
   }));
 
-  // enforce single stop (first wins)
   const firstStop = safe.surfaces.findIndex((s) => s.stop);
-  if (firstStop >= 0)
-    safe.surfaces.forEach((s, i) => {
-      if (i !== firstStop) s.stop = false;
-    });
+  if (firstStop >= 0) safe.surfaces.forEach((s, i) => { if (i !== firstStop) s.stop = false; });
 
-  // ensure types
-  safe.surfaces.forEach((s, i) => {
-    if (!s.type || !s.type.trim()) s.type = String(i);
-  });
+  safe.surfaces.forEach((s, i) => { if (!s.type || !s.type.trim()) s.type = String(i); });
 
-  // ensure OBJ at 0 and IMS at end if present
   if (safe.surfaces.length >= 1) safe.surfaces[0].type = "OBJ";
   const imsIdx = safe.surfaces.findIndex((s) => String(s.type).toUpperCase() === "IMS");
   if (imsIdx >= 0 && imsIdx !== safe.surfaces.length - 1) {
@@ -246,9 +226,8 @@ function loadLens(obj) {
   selectedIndex = 0;
 
   clampAllApertures(lens.surfaces);
-
-  buildTable();        // table first (so IMS sync can find the input)
-  applySensorToIMS();  // set IMS ap + update table cell
+  buildTable();
+  applySensorToIMS();
   renderAll();
 }
 
@@ -256,15 +235,12 @@ function loadLens(obj) {
 function clampSelected() {
   selectedIndex = Math.max(0, Math.min(lens.surfaces.length - 1, selectedIndex));
 }
-
 function enforceSingleStop(changedIndex) {
   if (!lens.surfaces[changedIndex]?.stop) return;
-  lens.surfaces.forEach((s, i) => {
-    if (i !== changedIndex) s.stop = false;
-  });
+  lens.surfaces.forEach((s, i) => { if (i !== changedIndex) s.stop = false; });
 }
 
-// -------------------- number + focus helpers (FIX typing jump) --------------------
+// -------------------- number + focus helpers --------------------
 function num(v, fallback = 0) {
   const s = String(v ?? "").trim().replace(",", ".");
   const x = parseFloat(s);
@@ -272,12 +248,10 @@ function num(v, fallback = 0) {
 }
 
 let _focusMemo = null;
-
 function rememberTableFocus() {
   const a = document.activeElement;
   if (!a) return;
   if (!(a.classList && a.classList.contains("cellInput"))) return;
-
   _focusMemo = {
     i: a.dataset.i,
     k: a.dataset.k,
@@ -285,14 +259,11 @@ function rememberTableFocus() {
     se: typeof a.selectionEnd === "number" ? a.selectionEnd : null,
   };
 }
-
 function restoreTableFocus() {
   if (!_focusMemo || !ui.tbody) return;
-
   const sel = `input.cellInput[data-i="${_focusMemo.i}"][data-k="${_focusMemo.k}"]`;
   const el = ui.tbody.querySelector(sel);
   if (!el) return;
-
   el.focus({ preventScroll: true });
   if (_focusMemo.ss != null && _focusMemo.se != null) {
     try { el.setSelectionRange(_focusMemo.ss, _focusMemo.se); } catch (_) {}
@@ -300,14 +271,12 @@ function restoreTableFocus() {
   _focusMemo = null;
 }
 
-// -------------------- table build + events (FIXED) --------------------
+// -------------------- table build + events --------------------
 function buildTable() {
   clampSelected();
   if (!ui.tbody) return;
 
-  // remember focus/caret before we nuke DOM
   rememberTableFocus();
-
   ui.tbody.innerHTML = "";
 
   lens.surfaces.forEach((s, idx) => {
@@ -328,25 +297,18 @@ function buildTable() {
       <td style="width:92px"><input class="cellInput" data-k="ap" data-i="${idx}" type="number" step="0.01" value="${s.ap}"></td>
       <td style="width:110px">
         <select class="cellSelect" data-k="glass" data-i="${idx}">
-          ${Object.keys(GLASS_DB)
-            .map(
-              (name) =>
-                `<option value="${name}" ${name === s.glass ? "selected" : ""}>${name}</option>`
-            )
-            .join("")}
+          ${Object.keys(GLASS_DB).map((name) =>
+            `<option value="${name}" ${name === s.glass ? "selected" : ""}>${name}</option>`
+          ).join("")}
         </select>
       </td>
       <td class="cellChk" style="width:58px">
         <input type="checkbox" data-k="stop" data-i="${idx}" ${s.stop ? "checked" : ""}>
       </td>
     `;
-
     ui.tbody.appendChild(tr);
   });
 
-  // ✅ split events:
-  // - input: update value + renderAll (NO buildTable)
-  // - change/blur/enter: clamp + buildTable (but restore focus)
   ui.tbody.querySelectorAll("input.cellInput").forEach((el) => {
     el.addEventListener("input", onCellInput);
     el.addEventListener("change", onCellCommit);
@@ -356,13 +318,8 @@ function buildTable() {
     });
   });
 
-  ui.tbody.querySelectorAll("select.cellSelect").forEach((el) => {
-    el.addEventListener("change", onCellCommit);
-  });
-
-  ui.tbody.querySelectorAll('input[type="checkbox"][data-k="stop"]').forEach((el) => {
-    el.addEventListener("change", onCellCommit);
-  });
+  ui.tbody.querySelectorAll("select.cellSelect").forEach((el) => el.addEventListener("change", onCellCommit));
+  ui.tbody.querySelectorAll('input[type="checkbox"][data-k="stop"]').forEach((el) => el.addEventListener("change", onCellCommit));
 
   restoreTableFocus();
 }
@@ -374,19 +331,13 @@ function onCellInput(e) {
   if (!Number.isFinite(i) || !k) return;
 
   selectedIndex = i;
-
   const s = lens.surfaces[i];
   if (!s) return;
 
-  if (k === "type") {
-    s.type = el.value;
-  } else if (k === "R" || k === "t" || k === "ap") {
-    s[k] = num(el.value, s[k] ?? 0);
-  } else {
-    s[k] = num(el.value, s[k] ?? 0);
-  }
+  if (k === "type") s.type = el.value;
+  else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
+  else s[k] = num(el.value, s[k] ?? 0);
 
-  // live update only; keep focus stable
   applySensorToIMS();
   renderAll();
 }
@@ -398,27 +349,16 @@ function onCellCommit(e) {
   if (!Number.isFinite(i) || !k) return;
 
   selectedIndex = i;
-
   const s = lens.surfaces[i];
   if (!s) return;
 
-  if (k === "stop") {
-    s.stop = !!el.checked;
-    enforceSingleStop(i);
-  } else if (k === "glass") {
-    s.glass = el.value;
-  } else if (k === "type") {
-    s.type = el.value;
-  } else {
-    s[k] = num(el.value, s[k] ?? 0);
-  }
+  if (k === "stop") { s.stop = !!el.checked; enforceSingleStop(i); }
+  else if (k === "glass") s.glass = el.value;
+  else if (k === "type") s.type = el.value;
+  else s[k] = num(el.value, s[k] ?? 0);
 
   applySensorToIMS();
-
-  // HARD PHYSICS: prevent impossible clear apertures on spherical surfaces
   clampAllApertures(lens.surfaces);
-
-  // rebuild so clamped values show, but caret stays (restoreTableFocus)
   buildTable();
   renderAll();
 }
@@ -436,10 +376,7 @@ function mul(a, s) { return { x: a.x * s, y: a.y * s }; }
 function refract(I, N, n1, n2) {
   I = normalize(I);
   N = normalize(N);
-
-  // flip normal if it points same direction as ray
   if (dot(I, N) > 0) N = mul(N, -1);
-
   const cosi = -dot(N, I);
   const eta = n1 / n2;
   const k = 1 - eta * eta * (1 - cosi * cosi);
@@ -453,17 +390,14 @@ function intersectSurface(ray, surf) {
   const R = surf.R;
   const ap = Math.max(0, surf.ap);
 
-  // plane
   if (Math.abs(R) < 1e-9) {
     const t = (vx - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     const hit = add(ray.p, mul(ray.d, t));
-    if (Math.abs(hit.y) > ap + 1e-9)
-      return { hit, t, vignetted: true, normal: { x: -1, y: 0 } };
+    if (Math.abs(hit.y) > ap + 1e-9) return { hit, t, vignetted: true, normal: { x: -1, y: 0 } };
     return { hit, t, vignetted: false, normal: { x: -1, y: 0 } };
   }
 
-  // sphere
   const cx = vx + R;
   const rad = Math.abs(R);
 
@@ -509,8 +443,8 @@ function findStopSurfaceIndex(surfaces) {
 }
 
 // -------------------- physical sanity clamps --------------------
-const AP_SAFETY = 0.90;     // stay away from sphere rim
-const AP_MAX_PLANE = 30.0;  // mm semi-diameter cap for plane/STOP
+const AP_SAFETY = 0.90;
+const AP_MAX_PLANE = 30.0;
 const AP_MIN = 0.01;
 
 function maxApForSurface(s) {
@@ -518,25 +452,52 @@ function maxApForSurface(s) {
   if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
   return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
 }
-
 function clampSurfaceAp(s) {
   if (!s) return;
   const lim = maxApForSurface(s);
-  if (!Number.isFinite(lim)) return;
-
   const ap = Number(s.ap || 0);
   s.ap = Math.max(AP_MIN, Math.min(ap, lim));
 }
-
 function clampAllApertures(surfaces) {
   if (!Array.isArray(surfaces)) return;
   for (const s of surfaces) clampSurfaceAp(s);
 }
 
-const AUTO_AP_FROM_OVERLAP = true; // later optional toggle
-const MIN_CT = 0.10;              // mm min center thickness margin
+function surfaceXatY(s, y) {
+  const vx = s.vx;
+  const R = s.R;
+  if (Math.abs(R) < 1e-9) return vx;
 
-function enforceElementAperturesFromGeometry(surfaces, minCT = MIN_CT) {
+  const cx = vx + R;
+  const rad = Math.abs(R);
+  const sign = Math.sign(R) || 1;
+  const inside = rad * rad - y * y;
+  if (inside < 0) return null;
+  return cx - sign * Math.sqrt(inside);
+}
+
+function maxNonOverlappingSemiDiameter(sFront, sBack, minCT = 0.10) {
+  const apGuess = Math.max(0.01, Math.min(Number(sFront.ap || 0), Number(sBack.ap || 0)));
+  function gapAt(y) {
+    const xf = surfaceXatY(sFront, y);
+    const xb = surfaceXatY(sBack, y);
+    if (xf == null || xb == null) return -1e9;
+    return xb - xf;
+  }
+  if (gapAt(0) < minCT) return 0.01;
+  if (gapAt(apGuess) >= minCT) return apGuess;
+
+  let lo = 0, hi = apGuess;
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) * 0.5;
+    if (gapAt(mid) >= minCT) lo = mid;
+    else hi = mid;
+  }
+  return Math.max(0.01, lo);
+}
+
+const AUTO_AP_FROM_OVERLAP = true;
+function enforceElementAperturesFromGeometry(surfaces, minCT = 0.10) {
   if (!Array.isArray(surfaces)) return;
 
   for (let i = 0; i < surfaces.length - 1; i++) {
@@ -548,7 +509,6 @@ function enforceElementAperturesFromGeometry(surfaces, minCT = MIN_CT) {
     if (typeA === "OBJ" || typeB === "OBJ") continue;
     if (typeA === "IMS" || typeB === "IMS") continue;
 
-    // glass region = medium AFTER surface A
     const medium = String(sA.glass || "AIR").toUpperCase();
     if (medium === "AIR") continue;
 
@@ -561,7 +521,6 @@ function enforceElementAperturesFromGeometry(surfaces, minCT = MIN_CT) {
     }
 
     const cap = Math.max(AP_MIN, Math.min(capA, capB, capOverlap));
-
     if (Number(sA.ap) > cap) sA.ap = cap;
     if (Number(sB.ap) > cap) sB.ap = cap;
   }
@@ -572,24 +531,16 @@ function traceRayThroughLens(ray, surfaces, wavePreset) {
   const pts = [{ x: ray.p.x, y: ray.p.y }];
   let vignetted = false;
   let tir = false;
-
   let nBefore = 1.0;
 
   for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i];
-
     const hitInfo = intersectSurface(ray, s);
-    if (!hitInfo) {
-      vignetted = true;
-      break;
-    }
+    if (!hitInfo) { vignetted = true; break; }
 
     pts.push(hitInfo.hit);
 
-    if (hitInfo.vignetted) {
-      vignetted = true;
-      break;
-    }
+    if (hitInfo.vignetted) { vignetted = true; break; }
 
     const nAfter = glassN(s.glass, wavePreset);
 
@@ -600,24 +551,18 @@ function traceRayThroughLens(ray, surfaces, wavePreset) {
     }
 
     const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-    if (!newDir) {
-      tir = true;
-      break;
-    }
+    if (!newDir) { tir = true; break; }
 
     ray = { p: hitInfo.hit, d: newDir };
     nBefore = nAfter;
   }
-
   return { pts, vignetted, tir, endRay: ray };
 }
 
-// Same tracer but ignores IMS clipping (used for EFL)
 function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
   const pts = [{ x: ray.p.x, y: ray.p.y }];
   let vignetted = false;
   let tir = false;
-
   let nBefore = 1.0;
 
   for (let i = 0; i < surfaces.length; i++) {
@@ -625,18 +570,11 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
     const isIMS = String(s?.type || "").toUpperCase() === "IMS";
 
     const hitInfo = intersectSurface(ray, s);
-    if (!hitInfo) {
-      vignetted = true;
-      break;
-    }
+    if (!hitInfo) { vignetted = true; break; }
 
     pts.push(hitInfo.hit);
 
-    // DO NOT clip at IMS
-    if (!isIMS && hitInfo.vignetted) {
-      vignetted = true;
-      break;
-    }
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
     const nAfter = glassN(s.glass, wavePreset);
 
@@ -647,24 +585,18 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
     }
 
     const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-    if (!newDir) {
-      tir = true;
-      break;
-    }
+    if (!newDir) { tir = true; break; }
 
     ray = { p: hitInfo.hit, d: newDir };
     nBefore = nAfter;
   }
-
   return { pts, vignetted, tir, endRay: ray };
 }
 
-// -------------------- ray bundles (reference plane) --------------------
+// -------------------- ray bundles --------------------
 function getRayReferencePlane(surfaces) {
-  // ✅ per jouw comment: rays vullen reference plane (front element by default)
   let refIdx = 1;
   if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") refIdx = 0;
-
   const s = surfaces[refIdx] || surfaces[0];
   return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10)), refIdx };
 }
@@ -679,7 +611,6 @@ function buildRays(surfaces, fieldAngleDeg, count) {
 
   const hMax = apRef * 0.98;
   const rays = [];
-
   const tanT = Math.abs(dir.x) < 1e-9 ? 0 : dir.y / dir.x;
 
   for (let k = 0; k < n; k++) {
@@ -696,13 +627,12 @@ function buildChiefRay(surfaces, fieldAngleDeg) {
   const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
 
   const xStart = (surfaces[0]?.vx ?? 0) - 120;
-
   const stopIdx = findStopSurfaceIndex(surfaces);
   const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
   const xStop = stopSurf.vx;
 
   const tanT = Math.abs(dir.x) < 1e-9 ? 0 : dir.y / dir.x;
-  const y0 = 0 - tanT * (xStop - xStart); // through stop center
+  const y0 = 0 - tanT * (xStop - xStart);
   return { p: { x: xStart, y: y0 }, d: dir };
 }
 
@@ -715,7 +645,6 @@ function rayHitYAtX(endRay, x) {
 
 function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH) {
   let lo = 0, hi = 60, best = 0;
-
   for (let iter = 0; iter < 18; iter++) {
     const mid = (lo + hi) * 0.5;
     const ray = buildChiefRay(surfaces, mid);
@@ -724,7 +653,6 @@ function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH) {
 
     const y = rayHitYAtX(tr.endRay, sensorX);
     if (y == null) { hi = mid; continue; }
-
     if (Math.abs(y) <= halfH) { best = mid; lo = mid; }
     else hi = mid;
   }
@@ -744,7 +672,7 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
   const lastVx = lastPhysicalVertexX(surfaces);
   const xStart = (surfaces[0]?.vx ?? 0) - 160;
 
-  const heights = [0.25, 0.5, 0.75, 1.0, 1.25]; // mm
+  const heights = [0.25, 0.5, 0.75, 1.0, 1.25];
   const fVals = [];
   const xCrossVals = [];
 
@@ -793,7 +721,6 @@ function estimateTStopApprox(efl, surfaces) {
 
 // -------------------- FOV --------------------
 function rad2deg(r) { return (r * 180) / Math.PI; }
-
 function computeFovDeg(efl, sensorW, sensorH) {
   if (!Number.isFinite(efl) || efl <= 0) return null;
   const diag = Math.hypot(sensorW, sensorH);
@@ -805,12 +732,10 @@ function computeFovDeg(efl, sensorW, sensorH) {
 
 function coversSensorYesNo({ fov, maxField, mode = "diag", marginDeg = 0.5 }) {
   if (!fov || !Number.isFinite(maxField)) return { ok: false, req: null };
-
   let req = null;
   if (mode === "h") req = fov.hfov * 0.5;
   else if (mode === "v") req = fov.vfov * 0.5;
   else req = fov.dfov * 0.5;
-
   const ok = maxField + marginDeg >= req;
   return { ok, req };
 }
@@ -889,7 +814,6 @@ function worldToScreen(p, world) {
   const { cx, cy, s } = world;
   return { x: cx + p.x * s, y: cy - p.y * s };
 }
-
 function makeWorldTransform() {
   const r = canvas.getBoundingClientRect();
   const cx = r.width / 2 + view.panX;
@@ -912,44 +836,6 @@ function drawAxes(world) {
   ctx.restore();
 }
 
-function surfaceXatY(s, y) {
-  const vx = s.vx;
-  const R = s.R;
-
-  if (Math.abs(R) < 1e-9) return vx;
-
-  const cx = vx + R;
-  const rad = Math.abs(R);
-  const sign = Math.sign(R) || 1;
-
-  const inside = rad * rad - y * y;
-  if (inside < 0) return null;
-
-  return cx - sign * Math.sqrt(inside);
-}
-
-function maxNonOverlappingSemiDiameter(sFront, sBack, minCT = 0.10) {
-  const apGuess = Math.max(0.01, Math.min(Number(sFront.ap || 0), Number(sBack.ap || 0)));
-
-  function gapAt(y) {
-    const xf = surfaceXatY(sFront, y);
-    const xb = surfaceXatY(sBack, y);
-    if (xf == null || xb == null) return -1e9;
-    return xb - xf;
-  }
-
-  if (gapAt(0) < minCT) return 0.01;
-  if (gapAt(apGuess) >= minCT) return apGuess;
-
-  let lo = 0, hi = apGuess;
-  for (let i = 0; i < 30; i++) {
-    const mid = (lo + hi) * 0.5;
-    if (gapAt(mid) >= minCT) lo = mid;
-    else hi = mid;
-  }
-  return Math.max(0.01, lo);
-}
-
 function buildSurfacePolyline(s, ap, steps = 90) {
   const pts = [];
   for (let i = 0; i <= steps; i++) {
@@ -965,7 +851,6 @@ function drawElementBody(world, sFront, sBack, apRegion) {
   const front = buildSurfacePolyline(sFront, apRegion, 90);
   const back = buildSurfacePolyline(sBack, apRegion, 90);
   if (front.length < 2 || back.length < 2) return;
-
   const poly = front.concat(back.slice().reverse());
 
   ctx.save();
@@ -1006,7 +891,6 @@ function drawElementsClosed(world, surfaces) {
 
     const apA = Math.max(0, Number(sA.ap || 0));
     const apB = Math.max(0, Number(sB.ap || 0));
-
     const limA = maxApForSurface(sA);
     const limB = maxApForSurface(sB);
 
@@ -1033,7 +917,6 @@ function drawSurface(world, s) {
   ctx.strokeStyle = "#1b1b1b";
 
   const vx = s.vx;
-  // ✅ keep draw stable vs impossible ap
   const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
 
   if (Math.abs(s.R) < 1e-9) {
@@ -1177,9 +1060,7 @@ function renderAll() {
   applySensorToIMS();
   clampAllApertures(lens.surfaces);
 
-  if (AUTO_AP_FROM_OVERLAP) {
-    enforceElementAperturesFromGeometry(lens.surfaces, 0.10);
-  }
+  if (AUTO_AP_FROM_OVERLAP) enforceElementAperturesFromGeometry(lens.surfaces, 0.10);
 
   const ims = lens.surfaces[lens.surfaces.length - 1];
   const sensorX = (ims?.vx ?? 0) + sensorOffset;
@@ -1210,7 +1091,6 @@ function renderAll() {
   if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
   if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
   if (ui.fov) ui.fov.textContent = fovTxt;
-
   if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
 
   if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
@@ -1224,7 +1104,6 @@ function renderAll() {
   if (ui.status) {
     ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
   }
-
   if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
   resizeCanvasToCSS();
@@ -1240,7 +1119,6 @@ function renderAll() {
   const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
   const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
   const tTxt = T == null ? "—" : "T" + T.toFixed(2);
-
   drawTitleOverlay(
     `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`
   );
@@ -1266,22 +1144,16 @@ function bindViewControls() {
     renderAll();
   });
 
-  canvas.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      const delta = Math.sign(e.deltaY);
-      const factor = delta > 0 ? 0.92 : 1.08;
-      view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-      renderAll();
-    },
-    { passive: false }
-  );
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const delta = Math.sign(e.deltaY);
+    const factor = delta > 0 ? 0.92 : 1.08;
+    view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+    renderAll();
+  }, { passive: false });
 
   canvas.addEventListener("dblclick", () => {
-    view.panX = 0;
-    view.panY = 0;
-    view.zoom = 1.0;
+    view.panX = 0; view.panY = 0; view.zoom = 1.0;
     renderAll();
   });
 }
@@ -1292,6 +1164,18 @@ function isProtectedIndex(i) {
   return t === "OBJ" || t === "IMS";
 }
 
+function getIMSIndex() {
+  return lens.surfaces.findIndex((s) => String(s.type).toUpperCase() === "IMS");
+}
+function safeInsertAtAfterSelected() {
+  clampSelected();
+  let insertAt = selectedIndex + 1;
+  const imsIdx = getIMSIndex();
+  if (imsIdx >= 0) insertAt = Math.min(insertAt, imsIdx);
+  insertAt = Math.max(1, insertAt);
+  return insertAt;
+}
+
 function insertSurface(atIndex, surfaceObj) {
   lens.surfaces.splice(atIndex, 0, surfaceObj);
   selectedIndex = atIndex;
@@ -1299,28 +1183,13 @@ function insertSurface(atIndex, surfaceObj) {
   applySensorToIMS();
   renderAll();
 }
-
 function insertAfterSelected(surfaceObj) {
-  clampSelected();
-  const at = selectedIndex + 1;
+  const at = safeInsertAtAfterSelected();
   insertSurface(at, surfaceObj);
 }
 
-function getIMSIndex() {
-  return lens.surfaces.findIndex((s) => String(s.type).toUpperCase() === "IMS");
-}
-
-function safeInsertAtAfterSelected() {
-  clampSelected();
-  let insertAt = selectedIndex + 1;
-  const imsIdx = getIMSIndex();
-  if (imsIdx >= 0) insertAt = Math.min(insertAt, imsIdx); // never after IMS
-  insertAt = Math.max(1, insertAt); // never before OBJ
-  return insertAt;
-}
-
 // -------------------- +ELEMENT MODAL --------------------
-// Pas deze IDs aan als jouw HTML andere IDs gebruikt:
+// IDs are your HTML ones
 const EL_UI_IDS = {
   modal: "#elementModal",
   type: "#elType",
@@ -1333,6 +1202,7 @@ const EL_UI_IDS = {
   form: "#elForm",
   g1: "#elGlass1",
   g2: "#elGlass2",
+  note: "#elGlassNote",
   cancel: "#elClose",
   insert: "#elAdd",
 };
@@ -1349,17 +1219,64 @@ const elUI = {
   form: $(EL_UI_IDS.form),
   g1: $(EL_UI_IDS.g1),
   g2: $(EL_UI_IDS.g2),
+  note: $(EL_UI_IDS.note),
   cancel: $(EL_UI_IDS.cancel),
   insert: $(EL_UI_IDS.insert),
+
+  // injected
+  front: null,
 };
 
 function modalExists() {
   return !!(elUI.modal && elUI.insert && elUI.cancel && elUI.type && elUI.mode && elUI.f && elUI.ap && elUI.ct);
 }
 
+function ensureFrontAirFieldInjected() {
+  if (!modalExists()) return;
+  if (elUI.front) return;
+
+  // Find the modal grid where fields live
+  const grid = elUI.modal.querySelector(".modalGrid");
+  if (!grid) return;
+
+  // Create a new field block consistent with your HTML structure
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  wrap.innerHTML = `
+    <label>Front air (mm)</label>
+    <input id="elFrontAir" class="cellInput" type="number" step="0.01" value="0" />
+  `;
+  // Put it right above "Rear air to next" if possible
+  const rearField = elUI.rear?.closest(".field");
+  if (rearField && rearField.parentElement === grid) {
+    grid.insertBefore(wrap, rearField);
+  } else {
+    grid.appendChild(wrap);
+  }
+
+  elUI.front = wrap.querySelector("#elFrontAir");
+}
+
+function updateElementModalNote() {
+  if (!elUI.note) return;
+  const t = String(elUI.type?.value || "");
+  const frontAir = Number(elUI.front?.value || 0);
+  const gap = Number(elUI.gap?.value || 0);
+
+  let msg = "";
+  msg += `Front air: ${frontAir.toFixed(2)}mm (inserted as AIR surface before element)\n`;
+  if (t === "achromat_cemented") msg += `Cemented achromat: 3 surfaces (no internal air gap)\n`;
+  if (t === "achromat") msg += `Air-spaced achromat: 4 surfaces, internal gap = ${gap.toFixed(2)}mm\n`;
+  msg += `Tip: f/2 @ 35mm => stop ap ≈ 8.75mm (semi-diam) (your T≈ formula)\n`;
+  elUI.note.value = msg;
+}
+
 function openElementModal() {
   if (!modalExists()) return false;
 
+  ensureFrontAirFieldInjected();
+
+  // Fill glass dropdowns once
   if (elUI.g1 && elUI.g2 && !elUI.g1.dataset._filled) {
     const keys = Object.keys(GLASS_DB);
     elUI.g1.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
@@ -1369,9 +1286,11 @@ function openElementModal() {
     elUI.g1.dataset._filled = "1";
   }
 
+  // Type options (patched)
   if (elUI.type && !elUI.type.querySelector("option")) {
     elUI.type.innerHTML = `
-      <option value="achromat">Achromat (4 surfaces)</option>
+      <option value="achromat">Achromat (air-spaced, 4 surfaces)</option>
+      <option value="achromat_cemented">Achromat (cemented, 3 surfaces)</option>
       <option value="singlet">Singlet (2 surfaces)</option>
       <option value="stop">STOP (1 surface)</option>
       <option value="airgap">Air gap (1 surface)</option>
@@ -1390,24 +1309,32 @@ function openElementModal() {
   if (elUI.form && !elUI.form.querySelector("option")) {
     elUI.form.innerHTML = `
       <option value="symmetric">Symmetric</option>
-      <option value="strong_front">Strong front</option>
-      <option value="strong_rear">Strong rear</option>
-      <option value="plano_front">Plano front</option>
-      <option value="plano_rear">Plano rear</option>
+      <option value="weakMeniscus">Weak meniscus</option>
+      <option value="plano">Plano-convex</option>
     `;
     elUI.form.value = "symmetric";
   }
 
+  // Defaults
   if (elUI.f) elUI.f.value = Number(elUI.f.value || 50);
   if (elUI.ap) elUI.ap.value = Number(elUI.ap.value || 18);
   if (elUI.ct) elUI.ct.value = Number(elUI.ct.value || 4);
-  if (elUI.gap) elUI.gap.value = Number(elUI.gap.value || 0);
+  if (elUI.gap) elUI.gap.value = Number(elUI.gap.value || 0.2);
   if (elUI.rear) elUI.rear.value = Number(elUI.rear.value || 4);
+  if (elUI.front) elUI.front.value = Number(elUI.front.value || 0);
+
+  // Hook live note updates
+  [elUI.type, elUI.gap, elUI.front].forEach((x) => {
+    if (!x || x.dataset._noteBound) return;
+    x.addEventListener("input", updateElementModalNote);
+    x.addEventListener("change", updateElementModalNote);
+    x.dataset._noteBound = "1";
+  });
+  updateElementModalNote();
 
   elUI.modal.classList.remove("hidden");
   elUI.modal.style.pointerEvents = "auto";
   elUI.modal.style.opacity = "1";
-
   return true;
 }
 
@@ -1418,8 +1345,9 @@ function closeElementModal() {
   elUI.modal.style.opacity = "";
 }
 
-// thin-lens helper (rough): for symmetric biconvex singlet
+// ---- element math helpers ----
 function radiusForSymmetricSinglet(f, n) {
+  // thin-lens-ish starting point for biconvex: R ~ 2(n-1)f
   return 2 * Math.max(0.01, (n - 1)) * Math.max(1e-3, f);
 }
 
@@ -1430,21 +1358,55 @@ function buildSingletAuto({ f, ap, ct, rearAir, form, glass1 }) {
   let R1 = +Rbase;
   let R2 = -Rbase;
 
-  if (form === "strong_front") { R1 = +Rbase * 0.75; R2 = -Rbase * 1.35; }
-  if (form === "strong_rear")  { R1 = +Rbase * 1.35; R2 = -Rbase * 0.75; }
-  if (form === "plano_front")  { R1 = 0.0; R2 = -Rbase * 1.6; }
-  if (form === "plano_rear")   { R1 = +Rbase * 1.6; R2 = 0.0; }
+  if (form === "weakmeniscus") { R1 = +Rbase * 1.25; R2 = -Rbase * 1.05; }
+  if (form === "plano") { R1 = 0.0; R2 = -Rbase * 1.6; }
 
   const chunk = [
     { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
     { type: "", R: R2, t: rearAir, ap, glass: "AIR", stop: false },
+  ];
+  clampAllApertures(chunk);
+  return chunk;
+}
+
+// NEW: cemented achromat (3 surfaces)
+function buildAchromatCementedAuto({ f, ap, ct, rearAir, form, glass1, glass2 }) {
+  const n1 = GLASS_DB[glass1]?.nd ?? 1.5168;
+  const n2 = GLASS_DB[glass2]?.nd ?? 1.62;
+
+  // crude split of power: front (+), rear (-) — but cemented
+  // these are just a geometric "starter", not an optimized achromat design.
+  const f1 = f * 0.85;
+  const f2 = -f * 2.6;
+
+  const R1b = radiusForSymmetricSinglet(f1, n1);
+  const R3b = radiusForSymmetricSinglet(Math.abs(f2), n2);
+
+  // three radii: front, cement interface, rear
+  let R1 = +R1b;
+  let R2 = -R1b * 0.85;   // cement interface (mostly set by first glass)
+  let R3 = +R3b * 0.95;   // rear surface (second glass)
+
+  // “forms” just tilt the balance a bit
+  if (form === "weakmeniscus") { R1 *= 0.9; R2 *= 1.05; R3 *= 1.1; }
+  if (form === "plano") { R1 = 0.0; R2 = -R1b * 1.35; R3 = +R3b * 1.05; }
+
+  // OSLO-ish: glass = medium AFTER surface
+  // S1 -> glass1, thickness ct
+  // S2 -> glass2, thickness ct
+  // S3 -> AIR, thickness rearAir
+  const chunk = [
+    { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
+    { type: "", R: R2, t: ct, ap, glass: glass2, stop: false }, // cemented interface
+    { type: "", R: R3, t: rearAir, ap, glass: "AIR", stop: false },
   ];
 
   clampAllApertures(chunk);
   return chunk;
 }
 
-function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
+// Air-spaced achromat (4 surfaces)
+function buildAchromatAirSpacedAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
   const n1 = GLASS_DB[glass1]?.nd ?? 1.5168;
   const n2 = GLASS_DB[glass2]?.nd ?? 1.62;
 
@@ -1459,31 +1421,18 @@ function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
   let R3 = -R2b * 0.9;
   let R4 = +R2b;
 
-  if (form === "strong_front") { R1 *= 0.8; R2 *= 1.1; R3 *= 1.0; R4 *= 1.1; }
-  if (form === "strong_rear")  { R1 *= 1.1; R2 *= 1.0; R3 *= 1.1; R4 *= 0.8; }
-  if (form === "plano_front")  { R1 = 0.0; R2 = -R1b * 1.4; R3 = -R2b * 0.9; R4 = +R2b * 1.1; }
-  if (form === "plano_rear")   { R4 = 0.0; R1 = +R1b * 1.1; R2 = -R1b * 0.9; R3 = -R2b * 1.4; }
+  if (form === "weakmeniscus") { R1 *= 0.95; R2 *= 1.05; R3 *= 1.05; R4 *= 0.95; }
+  if (form === "plano") { R1 = 0.0; R2 = -R1b * 1.4; R3 = -R2b * 0.9; R4 = +R2b * 1.1; }
 
-  const t1 = ct;
-  const t2 = ct;
-
-  if (gap > 1e-9) {
-    const chunk = [
-      { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
-      { type: "", R: R2, t: gap, ap, glass: "AIR", stop: false },
-      { type: "", R: R3, t: t2, ap, glass: glass2, stop: false },
-      { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
-    ];
-    clampAllApertures(chunk);
-    return chunk;
-  }
+  const g = Math.max(0.0, Number(gap || 0));
 
   const chunk = [
-    { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
-    { type: "", R: R2, t: t2, ap, glass: glass2, stop: false },
-    { type: "", R: R3, t: 0.01, ap, glass: glass2, stop: false },
+    { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
+    { type: "", R: R2, t: g,  ap, glass: "AIR", stop: false },
+    { type: "", R: R3, t: ct, ap, glass: glass2, stop: false },
     { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
   ];
+
   clampAllApertures(chunk);
   return chunk;
 }
@@ -1494,25 +1443,38 @@ function readElementModalValues() {
   const ct = Number(elUI.ct?.value ?? 4);
   const gap = Number(elUI.gap?.value ?? 0);
   const rearAir = Number(elUI.rear?.value ?? 4);
+  const frontAir = Number(elUI.front?.value ?? 0);
+
   const type = String(elUI.type?.value ?? "achromat").toLowerCase();
   const mode = String(elUI.mode?.value ?? "auto").toLowerCase();
   const form = String(elUI.form?.value ?? "symmetric").toLowerCase();
+
   const glass1 = String(elUI.g1?.value ?? "BK7");
   const glass2 = String(elUI.g2?.value ?? "F2");
-  return { f, ap, ct, gap, rearAir, type, mode, form, glass1, glass2 };
+
+  return { f, ap, ct, gap, rearAir, frontAir, type, mode, form, glass1, glass2 };
 }
 
 function insertElementFromModal() {
   const v = readElementModalValues();
 
-  const f = Math.max(1e-3, v.f);
+  const f = v.f; // can be negative for some experiments; allow
   const ap = Math.max(0.1, v.ap);
-  const ct = Math.max(0.01, v.ct);
+  const ct = Math.max(0.05, v.ct);
   const gap = Math.max(0.0, v.gap);
   const rearAir = Math.max(0.0, v.rearAir);
+  const frontAir = Math.max(0.0, v.frontAir);
+
+  // --- helper: optionally insert FRONT AIR as its own surface ---
+  function maybeInsertFrontAir(insertAt) {
+    if (frontAir <= 0) return insertAt;
+    lens.surfaces.splice(insertAt, 0, { type: "", R: 0.0, t: frontAir, ap: ap, glass: "AIR", stop: false });
+    return insertAt + 1;
+  }
 
   if (v.type === "stop") {
-    const insertAt = safeInsertAtAfterSelected();
+    let insertAt = safeInsertAtAfterSelected();
+    insertAt = maybeInsertFrontAir(insertAt);
     lens.surfaces.splice(insertAt, 0, { type: "STOP", R: 0.0, t: rearAir, ap, glass: "AIR", stop: true });
     selectedIndex = insertAt;
     enforceSingleStop(insertAt);
@@ -1523,7 +1485,8 @@ function insertElementFromModal() {
   }
 
   if (v.type === "airgap") {
-    const insertAt = safeInsertAtAfterSelected();
+    let insertAt = safeInsertAtAfterSelected();
+    insertAt = maybeInsertFrontAir(insertAt);
     lens.surfaces.splice(insertAt, 0, { type: "", R: 0.0, t: rearAir, ap, glass: "AIR", stop: false });
     selectedIndex = insertAt;
     buildTable();
@@ -1532,25 +1495,37 @@ function insertElementFromModal() {
     return;
   }
 
+  if (v.mode !== "auto") {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Custom mode not implemented yet (auto only).";
+    return;
+  }
+
   let chunk = null;
 
-  if (v.mode !== "auto") {
-    chunk = null; // only auto supported
+  if (v.type === "achromat_cemented") {
+    chunk = buildAchromatCementedAuto({
+      f, ap, ct,
+      rearAir,
+      form: v.form,
+      glass1: v.glass1,
+      glass2: v.glass2,
+    });
+  } else if (v.type.includes("achromat")) {
+    chunk = buildAchromatAirSpacedAuto({
+      f, ap, ct,
+      gap,
+      rearAir,
+      form: v.form,
+      glass1: v.glass1,
+      glass2: v.glass2,
+    });
   } else {
-    if (v.type.includes("achromat")) {
-      chunk = buildAchromatAuto({
-        f, ap, ct, gap, rearAir,
-        form: v.form,
-        glass1: v.glass1,
-        glass2: v.glass2,
-      });
-    } else {
-      chunk = buildSingletAuto({
-        f, ap, ct, rearAir,
-        form: v.form,
-        glass1: v.glass1,
-      });
-    }
+    chunk = buildSingletAuto({
+      f, ap, ct,
+      rearAir,
+      form: v.form,
+      glass1: v.glass1,
+    });
   }
 
   if (!chunk || !Array.isArray(chunk) || chunk.length < 2) {
@@ -1558,7 +1533,9 @@ function insertElementFromModal() {
     return;
   }
 
-  const insertAt = safeInsertAtAfterSelected();
+  let insertAt = safeInsertAtAfterSelected();
+  insertAt = maybeInsertFrontAir(insertAt);
+
   lens.surfaces.splice(insertAt, 0, ...chunk);
   selectedIndex = insertAt;
 
@@ -1576,14 +1553,9 @@ if (modalExists()) {
     closeElementModal();
   });
 
-  elUI.modal.addEventListener("mousedown", (e) => {
-    if (e.target === elUI.modal) closeElementModal();
-  });
-
+  elUI.modal.addEventListener("mousedown", (e) => { if (e.target === elUI.modal) closeElementModal(); });
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && elUI.modal && !elUI.modal.classList.contains("hidden")) {
-      closeElementModal();
-    }
+    if (e.key === "Escape" && elUI.modal && !elUI.modal.classList.contains("hidden")) closeElementModal();
   });
 }
 
@@ -1597,7 +1569,7 @@ on("#btnAddElement", "click", () => {
   if (ui.footerWarn) ui.footerWarn.textContent = "Add Element modal not found in HTML (expected #elementModal etc).";
 });
 
-// New/Clear: ONLY OBJ + STOP + IMS
+// New/Clear
 function newClear() {
   lens = sanitizeLens({
     name: "New Lens (blank)",
@@ -1609,7 +1581,6 @@ function newClear() {
   });
 
   selectedIndex = 0;
-
   if (ui.fieldAngle) ui.fieldAngle.value = 0;
   if (ui.rayCount) ui.rayCount.value = 31;
   if (ui.wavePreset) ui.wavePreset.value = "d";
@@ -1622,7 +1593,6 @@ function newClear() {
   applySensorToIMS();
   renderAll();
 }
-
 on("#btnNew", "click", newClear);
 
 on("#btnDuplicate", "click", () => {
@@ -1698,6 +1668,7 @@ on("#fileLoad", "change", async (e) => {
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
+    // optional glass_note import
     if (obj.glass_note && typeof obj.glass_note === "object") {
       for (const [k, v] of Object.entries(obj.glass_note)) {
         const nd = Number(v?.nd);
@@ -1735,7 +1706,7 @@ window.addEventListener("resize", renderAll);
 function init() {
   populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-  loadLens(lens); // buildTable + applySensorToIMS + renderAll
+  loadLens(lens);
   bindViewControls();
 }
 init();
