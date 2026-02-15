@@ -89,6 +89,14 @@ const GLASS_DB = {
   "N-SF5":   { nd: 1.67271,  Vd: 32.25 },
   "S-LAM3":  { nd: 1.717004, Vd: 47.927969 },
   "S-BAH11": { nd: 1.666718, Vd: 48.325247 },
+
+   const GLASSES = {
+  CZJ_1: { n: 1.5182, v: 63.8 },
+  CZJ_2: { n: 1.6465, v: 47.5 },
+  CZJ_3: { n: 1.6055, v: 60.4 },
+  CZJ_4: { n: 1.7343, v: 28.1 },
+  CZJ_5: { n: 1.6810, v: 54.7 },
+  CZJ_6: { n: 1.6229, v: 60.0 }
 };
 
 function glassN(glassName, preset /* d,g,c */) {
