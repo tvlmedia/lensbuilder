@@ -21,9 +21,7 @@ const on = (sel, ev, fn) => {
 
 // structuredClone fallback (older browsers)
 const clone = (obj) =>
-  typeof structuredClone === "function"
-    ? structuredClone(obj)
-    : JSON.parse(JSON.stringify(obj));
+  typeof structuredClone === "function" ? structuredClone(obj) : JSON.parse(JSON.stringify(obj));
 
 const canvas = $("#canvas");
 const ctx = canvas.getContext("2d");
@@ -73,12 +71,12 @@ const SENSOR_PRESETS = {
 function populateSensorPresetsSelect() {
   if (!ui.sensorPreset) return;
 
-  const current = ui.sensorPreset.value;
   const keys = Object.keys(SENSOR_PRESETS);
-
   ui.sensorPreset.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
 
-  ui.sensorPreset.value = SENSOR_PRESETS[current] ? current : keys[0] || "";
+  // ensure valid value
+  const cur = ui.sensorPreset.value;
+  if (!SENSOR_PRESETS[cur]) ui.sensorPreset.value = keys[0] || "ARRI Alexa Mini LF (LF)";
 }
 
 function getSensorWH() {
@@ -94,9 +92,7 @@ function syncIMSCellApertureToUI() {
   const s = lens.surfaces[i];
   if (!s || String(s.type).toUpperCase() !== "IMS") return;
 
-  const apInput = ui.tbody.querySelector(
-    `input.cellInput[data-k="ap"][data-i="${i}"]`
-  );
+  const apInput = ui.tbody.querySelector(`input.cellInput[data-k="ap"][data-i="${i}"]`);
   if (apInput) apInput.value = Number(s.ap || 0).toFixed(2);
 }
 
@@ -231,6 +227,15 @@ function sanitizeLens(obj) {
   safe.surfaces.forEach((s, i) => {
     if (!s.type || !s.type.trim()) s.type = String(i);
   });
+
+  // ensure OBJ at 0 and IMS at end if present
+  if (safe.surfaces.length >= 1) safe.surfaces[0].type = "OBJ";
+  const imsIdx = safe.surfaces.findIndex((s) => String(s.type).toUpperCase() === "IMS");
+  if (imsIdx >= 0 && imsIdx !== safe.surfaces.length - 1) {
+    const ims = safe.surfaces.splice(imsIdx, 1)[0];
+    safe.surfaces.push(ims);
+  }
+  if (safe.surfaces.length >= 1) safe.surfaces[safe.surfaces.length - 1].type = "IMS";
 
   return safe;
 }
@@ -521,11 +526,7 @@ function getRayReferencePlane(surfaces) {
   }
 
   const s = surfaces[refIdx] || surfaces[0];
-  return {
-    xRef: s.vx,
-    apRef: Math.max(1e-3, Number(s.ap || 10)),
-    refIdx,
-  };
+  return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10)), refIdx };
 }
 
 function buildRays(surfaces, fieldAngleDeg, count) {
@@ -534,7 +535,6 @@ function buildRays(surfaces, fieldAngleDeg, count) {
   const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
 
   const xStart = (surfaces[0]?.vx ?? 0) - 80;
-
   const { xRef, apRef } = getRayReferencePlane(surfaces);
 
   const hMax = apRef * 0.98;
@@ -545,11 +545,9 @@ function buildRays(surfaces, fieldAngleDeg, count) {
   for (let k = 0; k < n; k++) {
     const a = (k / (n - 1)) * 2 - 1;
     const yAtRef = a * hMax;
-
     const y0 = yAtRef - tanT * (xRef - xStart);
     rays.push({ p: { x: xStart, y: y0 }, d: dir });
   }
-
   return rays;
 }
 
@@ -564,10 +562,7 @@ function buildChiefRay(surfaces, fieldAngleDeg) {
   const xStop = stopSurf.vx;
 
   const tanT = Math.abs(dir.x) < 1e-9 ? 0 : dir.y / dir.x;
-
-  // chief ray through stop center (y=0 at stop)
-  const y0 = 0 - tanT * (xStop - xStart);
-
+  const y0 = 0 - tanT * (xStop - xStart); // through stop center
   return { p: { x: xStart, y: y0 }, d: dir };
 }
 
@@ -578,33 +573,20 @@ function rayHitYAtX(endRay, x) {
   return endRay.p.y + t * endRay.d.y;
 }
 
-// crude but useful: max field angle (meridional) that still lands within sensor half-height
 function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH) {
-  let lo = 0,
-    hi = 60;
-  let best = 0;
+  let lo = 0, hi = 60, best = 0;
 
   for (let iter = 0; iter < 18; iter++) {
     const mid = (lo + hi) * 0.5;
     const ray = buildChiefRay(surfaces, mid);
     const tr = traceRayThroughLens(clone(ray), surfaces, wavePreset);
-    if (!tr || tr.vignetted || tr.tir) {
-      hi = mid;
-      continue;
-    }
+    if (!tr || tr.vignetted || tr.tir) { hi = mid; continue; }
 
     const y = rayHitYAtX(tr.endRay, sensorX);
-    if (y == null) {
-      hi = mid;
-      continue;
-    }
+    if (y == null) { hi = mid; continue; }
 
-    if (Math.abs(y) <= halfH) {
-      best = mid;
-      lo = mid;
-    } else {
-      hi = mid;
-    }
+    if (Math.abs(y) <= halfH) { best = mid; lo = mid; }
+    else hi = mid;
   }
   return best;
 }
@@ -632,8 +614,7 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
     if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
 
     const er = tr.endRay;
-    const dx = er.d.x,
-      dy = er.d.y;
+    const dx = er.d.x, dy = er.d.y;
     if (Math.abs(dx) < 1e-12) continue;
 
     const uOut = dy / dx;
@@ -642,7 +623,6 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
     const f = -y0 / uOut;
     if (Number.isFinite(f)) fVals.push(f);
 
-    // axis crossing
     if (Math.abs(dy) > 1e-12) {
       const t = -er.p.y / dy;
       const xCross = er.p.x + t * dx;
@@ -672,9 +652,7 @@ function estimateTStopApprox(efl, surfaces) {
 }
 
 // -------------------- FOV --------------------
-function rad2deg(r) {
-  return (r * 180) / Math.PI;
-}
+function rad2deg(r) { return (r * 180) / Math.PI; }
 
 function computeFovDeg(efl, sensorW, sensorH) {
   if (!Number.isFinite(efl) || efl <= 0) return null;
@@ -685,7 +663,6 @@ function computeFovDeg(efl, sensorW, sensorH) {
   return { hfov: rad2deg(hfov), vfov: rad2deg(vfov), dfov: rad2deg(dfov) };
 }
 
-// Coverage YES/NO (simple, pragmatic)
 function coversSensorYesNo({ fov, maxField, mode = "diag", marginDeg = 0.5 }) {
   if (!fov || !Number.isFinite(maxField)) return { ok: false, req: null };
 
@@ -709,7 +686,7 @@ function spotRmsAtSensorX(traces, sensorX) {
   }
   if (ys.length < 5) return { rms: null, n: ys.length };
   const mean = ys.reduce((a, b) => a + b, 0) / ys.length;
-  const rms = Math.sqrt(ys.reduce((acc, y) => acc + (y - mean) * (y - mean), 0) / ys.length);
+  const rms = Math.sqrt(ys.reduce((acc, y) => acc + (y - mean) ** 2, 0) / ys.length);
   return { rms, n: ys.length };
 }
 
@@ -748,17 +725,12 @@ function autoFocusSensorOffset() {
   if (Number.isFinite(best.rms)) scan(best.off, 3.0, fineStep);
 
   if (!Number.isFinite(best.rms) || best.n < 5) {
-    if (ui.footerWarn)
-      ui.footerWarn.textContent =
-        "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
+    if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
     return;
   }
 
   if (ui.sensorOffset) ui.sensorOffset.value = best.off.toFixed(2);
-  if (ui.footerWarn)
-    ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(
-      2
-    )}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+  if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
   renderAll();
 }
 
@@ -835,7 +807,6 @@ function drawElementBody(world, sFront, sBack, apRegion) {
   const poly = front.concat(back.slice().reverse());
 
   ctx.save();
-
   ctx.globalAlpha = 0.12;
   ctx.fillStyle = "#000";
   ctx.beginPath();
@@ -852,7 +823,6 @@ function drawElementBody(world, sFront, sBack, apRegion) {
   ctx.lineWidth = 1.25;
   ctx.strokeStyle = "#1b1b1b";
   ctx.stroke();
-
   ctx.restore();
 }
 
@@ -911,10 +881,8 @@ function drawSurface(world, s) {
     if (inside < 0) continue;
     const x = cx - sign * Math.sqrt(inside);
     const sp = worldToScreen({ x, y }, world);
-    if (!moved) {
-      ctx.moveTo(sp.x, sp.y);
-      moved = true;
-    } else ctx.lineTo(sp.x, sp.y);
+    if (!moved) { ctx.moveTo(sp.x, sp.y); moved = true; }
+    else ctx.lineTo(sp.x, sp.y);
   }
   ctx.stroke();
   ctx.restore();
@@ -953,7 +921,6 @@ function drawRays(world, rayTraces, sensorX) {
     }
     ctx.stroke();
   }
-
   ctx.restore();
 }
 
@@ -1007,8 +974,7 @@ function drawSensor(world, sensorX, halfH) {
 
 function drawTitleOverlay(text) {
   ctx.save();
-  const mono =
-    getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
   ctx.font = "14px " + mono;
   ctx.fillStyle = "#333";
   ctx.fillText(text, 14, 20);
@@ -1028,7 +994,6 @@ function renderAll() {
   const wavePreset = ui.wavePreset?.value || "d";
   const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
-  // keep IMS aperture tied to sensor height
   applySensorToIMS();
 
   const ims = lens.surfaces[lens.surfaces.length - 1];
@@ -1045,20 +1010,15 @@ function renderAll() {
   const T = estimateTStopApprox(efl, lens.surfaces);
 
   const fov = computeFovDeg(efl, sensorW, sensorH);
-  const fovTxt = !fov
-    ? "FOV: —"
-    : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+  const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-  // coverage (meridional) test (2D = vertical)
   const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
   const covMode = "v";
   const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
 
   const covTxt = !fov
     ? "COV(V): —"
-    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${
-        covers ? "COVERS ✅" : "NO ❌"
-      }`;
+    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
   if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
@@ -1074,13 +1034,10 @@ function renderAll() {
   if (ui.fovTop) ui.fovTop.textContent = fovTxt;
   if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-  if (tirCount > 0 && ui.footerWarn)
-    ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
   if (ui.status) {
-    ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(
-      2
-    )}° • vignetted ${vCount} • ${covTxt}`;
+    ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
   }
 
   if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
@@ -1100,9 +1057,7 @@ function renderAll() {
   const tTxt = T == null ? "—" : "T" + T.toFixed(2);
 
   drawTitleOverlay(
-    `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(
-      2
-    )}mm`
+    `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`
   );
 }
 
@@ -1113,9 +1068,7 @@ function bindViewControls() {
     view.lastX = e.clientX;
     view.lastY = e.clientY;
   });
-  window.addEventListener("mouseup", () => {
-    view.dragging = false;
-  });
+  window.addEventListener("mouseup", () => { view.dragging = false; });
 
   window.addEventListener("mousemove", (e) => {
     if (!view.dragging) return;
@@ -1168,47 +1121,268 @@ function insertAfterSelected(surfaceObj) {
   insertSurface(at, surfaceObj);
 }
 
-function elementPresetMenu() {
-  const presets = [
-    { key:"1", name:"Biconvex (BK7)", make: () => ([
-      { type:"", R: 40.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
-      { type:"", R:-40.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
-    ])},
-    { key:"2", name:"Biconcave (BK7)", make: () => ([
-      { type:"", R:-40.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
-      { type:"", R: 40.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
-    ])},
-    { key:"3", name:"Plano-Convex (BK7)  (plane -> convex)", make: () => ([
-      { type:"", R: 0.0,  t:6.0, ap:18.0, glass:"BK7", stop:false },
-      { type:"", R:-50.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
-    ])},
-    { key:"4", name:"Plano-Concave (BK7) (plane -> concave)", make: () => ([
-      { type:"", R: 0.0,  t:6.0, ap:18.0, glass:"BK7", stop:false },
-      { type:"", R: 50.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
-    ])},
-    { key:"5", name:"Positive meniscus (BK7) (strong front)", make: () => ([
-      { type:"", R: 30.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
-      { type:"", R:-80.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
-    ])},
-    { key:"6", name:"Negative meniscus (BK7) (strong back)", make: () => ([
-      { type:"", R:-80.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
-      { type:"", R: 30.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
-    ])},
-    { key:"7", name:"Cemented doublet (BK7 + F2) (simple)", make: () => ([
-      { type:"", R: 50.0, t:4.0, ap:18.0, glass:"BK7", stop:false }, // front
-      { type:"", R:-40.0, t:4.0, ap:18.0, glass:"F2",  stop:false }, // cement interface, medium after = F2
-      { type:"", R: 90.0, t:6.0, ap:18.0, glass:"AIR", stop:false }, // back, then air gap
-    ])},
+function getIMSIndex() {
+  return lens.surfaces.findIndex((s) => String(s.type).toUpperCase() === "IMS");
+}
+
+function safeInsertAtAfterSelected() {
+  clampSelected();
+  let insertAt = selectedIndex + 1;
+  const imsIdx = getIMSIndex();
+  if (imsIdx >= 0) insertAt = Math.min(insertAt, imsIdx); // never after IMS
+  insertAt = Math.max(1, insertAt); // never before OBJ
+  return insertAt;
+}
+
+// -------------------- +ELEMENT MODAL (zoals je oude UI) --------------------
+// Pas deze IDs aan als jouw HTML andere IDs gebruikt:
+const EL_UI_IDS = {
+  modal: "#elementModal",
+  type: "#elType",
+  mode: "#elMode",
+  f: "#elF",
+  ap: "#elAp",
+  ct: "#elCt",
+  gap: "#elGap",
+  rear: "#elRearAir",
+  form: "#elForm",
+  g1: "#elGlass1",
+  g2: "#elGlass2",
+  cancel: "#elCancel",
+  insert: "#elInsert",
+};
+
+const elUI = {
+  modal: $(EL_UI_IDS.modal),
+  type: $(EL_UI_IDS.type),
+  mode: $(EL_UI_IDS.mode),
+  f: $(EL_UI_IDS.f),
+  ap: $(EL_UI_IDS.ap),
+  ct: $(EL_UI_IDS.ct),
+  gap: $(EL_UI_IDS.gap),
+  rear: $(EL_UI_IDS.rear),
+  form: $(EL_UI_IDS.form),
+  g1: $(EL_UI_IDS.g1),
+  g2: $(EL_UI_IDS.g2),
+  cancel: $(EL_UI_IDS.cancel),
+  insert: $(EL_UI_IDS.insert),
+};
+
+function modalExists() {
+  return !!(elUI.modal && elUI.type && elUI.mode && elUI.f && elUI.ap && elUI.ct && elUI.g1 && elUI.g2 && elUI.insert && elUI.cancel);
+}
+
+function openElementModal() {
+  if (!modalExists()) return false;
+
+  // populate selects once
+  if (elUI.g1 && !elUI.g1.dataset._filled) {
+    const keys = Object.keys(GLASS_DB);
+    elUI.g1.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join("");
+    elUI.g2.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join("");
+    elUI.g1.value = "BK7";
+    elUI.g2.value = "F2";
+    elUI.g1.dataset._filled = "1";
+  }
+
+  // sensible defaults matching your screenshot
+  if (elUI.type && !elUI.type.value) {
+    // if HTML already has its own options, we respect them.
+    // but if it is empty, we inject basic set.
+    if (!elUI.type.querySelector("option")) {
+      elUI.type.innerHTML = `
+        <option value="singlet">Singlet (2 surfaces)</option>
+        <option value="achromat">Achromat (4 surfaces)</option>
+      `;
+    }
+    elUI.type.value = elUI.type.value || "achromat";
+  }
+
+  if (elUI.mode && !elUI.mode.querySelector("option")) {
+    elUI.mode.innerHTML = `<option value="auto">Auto</option>`;
+    elUI.mode.value = "auto";
+  }
+
+  if (elUI.form && !elUI.form.querySelector("option")) {
+    elUI.form.innerHTML = `
+      <option value="symmetric">Symmetric</option>
+      <option value="strong_front">Strong front</option>
+      <option value="strong_rear">Strong rear</option>
+      <option value="plano_front">Plano front</option>
+      <option value="plano_rear">Plano rear</option>
+    `;
+    elUI.form.value = "symmetric";
+  }
+
+  if (elUI.f) elUI.f.value = Number(elUI.f.value || 50);
+  if (elUI.ap) elUI.ap.value = Number(elUI.ap.value || 18);
+  if (elUI.ct) elUI.ct.value = Number(elUI.ct.value || 4);
+  if (elUI.gap) elUI.gap.value = Number(elUI.gap.value || 0);
+  if (elUI.rear) elUI.rear.value = Number(elUI.rear.value || 4);
+
+  elUI.modal.classList.add("open");
+  return true;
+}
+
+function closeElementModal() {
+  if (!modalExists()) return;
+  elUI.modal.classList.remove("open");
+}
+
+// thin-lens helper (rough): for symmetric biconvex singlet
+function radiusForSymmetricSinglet(f, n) {
+  // 1/f ≈ (n-1)*(1/R1 - 1/R2), with R1=+R, R2=-R => 1/f ≈ (n-1)*(2/R)
+  // => R ≈ 2*(n-1)*f
+  return 2 * Math.max(0.01, (n - 1)) * Math.max(1e-3, f);
+}
+
+function buildSingletAuto({ f, ap, ct, rearAir, form, glass1 }) {
+  const n = (GLASS_DB[glass1]?.nd ?? 1.5168);
+  const Rbase = radiusForSymmetricSinglet(f, n);
+
+  let R1 = +Rbase;
+  let R2 = -Rbase;
+
+  if (form === "strong_front") { R1 = +Rbase * 0.75; R2 = -Rbase * 1.35; }
+  if (form === "strong_rear")  { R1 = +Rbase * 1.35; R2 = -Rbase * 0.75; }
+  if (form === "plano_front")  { R1 = 0.0; R2 = -Rbase * 1.6; }
+  if (form === "plano_rear")   { R1 = +Rbase * 1.6; R2 = 0.0; }
+
+  // surfaces: [front -> glass], [back -> AIR gap to next]
+  return [
+    { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
+    { type: "", R: R2, t: rearAir, ap, glass: "AIR", stop: false },
   ];
+}
 
-  const msg =
-    "Kies element preset:\n" +
-    presets.map(p => `${p.key}) ${p.name}`).join("\n") +
-    "\n\n(Annuleer = niets toevoegen)";
+function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
+  // super rough split: crown provides most positive power, flint provides negative power
+  // goal: net positive focal length ≈ f
+  const n1 = (GLASS_DB[glass1]?.nd ?? 1.5168);
+  const n2 = (GLASS_DB[glass2]?.nd ?? 1.62);
 
-  const choice = (prompt(msg, "1") || "").trim();
-  const picked = presets.find(p => p.key === choice);
-  return picked ? picked.make() : null;
+  const f1 = f * 0.75; // positive group stronger
+  const f2 = -f * 2.2; // negative group weaker magnitude
+
+  const R1b = radiusForSymmetricSinglet(f1, n1);
+  const R2b = radiusForSymmetricSinglet(Math.abs(f2), n2);
+
+  // default “symmetric-ish” achromat shapes (4 surfaces)
+  let R1 = +R1b;
+  let R2 = -R1b * 0.9;     // cement-ish interface curvature
+  let R3 = -R2b * 0.9;     // flint front (negative meniscus feel)
+  let R4 = +R2b;
+
+  if (form === "strong_front") {
+    R1 *= 0.8; R2 *= 1.1; R3 *= 1.0; R4 *= 1.1;
+  }
+  if (form === "strong_rear") {
+    R1 *= 1.1; R2 *= 1.0; R3 *= 1.1; R4 *= 0.8;
+  }
+  if (form === "plano_front") {
+    R1 = 0.0; R2 = -R1b * 1.4; R3 = -R2b * 0.9; R4 = +R2b * 1.1;
+  }
+  if (form === "plano_rear") {
+    R4 = 0.0; R1 = +R1b * 1.1; R2 = -R1b * 0.9; R3 = -R2b * 1.4;
+  }
+
+  // distribute thickness: ct for element 1, ct for element 2
+  const t1 = ct;
+  const t2 = ct;
+
+  // surfaces in OSLO-ish format: medium AFTER surface
+  // S1: glass1, thickness t1
+  // S2: glass2 (cement interface), thickness t2 (into flint)
+  // S3: AIR (back of flint), thickness rearAir (gap to next)
+  // If you want a real air-gap doublet: we use "gap" between element 1 and 2 by inserting an AIR surface.
+  if (gap > 1e-9) {
+    // Element 1 (glass1): S1, S2 -> AIR gap
+    // Element 2 (glass2): S3, S4 -> AIR rear
+    return [
+      { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
+      { type: "", R: R2, t: gap, ap, glass: "AIR", stop: false },        // back of element 1 to air gap
+      { type: "", R: R3, t: t2, ap, glass: glass2, stop: false },         // front of element 2 into glass2
+      { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },     // back to air
+    ];
+  }
+
+  // cemented (no air gap): S2 medium after = glass2
+  return [
+    { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
+    { type: "", R: R2, t: t2, ap, glass: glass2, stop: false },          // cement interface, now in glass2
+    { type: "", R: R3, t: 0.01, ap, glass: glass2, stop: false },         // tiny spacer for stability (keeps geometry sane)
+    { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
+  ];
+}
+
+function readElementModalValues() {
+  const f = Number(elUI.f?.value ?? 50);
+  const ap = Number(elUI.ap?.value ?? 18);
+  const ct = Number(elUI.ct?.value ?? 4);
+  const gap = Number(elUI.gap?.value ?? 0);
+  const rearAir = Number(elUI.rear?.value ?? 4);
+  const type = String(elUI.type?.value ?? "achromat").toLowerCase();
+  const mode = String(elUI.mode?.value ?? "auto").toLowerCase();
+  const form = String(elUI.form?.value ?? "symmetric").toLowerCase();
+  const glass1 = String(elUI.g1?.value ?? "BK7");
+  const glass2 = String(elUI.g2?.value ?? "F2");
+  return { f, ap, ct, gap, rearAir, type, mode, form, glass1, glass2 };
+}
+
+function insertElementFromModal() {
+  const v = readElementModalValues();
+  const f = Math.max(1e-3, v.f);
+  const ap = Math.max(0.1, v.ap);
+  const ct = Math.max(0.01, v.ct);
+  const gap = Math.max(0.0, v.gap);
+  const rearAir = Math.max(0.0, v.rearAir);
+
+  let chunk = null;
+
+  if (v.mode !== "auto") {
+    // for now: only auto supported (keeps UI simple)
+    chunk = null;
+  } else {
+    if (v.type.includes("achromat")) {
+      chunk = buildAchromatAuto({ f, ap, ct, gap, rearAir, form: v.form, glass1: v.glass1, glass2: v.glass2 });
+    } else {
+      chunk = buildSingletAuto({ f, ap, ct, rearAir, form: v.form, glass1: v.glass1 });
+    }
+  }
+
+  if (!chunk || !Array.isArray(chunk) || chunk.length < 2) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Element insert failed (check modal values).";
+    return;
+  }
+
+  // never insert after IMS
+  const insertAt = safeInsertAtAfterSelected();
+  lens.surfaces.splice(insertAt, 0, ...chunk);
+  selectedIndex = insertAt;
+
+  buildTable();
+  applySensorToIMS();
+  renderAll();
+}
+
+// modal bindings (if modal exists)
+if (modalExists()) {
+  elUI.cancel.addEventListener("click", (e) => { e.preventDefault(); closeElementModal(); });
+  elUI.insert.addEventListener("click", (e) => {
+    e.preventDefault();
+    insertElementFromModal();
+    closeElementModal();
+  });
+
+  // click outside to close
+  elUI.modal.addEventListener("mousedown", (e) => {
+    if (e.target === elUI.modal) closeElementModal();
+  });
+
+  // ESC to close
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && elUI.modal.classList.contains("open")) closeElementModal();
+  });
 }
 
 // -------------------- buttons --------------------
@@ -1217,34 +1391,18 @@ on("#btnAdd", "click", () => {
 });
 
 on("#btnAddElement", "click", () => {
-  clampSelected();
+  // Preferred: proper modal UI
+  if (openElementModal()) return;
 
-  const chunk = elementPresetMenu();
-  if (!chunk) return; // user cancelled
-
-  // insert before IMS if needed
-  let insertAt = selectedIndex + 1;
-  if (String(lens.surfaces[selectedIndex]?.type || "").toUpperCase() === "IMS") {
-    insertAt = Math.max(0, lens.surfaces.length - 1);
-  }
-  if (insertAt >= lens.surfaces.length) insertAt = lens.surfaces.length - 1;
-
-  // safety: never insert after IMS
-  const imsIdx = lens.surfaces.findIndex(s => String(s.type).toUpperCase() === "IMS");
-  if (imsIdx >= 0) insertAt = Math.min(insertAt, imsIdx);
-
-  lens.surfaces.splice(insertAt, 0, ...chunk);
-  selectedIndex = insertAt;
-
-  buildTable();
-  applySensorToIMS();
-  renderAll();
+  // Fallback: if modal isn't present, at least don't break the tool
+  if (ui.footerWarn) ui.footerWarn.textContent = "Add Element modal not found in HTML (expected #elementModal etc).";
 });
 
+// FIX 1: New/Clear must NOT auto-add an element.
+// (Only OBJ + STOP + IMS)
 function newClear() {
-  // minimal template: OBJ + STOP + IMS
   lens = sanitizeLens({
-    name: "New Lens",
+    name: "New Lens (blank)",
     surfaces: [
       { type:"OBJ",  R:0.0, t:0.0,  ap:60.0, glass:"AIR", stop:false },
       { type:"STOP", R:0.0, t:20.0, ap:8.0,  glass:"AIR", stop:true  },
@@ -1254,14 +1412,12 @@ function newClear() {
 
   selectedIndex = 0;
 
-  // reset UI controls
   if (ui.fieldAngle) ui.fieldAngle.value = 0;
   if (ui.rayCount) ui.rayCount.value = 31;
   if (ui.wavePreset) ui.wavePreset.value = "d";
   if (ui.sensorOffset) ui.sensorOffset.value = 0;
   if (ui.renderScale) ui.renderScale.value = 1.25;
 
-  // reset view
   view.panX = 0; view.panY = 0; view.zoom = 1.0;
 
   buildTable();
@@ -1333,14 +1489,8 @@ on("#btnSave", "click", () => {
 });
 
 on("#btnAutoFocus", "click", () => autoFocusSensorOffset());
-
-on("#btnLoadOmit", "click", () => {
-  loadLens(omit50ConceptV1());
-});
-
-on("#btnLoadDemo", "click", () => {
-  loadLens(demoLensSimple());
-});
+on("#btnLoadOmit", "click", () => { loadLens(omit50ConceptV1()); });
+on("#btnLoadDemo", "click", () => { loadLens(demoLensSimple()); });
 
 on("#fileLoad", "change", async (e) => {
   const file = e.target.files?.[0];
@@ -1350,7 +1500,6 @@ on("#fileLoad", "change", async (e) => {
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
-    // optional: glass_note import
     if (obj.glass_note && typeof obj.glass_note === "object") {
       for (const [k, v] of Object.entries(obj.glass_note)) {
         const nd = Number(v?.nd);
@@ -1387,7 +1536,7 @@ window.addEventListener("resize", renderAll);
 function init() {
   populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-  loadLens(lens);       // does buildTable + applySensorToIMS + renderAll
+  loadLens(lens); // buildTable + applySensorToIMS + renderAll
   bindViewControls();
 }
 init();
