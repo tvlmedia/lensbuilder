@@ -888,8 +888,8 @@ function renderAll() {
   const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
 
   // "diag" is strictest; set to "h" if you only want width-driven YES/NO
-  const covMode = "diag"; // "h" | "v" | "diag"
-  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+const covMode = "h";
+   const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
   const covTxt = `COV(V): ±${maxField.toFixed(1)}° • REQ(${covMode.toUpperCase()}): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
   if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
