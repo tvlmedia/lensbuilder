@@ -213,3 +213,14 @@ body{
   color:#333;
 }
 #footerWarn{ color:var(--danger); font-weight:600; }
+.viewerTitle{
+  font-weight:700;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.viewerBadges{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
