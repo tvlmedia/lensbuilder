@@ -646,16 +646,127 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
 
   return { efl, bfl };
 }
+function traceRayToSurfaceIndex(ray, surfaces, wavePreset, stopAtIndexInclusive) {
+  // trace sequentially but stop after we hit surface[stopAtIndexInclusive]
+  let nBefore = 1.0;
+  const hits = []; // hit points per surface index
+  let vignetted = false;
+  let tir = false;
 
-function estimateTStopApprox(efl, surfaces) {
+  for (let i = 0; i <= stopAtIndexInclusive; i++) {
+    const s = surfaces[i];
+    const hitInfo = intersectSurface(ray, s);
+    if (!hitInfo) { vignetted = true; break; }
+
+    hits[i] = hitInfo.hit;
+
+    // clip (vignetting) counts here, because we are trying to find a ray that reaches STOP edge
+    if (hitInfo.vignetted) { vignetted = true; break; }
+
+    const nAfter = glassN(s.glass, wavePreset);
+
+    if (Math.abs(nAfter - nBefore) < 1e-9) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      nBefore = nAfter;
+      continue;
+    }
+
+    const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
+    if (!newDir) { tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
+    nBefore = nAfter;
+  }
+
+  return { hits, vignetted, tir };
+}
+
+// Estimate entrance pupil radius (2D meridional) by finding on-axis marginal ray
+// that hits the stop at y = stopAp (edge). Entrance pupil radius is approximated
+// as |y| at the FIRST physical surface hit (surface index 1).
+function estimateEntrancePupilRadius2D(surfaces, wavePreset) {
+  const stopIdx = findStopSurfaceIndex(surfaces);
+  if (stopIdx < 0) return null;
+
+  // need at least OBJ + one surface + STOP somewhere
+  if (surfaces.length < 3) return null;
+
+  const stopAp = Math.max(1e-6, Number(surfaces[stopIdx].ap || 0));
+  if (!Number.isFinite(stopAp) || stopAp <= 0) return null;
+
+  const firstIdx = 1; // first physical surface after OBJ
+  if (!surfaces[firstIdx]) return null;
+
+  const xStart = (surfaces[0]?.vx ?? 0) - 160;
+  const dir = normalize({ x: 1, y: 0 }); // on-axis (object at infinity)
+
+  // bracket search on initial height y0
+  // upper bound: something generous (front aperture * 3)
+  const apFront = Math.max(1e-3, Number(surfaces[firstIdx].ap || 10));
+  let lo = 0.0;
+  let hi = apFront * 3.0;
+
+  // helper: for a given y0, what's y at STOP?
+  function yAtStopFor(y0) {
+    const ray = { p: { x: xStart, y: y0 }, d: dir };
+    const tr = traceRayToSurfaceIndex(structuredClone(ray), surfaces, wavePreset, stopIdx);
+    if (!tr || tr.vignetted || tr.tir) return null;
+
+    const hitStop = tr.hits[stopIdx];
+    const hitFront = tr.hits[firstIdx];
+    if (!hitStop || !hitFront) return null;
+
+    return { yStop: hitStop.y, yFront: hitFront.y };
+  }
+
+  // make sure hi actually reaches beyond stop edge
+  // (increase until we either vignette or yStop surpasses stopAp)
+  let best = null;
+  for (let k = 0; k < 12; k++) {
+    const v = yAtStopFor(hi);
+    if (!v) { hi *= 0.7; continue; } // if vignetted early, reduce
+    if (Math.abs(v.yStop) >= stopAp) { best = v; break; }
+    hi *= 1.6;
+  }
+  if (!best) return null;
+
+  // binary search target: |yStop| == stopAp
+  for (let iter = 0; iter < 22; iter++) {
+    const mid = (lo + hi) * 0.5;
+    const v = yAtStopFor(mid);
+    if (!v) { hi = mid; continue; }
+
+    const ys = Math.abs(v.yStop);
+    if (ys >= stopAp) {
+      best = v;
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+
+  const ep = Math.abs(best?.yFront ?? 0);
+  if (!Number.isFinite(ep) || ep <= 1e-6) return null;
+  return ep;
+}
+
+function estimateTStopApprox(efl, surfaces, wavePreset) {
+  if (!Number.isFinite(efl) || efl <= 0) return null;
+
+  // better: use entrance pupil estimate (still approximate, but way less wrong)
+  const ep = estimateEntrancePupilRadius2D(surfaces, wavePreset);
+  if (ep && Number.isFinite(ep) && ep > 0) {
+    const T = efl / (2 * ep);
+    return Number.isFinite(T) ? T : null;
+  }
+
+  // fallback to dumb stop aperture if EP fails
   const stopIdx = findStopSurfaceIndex(surfaces);
   if (stopIdx < 0) return null;
   const stopAp = Math.max(1e-6, Number(surfaces[stopIdx].ap || 0));
-  if (!Number.isFinite(efl) || efl <= 0) return null;
-  const T = efl / (2 * stopAp);
-  return Number.isFinite(T) ? T : null;
+  const Tf = efl / (2 * stopAp);
+  return Number.isFinite(Tf) ? Tf : null;
 }
-
 // -------------------- FOV --------------------
 function rad2deg(r){ return r * 180 / Math.PI; }
 function computeFovDeg(efl, sensorW, sensorH) {
@@ -1074,8 +1185,8 @@ function renderAll() {
   const vigPct = Math.round((vCount / traces.length) * 100);
 
   const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-  const T = estimateTStopApprox(efl, lens.surfaces);
-
+const T = estimateTStopApprox(efl, lens.surfaces, wavePreset);
+   
   const fov = computeFovDeg(efl, sensorW, sensorH);
   const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
