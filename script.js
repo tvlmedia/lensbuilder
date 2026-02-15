@@ -1234,7 +1234,12 @@ on("#btnSave", "click", ()=>{
 
 on("#btnAutoFocus", "click", ()=> autoFocusSensorOffset());
 
-on("#btnLoadOmit", "click", ()=> loadLens(omit50ConceptV1()));
+on("#btnLoadOmit", "click", ()=>{
+  loadLens(omit50ConceptV1());
+  // auto-lock naar “OMIT 50 / T2.67” zodat het niet “66mm” is bij load
+  scaleLensGeometryToFocal(50);
+  setApproxTStop(2.67);
+});
 on("#btnLoadDemo", "click", ()=> loadLens(demoLensSimple()));
 on("#btnNew", "click", ()=>{
   loadLens(newBlankLens());
