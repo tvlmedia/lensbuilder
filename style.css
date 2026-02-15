@@ -64,6 +64,7 @@ body{
   cursor:pointer;
 }
 
+/* layout */
 .layout{
   height:calc(100% - 64px);
   display:grid;
@@ -72,12 +73,17 @@ body{
   padding:10px;
 }
 
+/* PANELS: make them flex columns so body can scroll */
 .panelLeft, .panelRight{
   background:var(--panel);
   border:1px solid var(--line);
   border-radius:10px;
   overflow:hidden;
   box-shadow:var(--shadow);
+
+  display:flex;
+  flex-direction:column;
+  min-height:0; /* crucial */
 }
 
 .panelHeader{
@@ -88,7 +94,13 @@ body{
 .panelTitle{ font-weight:700; }
 .panelHint{ font-size:12px; color:var(--muted); margin-top:2px; }
 
-.panelBody{ padding:10px; }
+/* ✅ LEFT SCROLL FIX: panelBody scrolls */
+.panelBody{
+  padding:10px;
+  flex:1;
+  overflow:auto;
+  min-height:0;
+}
 
 .controlsGrid{
   display:grid;
@@ -114,7 +126,7 @@ body{
   border-radius:10px;
   overflow:auto;
   background:var(--panel2);
-  max-height:calc(100vh - 365px);
+  /* no max-height hacks needed anymore */
 }
 
 .surfTable{
@@ -169,6 +181,7 @@ body{
 .statusText{ font-size:12px; color:var(--muted); }
 .statusRight{ display:flex; gap:8px; flex-wrap:wrap; }
 
+/* right viewer */
 .viewerHeader{
   padding:10px 12px;
   border-bottom:1px solid var(--line);
@@ -176,14 +189,32 @@ body{
   display:flex;
   align-items:center;
   justify-content:space-between;
+  gap:10px;
 }
-.viewerTitle{ font-weight:700; }
-.viewerMeta{ font-size:12px; color:var(--muted); display:flex; gap:8px; align-items:center; }
+.viewerTitle{
+  font-weight:700;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.viewerBadges{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.viewerMeta{
+  font-size:12px;
+  color:var(--muted);
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
 
 .viewerCanvasWrap{
   background:#ffffff;
-  height:calc(100% - 92px);
+  flex:1;
   padding:10px;
+  min-height:0;
 }
 #canvas{
   width:100%;
@@ -213,14 +244,3 @@ body{
   color:#333;
 }
 #footerWarn{ color:var(--danger); font-weight:600; }
-.viewerTitle{
-  font-weight:700;
-  display:flex;
-  align-items:center;
-  gap:10px;
-}
-.viewerBadges{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-}
