@@ -418,3 +418,130 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
   border-color: rgba(42,110,242,.55);
   background: linear-gradient(180deg, rgba(42,110,242,.42), rgba(42,110,242,.20));
 }
+
+
+
+
+
+/* ===== MODAL HEADER TYPO + BUTTONS (fix weird look) ===== */
+
+/* Header spacing + type */
+.modalHeader{
+  padding:16px 18px 12px;
+  border-bottom:1px solid rgba(255,255,255,.10);
+}
+
+.modalTitle{
+  font-size:16px;
+  line-height:1.15;
+  font-weight:850;
+  letter-spacing:.2px;
+}
+
+.modalHint{
+  margin-top:6px;
+  font-size:12px;
+  line-height:1.35;
+  color: rgba(255,255,255,.58);
+}
+
+/* Make the close button not a random white square */
+#elClose,
+.modalHeader button{
+  appearance:none;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.90);
+  width:34px;
+  height:34px;
+  border-radius:12px;
+  cursor:pointer;
+  display:grid;
+  place-items:center;
+  padding:0;
+  font-size:16px;
+  line-height:1;
+  transition: transform .08s ease, border-color .12s ease, background .12s ease;
+}
+#elClose:hover,
+.modalHeader button:hover{
+  border-color: rgba(255,255,255,.22);
+  background: rgba(255,255,255,.09);
+  transform: translateY(-1px);
+}
+#elClose:active,
+.modalHeader button:active{
+  transform: translateY(0px);
+}
+
+/* Give the modal content a consistent "field group" look */
+.modalGrid{
+  padding:16px 18px;
+  gap:14px;
+}
+.modalGrid > *{
+  padding:12px;
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,.08);
+  background: rgba(0,0,0,.14);
+}
+
+/* Inputs in modal: slightly more premium */
+.modalCard input,
+.modalCard select,
+.modalCard textarea{
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.26);
+}
+.modalCard input:focus,
+.modalCard select:focus,
+.modalCard textarea:focus{
+  border-color: rgba(42,110,242,.62);
+  box-shadow: 0 0 0 4px rgba(42,110,242,.18);
+}
+
+/* ===== INSERT BUTTON FIX =====
+   In jouw screenshot lijkt 'Insert' niet in .modalActions te zitten.
+   Dus: style #elAdd hard + zet 'm op de juiste plek. */
+#elAdd{
+  appearance:none;
+  border:1px solid rgba(42,110,242,.55);
+  background: linear-gradient(180deg, rgba(42,110,242,.42), rgba(42,110,242,.20));
+  color: rgba(255,255,255,.95);
+  padding:10px 14px;
+  border-radius:14px;
+  font-size:12px;
+  font-weight:750;
+  cursor:pointer;
+  transition: transform .08s ease, filter .12s ease, border-color .12s ease;
+}
+#elAdd:hover{ transform: translateY(-1px); filter: brightness(1.05); }
+#elAdd:active{ transform: translateY(0px); }
+
+/* If you DO have .modalActions: force it to be the action bar */
+.modalActions{
+  padding:14px 18px;
+  border-top:1px solid rgba(255,255,255,.10);
+  background: linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.18));
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+}
+
+/* If Insert isn't inside .modalActions, this makes it still sit bottom-right */
+.modalCard{
+  position:relative;
+}
+.modalCard #elAdd{
+  position:absolute;
+  right:18px;
+  bottom:16px;
+}
+
+/* Give textarea ("Glass note") correct height + avoid ugly huge box */
+#elGlassNote,
+.modalCard textarea{
+  min-height:84px;
+  max-height:180px;
+}
