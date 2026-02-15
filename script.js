@@ -425,6 +425,25 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
   return { pts, vignetted, tir, endRay: ray };
 }
 
+function getRayReferencePlane(surfaces) {
+  // pak eerste "echte" surface na OBJ (index 1 meestal)
+  // fallback: stop surface
+  const stopIdx = findStopSurfaceIndex(surfaces);
+
+  // probeer surface 1 als die bestaat en geen IMS is
+  let refIdx = 1;
+  if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") {
+    refIdx = stopIdx >= 0 ? stopIdx : 0;
+  }
+
+  const s = surfaces[refIdx] || surfaces[0];
+  return {
+    xRef: s.vx,
+    apRef: Math.max(1e-3, Number(s.ap || 10)),
+    refIdx
+  };
+}
+
 function buildRays(surfaces, fieldAngleDeg, count) {
   const n = Math.max(3, Math.min(101, count|0));
   const theta = (fieldAngleDeg * Math.PI) / 180;
@@ -432,20 +451,21 @@ function buildRays(surfaces, fieldAngleDeg, count) {
 
   const xStart = (surfaces[0]?.vx ?? 0) - 80;
 
-  const stopIdx = findStopSurfaceIndex(surfaces);
-  const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
-  const xStop = stopSurf.vx;
-  const apStop = Math.max(1e-3, stopSurf.ap ?? 10);
+  // NIEUW: reference plane = front element (ipv stop)
+  const { xRef, apRef } = getRayReferencePlane(surfaces);
 
-  const hMax = apStop * 0.98;
+  const hMax = apRef * 0.98;
   const rays = [];
 
   const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
 
   for (let k=0;k<n;k++){
     const a = (k/(n-1))*2 - 1;
-    const yAtStop = a * hMax;
-    const y0 = yAtStop - tanT * (xStop - xStart);
+    const yAtRef = a * hMax;
+
+    // start y zó dat ray op xRef precies yAtRef heeft
+    const y0 = yAtRef - tanT * (xRef - xStart);
+
     rays.push({ p:{x:xStart, y:y0}, d:dir });
   }
 
