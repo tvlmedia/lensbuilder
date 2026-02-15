@@ -1,10 +1,10 @@
-/* Meridional Raytracer (2D)
-   - Optical axis: +x
-   - Height: y
-   - Surfaces: spherical (radius R) or plane (R=0)
-   - Thickness: distance along x to next surface vertex
-   - Aperture: clear semi-diameter (|y| must be <= aperture at intersection point)
-   - Glass: simple n at chosen wavelength (approx via Abbe-ish tweak)
+/* Meridional Raytracer (2D) — TVL MVP
+   - Optical axis: +x, height: y
+   - Surfaces: spherical (R!=0) or plane (R=0)
+   - Thickness t: distance to next surface vertex (along x)
+   - Aperture ap: clear semi-diameter at surface
+   - Glass column = medium AFTER the surface (like your current model)
+   - Stop-aware ray sampling: rays are generated to fill the first STOP surface
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -26,13 +26,13 @@ const ui = {
   renderScale: $("#renderScale"),
 };
 
+let selectedIndex = 0;
+
 const GLASS_DB = {
   AIR: { nd: 1.0, Vd: 999.0 },
-  // A couple of typical catalog-like placeholders (names you can rename)
   BK7: { nd: 1.5168, Vd: 64.17 },
   F2:  { nd: 1.6200, Vd: 36.37 },
   SF10:{ nd: 1.7283, Vd: 28.41 },
-  // Your screenshot had these-style tokens; we map them to plausible nd/Vd:
   LASF35: { nd: 1.8061, Vd: 25.4 },
   LASFN31:{ nd: 1.8052, Vd: 25.3 },
   LF5:    { nd: 1.5800, Vd: 40.0 },
@@ -42,44 +42,66 @@ function glassN(glassName, preset /* d,g,c */) {
   const g = GLASS_DB[glassName] || GLASS_DB.AIR;
   if (glassName === "AIR") return 1.0;
 
-  // Super-simplified wavelength adjustment:
-  // shorter wavelength => slightly higher n, longer => slightly lower
-  // Abbe gives dispersion strength; we use Vd as a dampener.
   const base = g.nd;
   const strength = 1.0 / Math.max(10.0, g.Vd);
-  if (preset === "g") return base + 35.0 * strength;  // blue-ish
-  if (preset === "c") return base - 20.0 * strength;  // red-ish
-  return base; // d-line
+  if (preset === "g") return base + 35.0 * strength;
+  if (preset === "c") return base - 20.0 * strength;
+  return base;
 }
 
-// -------------------- Demo lens --------------------
 function demoLens() {
   return {
     name: "No name",
     surfaces: [
-      { type:"OBJ", R:0,   t:10.0,  ap:22.0, glass:"AIR", stop:false },
-      { type:"1",   R:42.0,t:10.0,  ap:22.0, glass:"LASF35", stop:false },
-      { type:"2",   R:-140.0,t:10.0,ap:21.0, glass:"AIR", stop:false },
-      { type:"3",   R:-30.0,t:10.0, ap:19.0, glass:"LASFN31", stop:false },
-      { type:"4",   R:65.0,t:10.0,  ap:14.0, glass:"AIR", stop:true  }, // stop here
-      { type:"5",   R:12.42,t:10.0, ap:8.5,  glass:"AIR", stop:false },
-      { type:"AST", R:0,   t:6.4,   ap:8.5,  glass:"AIR", stop:false },
-      { type:"7",   R:-18.93,t:10.0,ap:11.0, glass:"LF5", stop:false },
-      { type:"8",   R:59.6,t:10.0,  ap:13.0, glass:"LASFN31", stop:false },
-      { type:"9",   R:-40.49,t:10.0,ap:13.0, glass:"AIR", stop:false },
-      { type:"IMS", R:0,   t:0.0,   ap:12.0, glass:"AIR", stop:false },
+      { type:"OBJ", R:0,   t:10.0,  ap:22.0, glass:"AIR",   stop:false },
+      { type:"1",   R:42.0,t:10.0,  ap:22.0, glass:"LASF35",stop:false },
+      { type:"2",   R:-140.0,t:10.0,ap:21.0, glass:"AIR",   stop:false },
+      { type:"3",   R:-30.0,t:10.0, ap:19.0, glass:"LASFN31",stop:false },
+      { type:"4",   R:65.0,t:10.0,  ap:14.0, glass:"AIR",   stop:true  },
+      { type:"5",   R:12.42,t:10.0, ap:8.5,  glass:"AIR",   stop:false },
+      { type:"AST", R:0,   t:6.4,   ap:8.5,  glass:"AIR",   stop:false },
+      { type:"7",   R:-18.93,t:10.0,ap:11.0, glass:"LF5",   stop:false },
+      { type:"8",   R:59.6,t:10.0,  ap:13.0, glass:"LASFN31",stop:false },
+      { type:"9",   R:-40.49,t:10.0,ap:13.0, glass:"AIR",   stop:false },
+      { type:"IMS", R:0,   t:0.0,   ap:12.0, glass:"AIR",   stop:false },
     ],
   };
 }
 
 let lens = demoLens();
 
-// -------------------- UI table --------------------
+// -------------------- table + selection --------------------
+function clampSelected() {
+  selectedIndex = Math.max(0, Math.min(lens.surfaces.length - 1, selectedIndex));
+}
+
+function enforceSingleStop(changedIndex) {
+  // only one stop allowed (first match)
+  if (!lens.surfaces[changedIndex]?.stop) return;
+  lens.surfaces.forEach((s, i) => {
+    if (i !== changedIndex) s.stop = false;
+  });
+}
+
+function relabelTypes() {
+  lens.surfaces.forEach((s, i) => {
+    if (!s.type || s.type.trim() === "") s.type = String(i);
+  });
+}
+
 function buildTable() {
+  clampSelected();
   ui.tbody.innerHTML = "";
 
   lens.surfaces.forEach((s, idx) => {
     const tr = document.createElement("tr");
+    tr.classList.toggle("selected", idx === selectedIndex);
+
+    tr.addEventListener("click", (ev) => {
+      if (["INPUT","SELECT","OPTION"].includes(ev.target.tagName)) return;
+      selectedIndex = idx;
+      buildTable();
+    });
 
     tr.innerHTML = `
       <td style="width:34px; font-family:var(--mono)">${idx}</td>
@@ -112,11 +134,15 @@ function onCellChange(e) {
   const k = el.dataset.k;
   if (!Number.isFinite(i) || !k) return;
 
+  selectedIndex = i;
+
   const s = lens.surfaces[i];
   if (!s) return;
 
   if (k === "stop") {
     s.stop = el.checked;
+    enforceSingleStop(i);
+    buildTable(); // refresh checkboxes
   } else if (k === "glass") {
     s.glass = el.value;
   } else if (k === "type") {
@@ -128,59 +154,48 @@ function onCellChange(e) {
   renderAll();
 }
 
-// -------------------- Geometry + ray tracing --------------------
+// -------------------- math helpers --------------------
 function normalize(v) {
   const m = Math.hypot(v.x, v.y);
   if (m < 1e-12) return {x:0, y:0};
   return {x:v.x/m, y:v.y/m};
 }
 function dot(a,b){ return a.x*b.x + a.y*b.y; }
-function sub(a,b){ return {x:a.x-b.x, y:a.y-b.y}; }
 function add(a,b){ return {x:a.x+b.x, y:a.y+b.y}; }
 function mul(a, s){ return {x:a.x*s, y:a.y*s}; }
 
 function refract(I, N, n1, n2) {
-  // N must point into incident medium.
   I = normalize(I);
   N = normalize(N);
 
-  // Ensure N faces against I so cosi is positive
   if (dot(I, N) > 0) N = mul(N, -1);
 
   const cosi = -dot(N, I);
   const eta = n1 / n2;
   const k = 1 - eta*eta*(1 - cosi*cosi);
-  if (k < 0) return null; // TIR
+  if (k < 0) return null;
   const T = add(mul(I, eta), mul(N, (eta*cosi - Math.sqrt(k))));
   return normalize(T);
 }
 
 function intersectSurface(ray, surf) {
-  // ray: {p:{x,y}, d:{x,y}}
-  // surf: {vx, R, ap}
   const vx = surf.vx;
   const R = surf.R;
   const ap = Math.max(0, surf.ap);
 
-  // Plane
   if (Math.abs(R) < 1e-9) {
-    // x = vx
     const t = (vx - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     const hit = add(ray.p, mul(ray.d, t));
     if (Math.abs(hit.y) > ap + 1e-9) return { hit, t, vignetted:true, normal:{x:-1,y:0} };
-    // normal for a plane at x=vx: point left
     return { hit, t, vignetted:false, normal:{x:-1,y:0} };
   }
 
-  // Sphere
   const cx = vx + R;
-  const cy = 0;
   const rad = Math.abs(R);
 
-  // Solve |(p + t d) - c|^2 = rad^2
   const px = ray.p.x - cx;
-  const py = ray.p.y - cy;
+  const py = ray.p.y;
   const dx = ray.d.x;
   const dy = ray.d.y;
 
@@ -195,7 +210,6 @@ function intersectSurface(ray, surf) {
   const t1 = (-B - sdisc) / (2*A);
   const t2 = (-B + sdisc) / (2*A);
 
-  // choose smallest positive
   let t = null;
   if (t1 > 1e-9 && t2 > 1e-9) t = Math.min(t1, t2);
   else if (t1 > 1e-9) t = t1;
@@ -203,30 +217,21 @@ function intersectSurface(ray, surf) {
   else return null;
 
   const hit = add(ray.p, mul(ray.d, t));
-
-  // aperture clip at intersection height
   const vignetted = (Math.abs(hit.y) > ap + 1e-9);
-
-  // outward normal from center to point
-  const Nout = normalize({x: hit.x - cx, y: hit.y - cy});
-  // For refraction we’ll correct orientation inside refract()
+  const Nout = normalize({x: hit.x - cx, y: hit.y});
   return { hit, t, vignetted, normal: Nout };
 }
 
 function computeVertices(surfaces) {
-  // set vx for each surface (vertex x position)
   let x = 0;
   for (let i=0;i<surfaces.length;i++){
     surfaces[i].vx = x;
     x += Number(surfaces[i].t || 0);
   }
-  return x; // total length to IMS vertex + thickness chain
+  return x;
 }
 
 function traceRayThroughLens(ray, surfaces, wavePreset) {
-  // Determine n on each side from "glass" column:
-  // Convention: surface i has a "glass" entry = medium AFTER the surface.
-  // Medium BEFORE surface i is glass of previous surface, or AIR at start.
   const pts = [{ x: ray.p.x, y: ray.p.y }];
   let vignetted = false;
   let tir = false;
@@ -237,34 +242,22 @@ function traceRayThroughLens(ray, surfaces, wavePreset) {
     const s = surfaces[i];
 
     const hitInfo = intersectSurface(ray, s);
-    if (!hitInfo) {
-      // miss (ray doesn't intersect) => treat as vignette/miss
-      vignetted = true;
-      break;
-    }
+    if (!hitInfo) { vignetted = true; break; }
 
     pts.push(hitInfo.hit);
 
-    if (hitInfo.vignetted) {
-      vignetted = true;
-      break;
-    }
+    if (hitInfo.vignetted) { vignetted = true; break; }
 
     const nAfter = glassN(s.glass, wavePreset);
 
-    // If same medium, just propagate direction unchanged (still record)
     if (Math.abs(nAfter - nBefore) < 1e-9) {
-      // move ray origin to hit and continue
       ray = { p: hitInfo.hit, d: ray.d };
       nBefore = nAfter;
       continue;
     }
 
     const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-    if (!newDir) {
-      tir = true;
-      break;
-    }
+    if (!newDir) { tir = true; break; }
 
     ray = { p: hitInfo.hit, d: newDir };
     nBefore = nAfter;
@@ -274,10 +267,7 @@ function traceRayThroughLens(ray, surfaces, wavePreset) {
 }
 
 function findStopSurfaceIndex(surfaces) {
-  let idx = surfaces.findIndex(s => !!s.stop);
-  // als er meerdere aangevinkt zijn: pak de eerste
-  if (idx < 0) idx = -1;
-  return idx;
+  return surfaces.findIndex(s => !!s.stop);
 }
 
 function buildRays(surfaces, fieldAngleDeg, count) {
@@ -287,35 +277,27 @@ function buildRays(surfaces, fieldAngleDeg, count) {
 
   const xStart = (surfaces[0]?.vx ?? 0) - 30;
 
-  // Stop-aware: sample rays such that they pass through stop aperture.
   const stopIdx = findStopSurfaceIndex(surfaces);
   const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
   const xStop = stopSurf.vx;
   const apStop = Math.max(1e-3, stopSurf.ap ?? 10);
 
   const hMax = apStop * 0.98;
-
   const rays = [];
+
+  const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
+
   for (let k=0;k<n;k++){
     const a = (k/(n-1))*2 - 1;
     const yAtStop = a * hMax;
-
-    // We want ray starting at xStart with direction 'dir' to cross xStop at yAtStop.
-    // y(x) = y0 + tan(theta)*(x - xStart)  => y0 = yAtStop - tan(theta)*(xStop - xStart)
-    const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
     const y0 = yAtStop - tanT * (xStop - xStart);
-
     rays.push({ p:{x:xStart, y:y0}, d:dir });
   }
 
   return rays;
 }
 
-// Estimate EFL/BFL roughly using paraxial-ish approach on axis
 function estimateEflBfl(surfaces, wavePreset) {
-  // Two small-angle rays on-axis to estimate focal length at image plane:
-  // We shoot two rays with small heights, get where they cross axis after last surface.
-  const fieldAngleDeg = 0;
   const rays = [
     { p:{x: surfaces[0].vx - 30, y: 1.0}, d: normalize({x:1,y:0}) },
     { p:{x: surfaces[0].vx - 30, y: 2.0}, d: normalize({x:1,y:0}) },
@@ -323,8 +305,6 @@ function estimateEflBfl(surfaces, wavePreset) {
   const traces = rays.map(r => traceRayThroughLens(structuredClone(r), surfaces, wavePreset));
   if (traces.some(t=>t.vignetted||t.tir)) return { efl:null, bfl:null };
 
-  // Use the end rays (after last surface) and compute intersection with y=0 (axis)
-  // y = y0 + t*dy => t = -y0/dy. x = x0 + t*dx
   const xs = [];
   for (const tr of traces){
     const er = tr.endRay;
@@ -338,23 +318,13 @@ function estimateEflBfl(surfaces, wavePreset) {
 
   const xFocal = xs.reduce((a,b)=>a+b,0)/xs.length;
   const lastVx = surfaces[surfaces.length-1].vx;
-  const bfl = xFocal - lastVx; // back focal length from last vertex
-  // For EFL we’ll approximate EFL ~ distance from principal plane is unknown.
-  // But as a rough sanity value: treat last principal plane near last group => EFL ~ bfl
+  const bfl = xFocal - lastVx;
   const efl = bfl;
-
   return { efl, bfl };
 }
 
-// -------------------- Drawing --------------------
-let view = {
-  panX: 0,
-  panY: 0,
-  zoom: 1.0,
-  dragging: false,
-  lastX: 0,
-  lastY: 0,
-};
+// -------------------- drawing --------------------
+let view = { panX:0, panY:0, zoom:1.0, dragging:false, lastX:0, lastY:0 };
 
 function resizeCanvasToCSS() {
   const r = canvas.getBoundingClientRect();
@@ -373,7 +343,7 @@ function makeWorldTransform() {
   const r = canvas.getBoundingClientRect();
   const cx = r.width/2 + view.panX;
   const cy = r.height/2 + view.panY;
-  const base = Number(ui.renderScale.value) * 3.2; // mm->px baseline
+  const base = Number(ui.renderScale.value) * 3.2;
   const s = base * view.zoom;
   return { cx, cy, s };
 }
@@ -383,9 +353,8 @@ function drawAxes(world) {
   ctx.lineWidth = 1;
   ctx.strokeStyle = "#d0d0d0";
   ctx.beginPath();
-  // x-axis
   const p1 = worldToScreen({x:-200, y:0}, world);
-  const p2 = worldToScreen({x: 400, y:0}, world);
+  const p2 = worldToScreen({x: 600, y:0}, world);
   ctx.moveTo(p1.x, p1.y);
   ctx.lineTo(p2.x, p2.y);
   ctx.stroke();
@@ -400,7 +369,6 @@ function drawSurface(world, s) {
   const vx = s.vx;
   const ap = Math.max(0, s.ap);
 
-  // Plane
   if (Math.abs(s.R) < 1e-9) {
     const a = worldToScreen({x:vx, y:-ap}, world);
     const b = worldToScreen({x:vx, y: ap}, world);
@@ -417,7 +385,6 @@ function drawSurface(world, s) {
   const rad = Math.abs(R);
   const sign = Math.sign(R) || 1;
 
-  // sample curve by y
   const steps = 80;
   ctx.beginPath();
   for (let i=0;i<=steps;i++){
@@ -430,7 +397,6 @@ function drawSurface(world, s) {
     else ctx.lineTo(sp.x, sp.y);
   }
   ctx.stroke();
-
   ctx.restore();
 }
 
@@ -442,6 +408,7 @@ function drawRays(world, rayTraces, sensorX) {
   ctx.save();
   ctx.lineWidth = 1;
   ctx.strokeStyle = "#2a6ef2";
+
   for (const tr of rayTraces){
     if (!tr.pts || tr.pts.length < 2) continue;
     ctx.globalAlpha = tr.vignetted ? 0.15 : 0.9;
@@ -454,7 +421,6 @@ function drawRays(world, rayTraces, sensorX) {
       ctx.lineTo(p.x, p.y);
     }
 
-    // extend to sensor plane
     const last = tr.endRay;
     if (last && Number.isFinite(sensorX) && last.d && Math.abs(last.d.x) > 1e-9) {
       const t = (sensorX - last.p.x) / last.d.x;
@@ -467,6 +433,7 @@ function drawRays(world, rayTraces, sensorX) {
 
     ctx.stroke();
   }
+
   ctx.restore();
 }
 
@@ -486,7 +453,7 @@ function drawSensor(world, sensorX, ap) {
 }
 
 function drawStop(world, surfaces) {
-  const idx = surfaces.findIndex(s => !!s.stop);
+  const idx = findStopSurfaceIndex(surfaces);
   if (idx < 0) return;
   const s = surfaces[idx];
   const ap = Math.max(0, s.ap);
@@ -502,7 +469,7 @@ function drawStop(world, surfaces) {
   ctx.restore();
 }
 
-function drawTitleOverlay(world, text) {
+function drawTitleOverlay(text) {
   ctx.save();
   ctx.font = "14px " + getComputedStyle(document.documentElement).getPropertyValue("--mono");
   ctx.fillStyle = "#333";
@@ -510,26 +477,25 @@ function drawTitleOverlay(world, text) {
   ctx.restore();
 }
 
-// -------------------- Main render --------------------
+// -------------------- render --------------------
 function renderAll() {
   ui.footerWarn.textContent = "";
 
+  relabelTypes();
   computeVertices(lens.surfaces);
+  clampSelected();
 
   const fieldAngle = Number(ui.fieldAngle.value || 0);
   const rayCount = Number(ui.rayCount.value || 31);
   const wavePreset = ui.wavePreset.value;
   const sensorOffset = Number(ui.sensorOffset.value || 0);
 
-  // Determine sensor plane at last surface vertex + offset
   const last = lens.surfaces[lens.surfaces.length - 1];
   const sensorX = (last?.vx ?? 0) + sensorOffset;
 
-  // Rays
   const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
   const traces = rays.map(r => traceRayThroughLens(structuredClone(r), lens.surfaces, wavePreset));
 
-  // Metrics
   const vCount = traces.filter(t => t.vignetted).length;
   const tirCount = traces.filter(t => t.tir).length;
   const vigPct = Math.round((vCount / traces.length) * 100);
@@ -541,28 +507,25 @@ function renderAll() {
 
   if (tirCount > 0) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
-  ui.status.textContent = `Traced ${traces.length} rays @ ${wavePreset}-preset • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount}`;
+  ui.status.textContent =
+    `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount}`;
 
-  // Draw
   resizeCanvasToCSS();
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
   const world = makeWorldTransform();
-
   drawAxes(world);
   drawLens(world, lens.surfaces);
+  drawStop(world, lens.surfaces);
   drawRays(world, traces, sensorX);
 
-drawStop(world, lens.surfaces);
-   
-  // sensor ap: take last aperture as a visual height
   const sensorAp = Math.max(5, last?.ap ?? 12);
   drawSensor(world, sensorX, sensorAp);
 
-  drawTitleOverlay(world, `${lens.name} • sensorX=${sensorX.toFixed(2)}mm`);
+  drawTitleOverlay(`${lens.name} • sensorX=${sensorX.toFixed(2)}mm`);
 }
 
-// -------------------- Interactions (pan/zoom) --------------------
+// -------------------- view controls --------------------
 function bindViewControls() {
   canvas.addEventListener("mousedown", (e)=>{
     view.dragging = true;
@@ -598,30 +561,112 @@ function bindViewControls() {
   });
 }
 
-// -------------------- Buttons: add/remove/save/load --------------------
+// -------------------- edit helpers --------------------
+function isProtectedIndex(i) {
+  const t = String(lens.surfaces[i]?.type || "").toUpperCase();
+  return t === "OBJ" || t === "IMS";
+}
+
+function insertSurface(atIndex, surfaceObj) {
+  lens.surfaces.splice(atIndex, 0, surfaceObj);
+  selectedIndex = atIndex;
+  buildTable();
+  renderAll();
+}
+
+function insertAfterSelected(surfaceObj) {
+  clampSelected();
+  const at = selectedIndex + 1;
+  insertSurface(at, surfaceObj);
+}
+
+// -------------------- buttons --------------------
 $("#btnAdd").addEventListener("click", ()=>{
-  lens.surfaces.splice(lens.surfaces.length - 1, 0, {
-    type: String(lens.surfaces.length-1),
+  insertAfterSelected({
+    type: "",
     R: 0,
     t: 5.0,
     ap: 12.0,
     glass: "AIR",
     stop: false
   });
+});
+
+$("#btnAddElement").addEventListener("click", ()=>{
+  clampSelected();
+
+  // Insert AFTER selected, but never after IMS (then insert before IMS)
+  let insertAt = selectedIndex + 1;
+  if (String(lens.surfaces[selectedIndex]?.type || "").toUpperCase() === "IMS") {
+    insertAt = Math.max(0, lens.surfaces.length - 1);
+  }
+  if (insertAt >= lens.surfaces.length) insertAt = lens.surfaces.length - 1;
+
+  const glassName = "BK7";
+  const centerThickness = 6.0;
+  const airGap = 4.0;
+  const ap = 18.0;
+
+  const s1 = { type:"", R: 40.0,  t: centerThickness, ap, glass: glassName, stop:false };
+  const s2 = { type:"", R:-40.0,  t: airGap,         ap, glass: "AIR",   stop:false };
+
+  lens.surfaces.splice(insertAt, 0, s1, s2);
+  selectedIndex = insertAt;
+  buildTable();
+  renderAll();
+});
+
+$("#btnDuplicate").addEventListener("click", ()=>{
+  clampSelected();
+  const s = lens.surfaces[selectedIndex];
+  if (!s) return;
+  const copy = structuredClone(s);
+  lens.surfaces.splice(selectedIndex + 1, 0, copy);
+  selectedIndex = selectedIndex + 1;
+  buildTable();
+  renderAll();
+});
+
+$("#btnMoveUp").addEventListener("click", ()=>{
+  clampSelected();
+  if (selectedIndex <= 0) return;
+  // don't move OBJ above 0
+  if (selectedIndex === 1 && isProtectedIndex(0)) { /* ok */ }
+  const a = lens.surfaces[selectedIndex];
+  lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex-1];
+  lens.surfaces[selectedIndex-1] = a;
+  selectedIndex -= 1;
+  buildTable();
+  renderAll();
+});
+
+$("#btnMoveDown").addEventListener("click", ()=>{
+  clampSelected();
+  if (selectedIndex >= lens.surfaces.length-1) return;
+  const a = lens.surfaces[selectedIndex];
+  lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex+1];
+  lens.surfaces[selectedIndex+1] = a;
+  selectedIndex += 1;
   buildTable();
   renderAll();
 });
 
 $("#btnRemove").addEventListener("click", ()=>{
+  clampSelected();
   if (lens.surfaces.length <= 2) return;
-  // remove the one before IMS if exists
-  lens.surfaces.splice(lens.surfaces.length - 2, 1);
+  if (isProtectedIndex(selectedIndex)) {
+    ui.footerWarn.textContent = "OBJ/IMS kun je niet deleten.";
+    return;
+  }
+  lens.surfaces.splice(selectedIndex, 1);
+  selectedIndex = Math.max(0, selectedIndex - 1);
   buildTable();
   renderAll();
 });
 
 $("#btnReset").addEventListener("click", ()=>{
   lens = demoLens();
+  selectedIndex = 0;
   buildTable();
   renderAll();
 });
@@ -645,7 +690,7 @@ $("#fileLoad").addEventListener("change", async (e)=>{
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
     lens = obj;
-    // sanitize
+
     lens.name = lens.name || "No name";
     lens.surfaces = lens.surfaces.map(s => ({
       type: String(s.type ?? ""),
@@ -655,6 +700,14 @@ $("#fileLoad").addEventListener("change", async (e)=>{
       glass: String(s.glass ?? "AIR"),
       stop: Boolean(s.stop ?? false),
     }));
+
+    // enforce single stop on load
+    const firstStop = lens.surfaces.findIndex(s=>s.stop);
+    if (firstStop >= 0) {
+      lens.surfaces.forEach((s,i)=>{ if (i!==firstStop) s.stop=false; });
+    }
+
+    selectedIndex = 0;
     buildTable();
     renderAll();
   }catch(err){
@@ -664,15 +717,14 @@ $("#fileLoad").addEventListener("change", async (e)=>{
   }
 });
 
-// Re-render when controls change
+// rerender on controls
 ["fieldAngle","rayCount","wavePreset","sensorOffset","renderScale"].forEach(id=>{
   $("#"+id).addEventListener("input", renderAll);
   $("#"+id).addEventListener("change", renderAll);
 });
-
 window.addEventListener("resize", renderAll);
 
-// -------------------- Init --------------------
+// init
 buildTable();
 bindViewControls();
 renderAll();
