@@ -1144,12 +1144,12 @@ const EL_UI_IDS = {
   ap: "#elAp",
   ct: "#elCt",
   gap: "#elGap",
-  rear: "#elAir",      // <— jouw ID
+  rear: "#elAir",
   form: "#elForm",
   g1: "#elGlass1",
   g2: "#elGlass2",
-  cancel: "#elClose",  // <— gebruik close als cancel
-  insert: "#elAdd"     // <— jouw Insert knop
+  cancel: "#elClose",
+  insert: "#elAdd",
 };
 
 const elUI = {
@@ -1168,23 +1168,25 @@ const elUI = {
   insert: $(EL_UI_IDS.insert),
 };
 
+// ✅ FIX: less strict; only MUST-have fields block opening
 function modalExists() {
   return !!(elUI.modal && elUI.insert && elUI.cancel && elUI.type && elUI.mode && elUI.f && elUI.ap && elUI.ct);
 }
+
 function openElementModal() {
   if (!modalExists()) return false;
 
-  // populate selects once
-  if (elUI.g1 && !elUI.g1.dataset._filled) {
+  // populate glass selects once (optional)
+  if (elUI.g1 && elUI.g2 && !elUI.g1.dataset._filled) {
     const keys = Object.keys(GLASS_DB);
-    elUI.g1.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join("");
-    elUI.g2.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join("");
+    elUI.g1.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
+    elUI.g2.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
     elUI.g1.value = "BK7";
     elUI.g2.value = "F2";
     elUI.g1.dataset._filled = "1";
   }
 
-  // sensible defaults (alleen als select leeg is)
+  // sensible defaults (only if empty)
   if (elUI.type && !elUI.type.querySelector("option")) {
     elUI.type.innerHTML = `
       <option value="achromat">Achromat (4 surfaces)</option>
@@ -1214,21 +1216,27 @@ function openElementModal() {
     elUI.form.value = "symmetric";
   }
 
-  // keep current values if present, else set defaults
-  if (elUI.f)   elUI.f.value = Number(elUI.f.value || 50);
-  if (elUI.ap)  elUI.ap.value = Number(elUI.ap.value || 18);
-  if (elUI.ct)  elUI.ct.value = Number(elUI.ct.value || 4);
+  // keep current values if present, else defaults
+  if (elUI.f) elUI.f.value = Number(elUI.f.value || 50);
+  if (elUI.ap) elUI.ap.value = Number(elUI.ap.value || 18);
+  if (elUI.ct) elUI.ct.value = Number(elUI.ct.value || 4);
   if (elUI.gap) elUI.gap.value = Number(elUI.gap.value || 0);
   if (elUI.rear) elUI.rear.value = Number(elUI.rear.value || 4);
 
-  // OPEN (jouw HTML gebruikt .hidden)
+  // OPEN
   elUI.modal.classList.remove("hidden");
+  // extra robustness if CSS uses opacity/pointer-events
+  elUI.modal.style.pointerEvents = "auto";
+  elUI.modal.style.opacity = "1";
+
   return true;
 }
 
 function closeElementModal() {
-  if (!modalExists()) return;
+  if (!elUI.modal) return;
   elUI.modal.classList.add("hidden");
+  elUI.modal.style.pointerEvents = "";
+  elUI.modal.style.opacity = "";
 }
 
 // thin-lens helper (rough): for symmetric biconvex singlet
@@ -1239,7 +1247,7 @@ function radiusForSymmetricSinglet(f, n) {
 }
 
 function buildSingletAuto({ f, ap, ct, rearAir, form, glass1 }) {
-  const n = (GLASS_DB[glass1]?.nd ?? 1.5168);
+  const n = GLASS_DB[glass1]?.nd ?? 1.5168;
   const Rbase = radiusForSymmetricSinglet(f, n);
 
   let R1 = +Rbase;
@@ -1250,7 +1258,6 @@ function buildSingletAuto({ f, ap, ct, rearAir, form, glass1 }) {
   if (form === "plano_front")  { R1 = 0.0; R2 = -Rbase * 1.6; }
   if (form === "plano_rear")   { R1 = +Rbase * 1.6; R2 = 0.0; }
 
-  // surfaces: [front -> glass], [back -> AIR gap to next]
   return [
     { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
     { type: "", R: R2, t: rearAir, ap, glass: "AIR", stop: false },
@@ -1258,61 +1265,41 @@ function buildSingletAuto({ f, ap, ct, rearAir, form, glass1 }) {
 }
 
 function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
-  // super rough split: crown provides most positive power, flint provides negative power
-  // goal: net positive focal length ≈ f
-  const n1 = (GLASS_DB[glass1]?.nd ?? 1.5168);
-  const n2 = (GLASS_DB[glass2]?.nd ?? 1.62);
+  const n1 = GLASS_DB[glass1]?.nd ?? 1.5168;
+  const n2 = GLASS_DB[glass2]?.nd ?? 1.62;
 
-  const f1 = f * 0.75; // positive group stronger
-  const f2 = -f * 2.2; // negative group weaker magnitude
+  const f1 = f * 0.75;
+  const f2 = -f * 2.2;
 
   const R1b = radiusForSymmetricSinglet(f1, n1);
   const R2b = radiusForSymmetricSinglet(Math.abs(f2), n2);
 
-  // default “symmetric-ish” achromat shapes (4 surfaces)
   let R1 = +R1b;
-  let R2 = -R1b * 0.9;     // cement-ish interface curvature
-  let R3 = -R2b * 0.9;     // flint front (negative meniscus feel)
+  let R2 = -R1b * 0.9;
+  let R3 = -R2b * 0.9;
   let R4 = +R2b;
 
-  if (form === "strong_front") {
-    R1 *= 0.8; R2 *= 1.1; R3 *= 1.0; R4 *= 1.1;
-  }
-  if (form === "strong_rear") {
-    R1 *= 1.1; R2 *= 1.0; R3 *= 1.1; R4 *= 0.8;
-  }
-  if (form === "plano_front") {
-    R1 = 0.0; R2 = -R1b * 1.4; R3 = -R2b * 0.9; R4 = +R2b * 1.1;
-  }
-  if (form === "plano_rear") {
-    R4 = 0.0; R1 = +R1b * 1.1; R2 = -R1b * 0.9; R3 = -R2b * 1.4;
-  }
+  if (form === "strong_front") { R1 *= 0.8; R2 *= 1.1; R3 *= 1.0; R4 *= 1.1; }
+  if (form === "strong_rear")  { R1 *= 1.1; R2 *= 1.0; R3 *= 1.1; R4 *= 0.8; }
+  if (form === "plano_front")  { R1 = 0.0; R2 = -R1b * 1.4; R3 = -R2b * 0.9; R4 = +R2b * 1.1; }
+  if (form === "plano_rear")   { R4 = 0.0; R1 = +R1b * 1.1; R2 = -R1b * 0.9; R3 = -R2b * 1.4; }
 
-  // distribute thickness: ct for element 1, ct for element 2
   const t1 = ct;
   const t2 = ct;
 
-  // surfaces in OSLO-ish format: medium AFTER surface
-  // S1: glass1, thickness t1
-  // S2: glass2 (cement interface), thickness t2 (into flint)
-  // S3: AIR (back of flint), thickness rearAir (gap to next)
-  // If you want a real air-gap doublet: we use "gap" between element 1 and 2 by inserting an AIR surface.
   if (gap > 1e-9) {
-    // Element 1 (glass1): S1, S2 -> AIR gap
-    // Element 2 (glass2): S3, S4 -> AIR rear
     return [
       { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
-      { type: "", R: R2, t: gap, ap, glass: "AIR", stop: false },        // back of element 1 to air gap
-      { type: "", R: R3, t: t2, ap, glass: glass2, stop: false },         // front of element 2 into glass2
-      { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },     // back to air
+      { type: "", R: R2, t: gap, ap, glass: "AIR", stop: false },
+      { type: "", R: R3, t: t2, ap, glass: glass2, stop: false },
+      { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
     ];
   }
 
-  // cemented (no air gap): S2 medium after = glass2
   return [
     { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
-    { type: "", R: R2, t: t2, ap, glass: glass2, stop: false },          // cement interface, now in glass2
-    { type: "", R: R3, t: 0.01, ap, glass: glass2, stop: false },         // tiny spacer for stability (keeps geometry sane)
+    { type: "", R: R2, t: t2, ap, glass: glass2, stop: false },
+    { type: "", R: R3, t: 0.01, ap, glass: glass2, stop: false },
     { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
   ];
 }
@@ -1333,22 +1320,53 @@ function readElementModalValues() {
 
 function insertElementFromModal() {
   const v = readElementModalValues();
+
   const f = Math.max(1e-3, v.f);
   const ap = Math.max(0.1, v.ap);
   const ct = Math.max(0.01, v.ct);
   const gap = Math.max(0.0, v.gap);
   const rearAir = Math.max(0.0, v.rearAir);
 
+  // ✅ FIX: support STOP and AIRGAP choices
+  if (v.type === "stop") {
+    const insertAt = safeInsertAtAfterSelected();
+    lens.surfaces.splice(insertAt, 0, { type: "STOP", R: 0.0, t: rearAir, ap, glass: "AIR", stop: true });
+    selectedIndex = insertAt;
+    enforceSingleStop(insertAt);
+    buildTable();
+    applySensorToIMS();
+    renderAll();
+    return;
+  }
+
+  if (v.type === "airgap") {
+    const insertAt = safeInsertAtAfterSelected();
+    lens.surfaces.splice(insertAt, 0, { type: "", R: 0.0, t: rearAir, ap, glass: "AIR", stop: false });
+    selectedIndex = insertAt;
+    buildTable();
+    applySensorToIMS();
+    renderAll();
+    return;
+  }
+
   let chunk = null;
 
   if (v.mode !== "auto") {
-    // for now: only auto supported (keeps UI simple)
-    chunk = null;
+    chunk = null; // only auto supported
   } else {
     if (v.type.includes("achromat")) {
-      chunk = buildAchromatAuto({ f, ap, ct, gap, rearAir, form: v.form, glass1: v.glass1, glass2: v.glass2 });
+      chunk = buildAchromatAuto({
+        f, ap, ct, gap, rearAir,
+        form: v.form,
+        glass1: v.glass1,
+        glass2: v.glass2,
+      });
     } else {
-      chunk = buildSingletAuto({ f, ap, ct, rearAir, form: v.form, glass1: v.glass1 });
+      chunk = buildSingletAuto({
+        f, ap, ct, rearAir,
+        form: v.form,
+        glass1: v.glass1,
+      });
     }
   }
 
@@ -1357,7 +1375,6 @@ function insertElementFromModal() {
     return;
   }
 
-  // never insert after IMS
   const insertAt = safeInsertAtAfterSelected();
   lens.surfaces.splice(insertAt, 0, ...chunk);
   selectedIndex = insertAt;
@@ -1367,7 +1384,7 @@ function insertElementFromModal() {
   renderAll();
 }
 
-// modal bindings (if modal exists)
+// modal bindings
 if (modalExists()) {
   elUI.cancel.addEventListener("click", (e) => { e.preventDefault(); closeElementModal(); });
   elUI.insert.addEventListener("click", (e) => {
@@ -1377,17 +1394,17 @@ if (modalExists()) {
   });
 
   // click outside to close
- elUI.modal.addEventListener("mousedown", (e) => {
-  if (e.target === elUI.modal) closeElementModal();
-});
+  elUI.modal.addEventListener("mousedown", (e) => {
+    if (e.target === elUI.modal) closeElementModal();
+  });
 
   // ESC to close
- window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && elUI.modal && !elUI.modal.classList.contains("hidden")) {
-    closeElementModal();
-  }
-});
-   }
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && elUI.modal && !elUI.modal.classList.contains("hidden")) {
+      closeElementModal();
+    }
+  });
+}
 
 // -------------------- buttons --------------------
 on("#btnAdd", "click", () => {
@@ -1395,22 +1412,18 @@ on("#btnAdd", "click", () => {
 });
 
 on("#btnAddElement", "click", () => {
-  // Preferred: proper modal UI
   if (openElementModal()) return;
-
-  // Fallback: if modal isn't present, at least don't break the tool
   if (ui.footerWarn) ui.footerWarn.textContent = "Add Element modal not found in HTML (expected #elementModal etc).";
 });
 
-// FIX 1: New/Clear must NOT auto-add an element.
-// (Only OBJ + STOP + IMS)
+// New/Clear: ONLY OBJ + STOP + IMS
 function newClear() {
   lens = sanitizeLens({
     name: "New Lens (blank)",
     surfaces: [
-      { type:"OBJ",  R:0.0, t:0.0,  ap:60.0, glass:"AIR", stop:false },
-      { type:"STOP", R:0.0, t:20.0, ap:8.0,  glass:"AIR", stop:true  },
-      { type:"IMS",  R:0.0, t:0.0,  ap:12.77,glass:"AIR", stop:false },
+      { type: "OBJ",  R: 0.0, t: 0.0,  ap: 60.0,  glass: "AIR", stop: false },
+      { type: "STOP", R: 0.0, t: 20.0, ap: 8.0,   glass: "AIR", stop: true  },
+      { type: "IMS",  R: 0.0, t: 0.0,  ap: 12.77, glass: "AIR", stop: false },
     ],
   });
 
