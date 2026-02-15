@@ -36,6 +36,9 @@ const GLASS_DB = {
   LASF35: { nd: 1.8061, Vd: 25.4 },
   LASFN31:{ nd: 1.8052, Vd: 25.3 },
   LF5:    { nd: 1.5800, Vd: 40.0 },
+   "N-SF5":   { nd: 1.67271,  Vd: 32.25 },
+"S-LAM3":  { nd: 1.717004, Vd: 47.927969 },
+"S-BAH11": { nd: 1.666718, Vd: 48.325247 },
 };
 
 function glassN(glassName, preset /* d,g,c */) {
