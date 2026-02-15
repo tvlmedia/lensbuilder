@@ -5,11 +5,11 @@
    - Aperture ap: clear semi-diameter at surface
    - Glass column = medium AFTER the surface (OSLO-ish)
    - Stop-aware ray sampling: rays fill the STOP surface aperture
-   - Built-in OMIT 50 preset
    - Sensor presets (Mini S35, Mini LF, Venice FF, Fuji GFX)
    - IMS.ap auto = sensorHeight/2 (meridional)
-   - EFL/BFL via paraxial method (much closer to OSLO)
-   - T-stop shown as a sanity approx: T ≈ EFL / (2*StopAp)  (entrance pupil not modeled)
+   - EFL/BFL via paraxial method (closer to OSLO)
+   - T-stop sanity approx: T ≈ EFL / (2*StopAp) (entrance pupil not modeled)
+   - FOV computed from EFL + sensor W/H (rectilinear)
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -25,11 +25,15 @@ const ui = {
   bfl: $("#badgeBfl"),
   tstop: $("#badgeT"),
   vig: $("#badgeVig"),
+  fov: $("#badgeFov"),
+
   footerWarn: $("#footerWarn"),
   metaInfo: $("#metaInfo"),
-     eflTop: $("#badgeEflTop"),
+
+  eflTop: $("#badgeEflTop"),
   bflTop: $("#badgeBflTop"),
   tstopTop: $("#badgeTTop"),
+  fovTop: $("#badgeFovTop"),
 
   sensorPreset: $("#sensorPreset"),
   sensorW: $("#sensorW"),
@@ -145,7 +149,6 @@ function omit50ConceptV1() {
       { type:"10",   R: 110.3493,  t: 3.98204,  ap: 11.47705, glass:"S-BAH11", stop:false },
       { type:"11",   R: -44.30639, t: 30.6477,  ap: 11.47705, glass:"AIR",     stop:false },
 
-      // IMS aperture auto = sensorHeight/2
       { type:"IMS",  R: 0.0,       t: 0.0,      ap: 12.77,    glass:"AIR",     stop:false },
     ],
   };
@@ -261,9 +264,7 @@ function onCellChange(e) {
     s[k] = Number(el.value);
   }
 
-  // keep IMS tied to sensor unless user intentionally edits sensorH
   applySensorToIMS();
-
   renderAll();
 }
 
@@ -461,8 +462,6 @@ function lastPhysicalVertexX(surfaces) {
 }
 
 function estimateEflBflParaxial(surfaces, wavePreset) {
-  // Paraxial: f = -y / u_out  where u_out = dy/dx after last surface (in air)
-  // BFL: axis crossing location relative to last physical vertex.
   const lastVx = lastPhysicalVertexX(surfaces);
   const xStart = (surfaces[0]?.vx ?? 0) - 160;
 
@@ -485,7 +484,6 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
     const f = -y0 / uOut;
     if (Number.isFinite(f)) fVals.push(f);
 
-    // axis crossing
     if (Math.abs(dy) > 1e-12) {
       const t = -er.p.y / dy;
       const xCross = er.p.x + t * dx;
@@ -506,13 +504,24 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
 }
 
 function estimateTStopApprox(efl, surfaces) {
-  // sanity only: entrance pupil not modeled, so we use STOP semi-aperture as proxy
   const stopIdx = findStopSurfaceIndex(surfaces);
   if (stopIdx < 0) return null;
   const stopAp = Math.max(1e-6, Number(surfaces[stopIdx].ap || 0));
   if (!Number.isFinite(efl) || efl <= 0) return null;
   const T = efl / (2 * stopAp);
   return Number.isFinite(T) ? T : null;
+}
+
+// -------------------- FOV --------------------
+function rad2deg(r){ return r * 180 / Math.PI; }
+
+function computeFovDeg(efl, sensorW, sensorH) {
+  if (!Number.isFinite(efl) || efl <= 0) return null;
+  const diag = Math.hypot(sensorW, sensorH);
+  const hfov = 2 * Math.atan(sensorW / (2 * efl));
+  const vfov = 2 * Math.atan(sensorH / (2 * efl));
+  const dfov = 2 * Math.atan(diag    / (2 * efl));
+  return { hfov: rad2deg(hfov), vfov: rad2deg(vfov), dfov: rad2deg(dfov) };
 }
 
 // -------------------- autofocus --------------------
@@ -714,11 +723,11 @@ function drawStop(world, surfaces) {
 }
 
 function drawSensor(world, sensorX, halfH) {
-  // sensor plane
   ctx.save();
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#111";
   ctx.setLineDash([6,6]);
+
   const a = worldToScreen({x:sensorX, y:-halfH}, world);
   const b = worldToScreen({x:sensorX, y: halfH}, world);
   ctx.beginPath();
@@ -726,7 +735,7 @@ function drawSensor(world, sensorX, halfH) {
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
 
-  // gate markers (horizontal lines)
+  // gate markers
   ctx.setLineDash([3,6]);
   ctx.lineWidth = 1.25;
   const l1 = worldToScreen({x:sensorX-2.5, y: halfH}, world);
@@ -755,9 +764,7 @@ function drawTitleOverlay(text) {
 function renderAll() {
   ui.footerWarn.textContent = "";
 
-  // keep IMS aperture tied to sensor height
   applySensorToIMS();
-
   computeVertices(lens.surfaces);
   clampSelected();
 
@@ -779,17 +786,21 @@ function renderAll() {
   const vigPct = Math.round((vCount / traces.length) * 100);
 
   const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
+  const T = estimateTStopApprox(efl, lens.surfaces);
+
+  const fov = computeFovDeg(efl, sensorW, sensorH);
+  const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+
   ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-
-  const T = estimateTStopApprox(efl, lens.surfaces);
   ui.tstop.textContent = `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
-
-   if (ui.eflTop) ui.eflTop.textContent = ui.efl.textContent;
-if (ui.bflTop) ui.bflTop.textContent = ui.bfl.textContent;
-if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop.textContent;
-
   ui.vig.textContent = `Vignette: ${vigPct}%`;
+  ui.fov.textContent = fovTxt;
+
+  if (ui.eflTop) ui.eflTop.textContent = ui.efl.textContent;
+  if (ui.bflTop) ui.bflTop.textContent = ui.bfl.textContent;
+  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop.textContent;
+  if (ui.fovTop) ui.fovTop.textContent = fovTxt;
 
   if (tirCount > 0) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
@@ -809,10 +820,10 @@ if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop.textContent;
   drawSensor(world, sensorX, halfH);
 
   const eflTxt = (efl == null) ? "—" : efl.toFixed(2) + "mm";
-const bflTxt = (bfl == null) ? "—" : bfl.toFixed(2) + "mm";
-const tTxt   = (T == null) ? "—" : ("T" + T.toFixed(2));
+  const bflTxt = (bfl == null) ? "—" : bfl.toFixed(2) + "mm";
+  const tTxt   = (T == null) ? "—" : ("T" + T.toFixed(2));
 
-drawTitleOverlay(`${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`);
+  drawTitleOverlay(`${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`);
 }
 
 // -------------------- view controls --------------------
@@ -973,7 +984,6 @@ on("#fileLoad", "change", async (e)=>{
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
-    // optional: glass_note import
     if (obj.glass_note && typeof obj.glass_note === "object") {
       for (const [k, v] of Object.entries(obj.glass_note)) {
         const nd = Number(v?.nd);
@@ -1008,7 +1018,6 @@ window.addEventListener("resize", renderAll);
 
 // -------------------- init --------------------
 function init() {
-  // set default preset (Mini LF)
   applyPreset(ui.sensorPreset.value);
   loadLens(lens);
   buildTable();
