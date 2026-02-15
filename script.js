@@ -913,19 +913,21 @@ function drawElementsClosed(world, surfaces) {
     let apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
 
     // extra: prevent “snoeppapiertje” (self-intersection)
-    const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
-    minNonOverlap = Math.min(minNonOverlap, nonOverlap);
-    apRegion = Math.min(apRegion, nonOverlap);
+   if (Math.abs(sA.R) > 1e-9 && Math.abs(sB.R) > 1e-9) {
+  const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
+  minNonOverlap = Math.min(minNonOverlap, nonOverlap);
+  apRegion = Math.min(apRegion, nonOverlap);
+}
 
     drawElementBody(world, sA, sB, apRegion);
   }
 
   // one global warning (optional)
-  if (minNonOverlap < 0.5 && ui.footerWarn) {
-    ui.footerWarn.textContent =
-      "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
-  }
+  if (Number.isFinite(minNonOverlap) && minNonOverlap < 0.5 && ui.footerWarn) {
+  ui.footerWarn.textContent =
+    "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
 }
+
 function drawSurface(world, s) {
   ctx.save();
   ctx.lineWidth = 1.25;
