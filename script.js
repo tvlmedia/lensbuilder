@@ -1167,7 +1167,7 @@ function newClear() {
   renderAll();
 }
 
-on("#btnNewClear", "click", newClear);
+on("#btnNew", "click", newClear);
 
 on("#btnDuplicate", "click", ()=>{
   clampSelected();
