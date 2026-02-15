@@ -561,10 +561,8 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
 function getRayReferencePlane(surfaces) {
   const stopIdx = findStopSurfaceIndex(surfaces);
 
-  let refIdx = 1;
-  if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") {
-    refIdx = stopIdx >= 0 ? stopIdx : 0;
-  }
+  let refIdx = stopIdx >= 0 ? stopIdx : 1;
+  if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") refIdx = 0;
 
   const s = surfaces[refIdx] || surfaces[0];
   return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10)), refIdx };
@@ -829,6 +827,28 @@ function surfaceXatY(s, y) {
   return cx - sign * Math.sqrt(inside);
 }
 
+function maxNonOverlappingSemiDiameter(sFront, sBack, minCT = 0.10) {
+  const apGuess = Math.max(0.01, Math.min(Number(sFront.ap || 0), Number(sBack.ap || 0)));
+
+  function gapAt(y) {
+    const xf = surfaceXatY(sFront, y);
+    const xb = surfaceXatY(sBack, y);
+    if (xf == null || xb == null) return -1e9;
+    return xb - xf;
+  }
+
+  if (gapAt(0) < minCT) return 0.01;
+  if (gapAt(apGuess) >= minCT) return apGuess;
+
+  let lo = 0, hi = apGuess;
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) * 0.5;
+    if (gapAt(mid) >= minCT) lo = mid;
+    else hi = mid;
+  }
+  return Math.max(0.01, lo);
+}
+
 function buildSurfacePolyline(s, ap, steps = 90) {
   const pts = [];
   for (let i = 0; i <= steps; i++) {
@@ -886,12 +906,18 @@ function drawElementsClosed(world, surfaces) {
     // Drawing safety clamp: never draw beyond spherical existence
     const limA = maxApForSurface(sA);
     const limB = maxApForSurface(sB);
-    const apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
-     
-    drawElementBody(world, sA, sB, apRegion);
+    let apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
+
+// extra: prevent “snoeppapiertje” (self-intersection)
+const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
+apRegion = Math.min(apRegion, nonOverlap);
+
+drawElementBody(world, sA, sB, apRegion);
   }
 }
-
+if (nonOverlap < 0.5 && ui.footerWarn) {
+  ui.footerWarn.textContent = "WARNING: element surfaces overlap (negative thickness) — increase t or reduce curvature/aperture.";
+}
 function drawSurface(world, s) {
   ctx.save();
   ctx.lineWidth = 1.25;
