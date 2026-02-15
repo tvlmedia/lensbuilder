@@ -435,28 +435,30 @@ function findStopSurfaceIndex(surfaces) {
 
 
 // -------------------- physical sanity clamps --------------------
-const AP_MAX_GLOBAL = 30; // mm semi-diameter (60mm dia). Cap for planes/STOP too.
-const AP_SAFETY = 0.90;
+// Doel: geometrisch onmogelijke apertures voorkomen (sphere bestaat alleen tot |y|<=|R|)
+// en planes/STOP niet oneindig laten worden.
+
+const AP_SAFETY = 0.90;     // blijf weg van de rand van de sphere (sqrt instabiliteit)
+const AP_MAX_PLANE = 30.0;  // mm semi-diameter cap voor plane/STOP
+const AP_MIN = 0.01;
 
 function maxApForSurface(s) {
   const R = Number(s?.R || 0);
 
-  // plane (incl STOP): cap it too
-  if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_GLOBAL;
+  // plane / STOP / AST etc
+  if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
 
-  // spherical: geometric existence
-  return Math.max(0.01, Math.abs(R) * AP_SAFETY);
-}
-  const R = Number(s?.R || 0);
-  if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return Infinity; // plane has no spherical limit
-  return Math.max(0.01, Math.abs(R) * AP_SAFETY);
+  // spherical: max semi-diameter is |R|
+  return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
 }
 
 function clampSurfaceAp(s) {
   if (!s) return;
   const lim = maxApForSurface(s);
   if (!Number.isFinite(lim)) return;
-  s.ap = Math.max(0.01, Math.min(Number(s.ap || 0), lim));
+
+  const ap = Number(s.ap || 0);
+  s.ap = Math.max(AP_MIN, Math.min(ap, lim));
 }
 
 function clampAllApertures(surfaces) {
@@ -1037,6 +1039,7 @@ function renderAll() {
   const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
   applySensorToIMS();
+   clampAllApertures(lens.surfaces);
 
   const ims = lens.surfaces[lens.surfaces.length - 1];
   const sensorX = (ims?.vx ?? 0) + sensorOffset;
@@ -1593,6 +1596,7 @@ on("#fileLoad", "change", async (e) => {
 
 on("#sensorPreset", "change", (e) => {
   applyPreset(e.target.value);
+  clampAllApertures(lens.surfaces);
   renderAll();
 });
 
