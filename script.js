@@ -60,6 +60,20 @@ const SENSOR_PRESETS = {
   "Fuji GFX (MF)":           { w: 43.80, h: 32.90 },
 };
 
+function populateSensorPresetsSelect() {
+  if (!ui.sensorPreset) return;
+
+  const current = ui.sensorPreset.value;
+  const keys = Object.keys(SENSOR_PRESETS);
+
+  ui.sensorPreset.innerHTML = keys
+    .map(k => `<option value="${k}">${k}</option>`)
+    .join("");
+
+  // restore selection if possible, else default
+  ui.sensorPreset.value = SENSOR_PRESETS[current] ? current : (keys[0] || "");
+}
+
 function getSensorWH() {
   const w = Number(ui.sensorW?.value || 36.7);
   const h = Number(ui.sensorH?.value || 25.54);
@@ -1221,6 +1235,14 @@ window.addEventListener("resize", renderAll);
 
 // -------------------- init --------------------
 function init() {
+  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
+  loadLens(lens);
+  buildTable();
+  bindViewControls();
+  renderAll();
+}
+function init() {
+  populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
   loadLens(lens);
   buildTable();
