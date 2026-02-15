@@ -4,12 +4,12 @@
    - Thickness t: distance to next surface vertex (along x)
    - Aperture ap: clear semi-diameter at surface
    - Glass column = medium AFTER the surface (OSLO-ish)
-   - Stop-aware ray sampling: rays fill the STOP surface aperture
-   - Sensor presets (Mini S35, Mini LF, Venice FF, Fuji GFX)
-   - IMS.ap auto = sensorHeight/2 (meridional)
+   - Rays sampled at a reference plane (front surface by default) so you see edge behavior
+   - Stop-aware: STOP is still meaningful for T-approx and chief ray definition
    - EFL/BFL via paraxial method (closer to OSLO)
    - T-stop sanity approx: T ≈ EFL / (2*StopAp) (entrance pupil not modeled)
    - FOV computed from EFL + sensor W/H (rectilinear)
+   - Coverage test (MERIDIONAL ONLY): max field angle before chief ray misses sensor half-height or vignettes
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -298,13 +298,16 @@ function intersectSurface(ray, surf) {
   const R = surf.R;
   const ap = Math.max(0, surf.ap);
 
-  // plane
+  // plane at x=vx
   if (Math.abs(R) < 1e-9) {
     const t = (vx - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     const hit = add(ray.p, mul(ray.d, t));
-    if (Math.abs(hit.y) > ap + 1e-9) return { hit, t, vignetted:true, normal:{x:-1,y:0} };
-    return { hit, t, vignetted:false, normal:{x:-1,y:0} };
+    const vignetted = (Math.abs(hit.y) > ap + 1e-9);
+
+    // plane normal: point to -x (arbitrary but consistent)
+    const normal = {x:-1, y:0};
+    return { hit, t, vignetted, normal };
   }
 
   // sphere
@@ -425,12 +428,11 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
   return { pts, vignetted, tir, endRay: ray };
 }
 
+// -------------------- ray sampling --------------------
 function getRayReferencePlane(surfaces) {
-  // pak eerste "echte" surface na OBJ (index 1 meestal)
-  // fallback: stop surface
+  // prefer first real surface after OBJ; fallback to stop
   const stopIdx = findStopSurfaceIndex(surfaces);
 
-  // probeer surface 1 als die bestaat en geen IMS is
   let refIdx = 1;
   if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") {
     refIdx = stopIdx >= 0 ? stopIdx : 0;
@@ -445,13 +447,13 @@ function getRayReferencePlane(surfaces) {
 }
 
 function buildRays(surfaces, fieldAngleDeg, count) {
-  const n = Math.max(3, Math.min(101, count|0));
+  const n = Math.max(5, Math.min(101, count|0)); // min 5 so edges always exist
   const theta = (fieldAngleDeg * Math.PI) / 180;
   const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
 
   const xStart = (surfaces[0]?.vx ?? 0) - 80;
 
-  // NIEUW: reference plane = front element (ipv stop)
+  // sample at front reference plane so you see edge behavior in glass
   const { xRef, apRef } = getRayReferencePlane(surfaces);
 
   const hMax = apRef * 0.98;
@@ -459,13 +461,27 @@ function buildRays(surfaces, fieldAngleDeg, count) {
 
   const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
 
-  for (let k=0;k<n;k++){
-    const a = (k/(n-1))*2 - 1;
+  // ensure edge rays are included
+  const sample = [];
+  sample.push(-1);
+  sample.push(-0.75);
+  sample.push(-0.5);
+
+  // fill middle evenly
+  const midCount = Math.max(0, n - 6);
+  for (let k=0;k<midCount;k++){
+    const a = (k/(midCount-1 || 1))*1.0 - 0.5; // -0.5..+0.5
+    sample.push(a);
+  }
+
+  sample.push(0.5);
+  sample.push(0.75);
+  sample.push(1);
+
+  for (let k=0;k<sample.length;k++){
+    const a = sample[k];
     const yAtRef = a * hMax;
-
-    // start y zó dat ray op xRef precies yAtRef heeft
     const y0 = yAtRef - tanT * (xRef - xStart);
-
     rays.push({ p:{x:xStart, y:y0}, d:dir });
   }
 
@@ -484,22 +500,30 @@ function buildChiefRay(surfaces, fieldAngleDeg){
 
   const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
 
-  // chief ray: door het midden van de stop => yAtStop = 0
+  // chief ray: through center of STOP (yAtStop=0)
   const y0 = 0 - tanT * (xStop - xStart);
 
   return { p:{x:xStart, y:y0}, d:dir };
 }
 
+// Coverage (MERIDIONAL): max field where chief ray still lands within sensor half-height and does not vignette/tir
+function rayHitYAtX(endRay, x) {
+  if (!endRay?.d || Math.abs(endRay.d.x) < 1e-9) return null;
+  const t = (x - endRay.p.x) / endRay.d.x;
+  if (!Number.isFinite(t)) return null;
+  return endRay.p.y + t * endRay.d.y;
+}
+
 function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH){
-  // zoek max field waarbij chief ray nog sensor bereikt zonder vignette
-  let lo = 0, hi = 60; // 60° is al absurd hoog; prima als bracket
+  let lo = 0, hi = 80; // generous bracket
   let best = 0;
 
-  for (let iter=0; iter<18; iter++){
+  for (let iter=0; iter<20; iter++){
     const mid = (lo + hi) * 0.5;
     const ray = buildChiefRay(surfaces, mid);
     const tr = traceRayThroughLens(structuredClone(ray), surfaces, wavePreset);
-    if (!tr || tr.vignetted || tr.tir) { hi = mid; continue; }
+
+    if (!tr || tr.vignetted || tr.tir || !tr.endRay) { hi = mid; continue; }
 
     const y = rayHitYAtX(tr.endRay, sensorX);
     if (y == null) { hi = mid; continue; }
@@ -511,9 +535,8 @@ function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH){
       hi = mid;
     }
   }
-  return best; // degrees to just reach sensor edge (ish)
+  return best;
 }
-
 
 // -------------------- EFL/BFL (paraxial) --------------------
 function lastPhysicalVertexX(surfaces) {
@@ -588,13 +611,6 @@ function computeFovDeg(efl, sensorW, sensorH) {
 }
 
 // -------------------- autofocus --------------------
-function rayHitYAtX(endRay, x) {
-  if (!endRay?.d || Math.abs(endRay.d.x) < 1e-9) return null;
-  const t = (x - endRay.p.x) / endRay.d.x;
-  if (!Number.isFinite(t)) return null;
-  return endRay.p.y + t * endRay.d.y;
-}
-
 function spotRmsAtSensorX(traces, sensorX) {
   const ys = [];
   for (const tr of traces) {
@@ -854,6 +870,10 @@ function renderAll() {
   const fov = computeFovDeg(efl, sensorW, sensorH);
   const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
+  // ✅ MERIDIONAL coverage: max field before chief ray misses sensor half-height
+  const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
+  const covTxt = `COV(V): ±${maxField.toFixed(1)}°`;
+
   ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
   ui.tstop.textContent = `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
@@ -868,7 +888,7 @@ function renderAll() {
   if (tirCount > 0) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
   ui.status.textContent =
-    `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount}`;
+    `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
 
   if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
@@ -886,7 +906,7 @@ function renderAll() {
   const bflTxt = (bfl == null) ? "—" : bfl.toFixed(2) + "mm";
   const tTxt   = (T == null) ? "—" : ("T" + T.toFixed(2));
 
-  drawTitleOverlay(`${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`);
+  drawTitleOverlay(`${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`);
 }
 
 // -------------------- view controls --------------------
@@ -1031,13 +1051,8 @@ on("#btnSave", "click", ()=>{
 
 on("#btnAutoFocus", "click", ()=> autoFocusSensorOffset());
 
-on("#btnLoadOmit", "click", ()=>{
-  loadLens(omit50ConceptV1());
-});
-
-on("#btnLoadDemo", "click", ()=>{
-  loadLens(demoLensSimple());
-});
+on("#btnLoadOmit", "click", ()=> loadLens(omit50ConceptV1()));
+on("#btnLoadDemo", "click", ()=> loadLens(demoLensSimple()));
 
 on("#fileLoad", "change", async (e)=>{
   const file = e.target.files?.[0];
