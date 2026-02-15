@@ -273,20 +273,41 @@ function traceRayThroughLens(ray, surfaces, wavePreset) {
   return { pts, vignetted, tir, endRay: ray };
 }
 
+function findStopSurfaceIndex(surfaces) {
+  let idx = surfaces.findIndex(s => !!s.stop);
+  // als er meerdere aangevinkt zijn: pak de eerste
+  if (idx < 0) idx = -1;
+  return idx;
+}
+
 function buildRays(surfaces, fieldAngleDeg, count) {
-  const firstAp = Math.max(1e-3, surfaces[0]?.ap ?? 10);
-  const hMax = firstAp * 0.98;
   const n = Math.max(3, Math.min(101, count|0));
   const theta = (fieldAngleDeg * Math.PI) / 180;
+  const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
+
+  const xStart = (surfaces[0]?.vx ?? 0) - 30;
+
+  // Stop-aware: sample rays such that they pass through stop aperture.
+  const stopIdx = findStopSurfaceIndex(surfaces);
+  const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
+  const xStop = stopSurf.vx;
+  const apStop = Math.max(1e-3, stopSurf.ap ?? 10);
+
+  const hMax = apStop * 0.98;
 
   const rays = [];
   for (let k=0;k<n;k++){
     const a = (k/(n-1))*2 - 1;
-    const y0 = a * hMax;
-    const x0 = surfaces[0].vx - 30; // start left of first surface
-    const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
-    rays.push({ p:{x:x0,y:y0}, d:dir });
+    const yAtStop = a * hMax;
+
+    // We want ray starting at xStart with direction 'dir' to cross xStop at yAtStop.
+    // y(x) = y0 + tan(theta)*(x - xStart)  => y0 = yAtStop - tan(theta)*(xStop - xStart)
+    const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
+    const y0 = yAtStop - tanT * (xStop - xStart);
+
+    rays.push({ p:{x:xStart, y:y0}, d:dir });
   }
+
   return rays;
 }
 
@@ -464,6 +485,23 @@ function drawSensor(world, sensorX, ap) {
   ctx.restore();
 }
 
+function drawStop(world, surfaces) {
+  const idx = surfaces.findIndex(s => !!s.stop);
+  if (idx < 0) return;
+  const s = surfaces[idx];
+  const ap = Math.max(0, s.ap);
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#b23b3b";
+  const a = worldToScreen({x:s.vx, y:-ap}, world);
+  const b = worldToScreen({x:s.vx, y: ap}, world);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawTitleOverlay(world, text) {
   ctx.save();
   ctx.font = "14px " + getComputedStyle(document.documentElement).getPropertyValue("--mono");
@@ -515,6 +553,8 @@ function renderAll() {
   drawLens(world, lens.surfaces);
   drawRays(world, traces, sensorX);
 
+drawStop(world, lens.surfaces);
+   
   // sensor ap: take last aperture as a visual height
   const sensorAp = Math.max(5, last?.ap ?? 12);
   drawSensor(world, sensorX, sensorAp);
