@@ -1144,12 +1144,12 @@ const EL_UI_IDS = {
   ap: "#elAp",
   ct: "#elCt",
   gap: "#elGap",
-  rear: "#elRearAir",
+  rear: "#elAir",      // <— jouw ID
   form: "#elForm",
   g1: "#elGlass1",
   g2: "#elGlass2",
-  cancel: "#elCancel",
-  insert: "#elInsert",
+  cancel: "#elClose",  // <— gebruik close als cancel
+  insert: "#elAdd"     // <— jouw Insert knop
 };
 
 const elUI = {
@@ -1174,6 +1174,9 @@ function modalExists() {
 
 function openElementModal() {
   if (!modalExists()) return false;
+  elUI.modal.classList.remove("hidden");
+  return true;
+}
 
   // populate selects once
   if (elUI.g1 && !elUI.g1.dataset._filled) {
@@ -1226,7 +1229,7 @@ function openElementModal() {
 
 function closeElementModal() {
   if (!modalExists()) return;
-  elUI.modal.classList.remove("open");
+  elUI.modal.classList.add("hidden");
 }
 
 // thin-lens helper (rough): for symmetric biconvex singlet
@@ -1375,15 +1378,16 @@ if (modalExists()) {
   });
 
   // click outside to close
-  elUI.modal.addEventListener("mousedown", (e) => {
-    if (e.target === elUI.modal) closeElementModal();
-  });
+ elUI.modal.addEventListener("mousedown", (e) => {
+  if (e.target === elUI.modal) closeElementModal();
+});
 
   // ESC to close
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && elUI.modal.classList.contains("open")) closeElementModal();
-  });
-}
+ window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && elUI.modal && !elUI.modal.classList.contains("hidden")) {
+    closeElementModal();
+  }
+});
 
 // -------------------- buttons --------------------
 on("#btnAdd", "click", () => {
