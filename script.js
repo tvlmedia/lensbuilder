@@ -102,6 +102,41 @@ const GLASS_DB = {
   CZJ_6: { nd: 1.6229, Vd: 60.0 }
 };
 
+// -------------------- glass meta (UI hints only) --------------------
+// NOTE: These are *not* used in the physics. Purely for the Add Element modal.
+const GLASS_META = {
+  AIR: { cost:"—", avail:"—", note:"No glass." },
+  BK7:   { cost:"LOW",  avail:"HIGH", note:"Workhorse crown." },
+  "N-BK7":{ cost:"LOW", avail:"HIGH", note:"Same family as BK7." },
+  BAK4:  { cost:"LOW",  avail:"HIGH", note:"Higher index crown-ish." },
+  F2:    { cost:"LOW",  avail:"HIGH", note:"Classic flint." },
+  "N-F2":{ cost:"LOW",  avail:"HIGH", note:"Same family as F2." },
+  SF5:   { cost:"MED",  avail:"HIGH", note:"Good negative glass." },
+  "N-SF5":{ cost:"MED", avail:"HIGH", note:"Popular negative family." },
+  SF10:  { cost:"MED",  avail:"HIGH", note:"More bend, more dispersion." },
+  "N-SF10":{ cost:"MED",avail:"HIGH", note:"Same family as SF10." },
+
+  "N-SK16":  { cost:"MED",  avail:"MED", note:"Crown-ish balancing." },
+  "N-LAK22": { cost:"MED",  avail:"MED", note:"Lanthanum-ish family." },
+  LF5:       { cost:"MED",  avail:"MED", note:"Generic mid glass." },
+
+  LASF35:    { cost:"HIGH", avail:"LOW", note:"High index / low Abbe." },
+  LASFN31:   { cost:"HIGH", avail:"LOW", note:"High index." },
+  "N-LASF35":{ cost:"HIGH", avail:"LOW", note:"Same family." },
+  "N-SF66":  { cost:"HIGH", avail:"LOW", note:"Very high index." },
+};
+
+function glassLabel(name){
+  const m = GLASS_META[name];
+  if (!m) return name;
+  return `${name}  •  ${(m.cost ?? "?")}/${(m.avail ?? "?")}`;
+}
+
+function glassOptionsHTML(selected){
+  const keys = Object.keys(GLASS_DB).sort((a,b)=>a.localeCompare(b));
+  return keys.map(name => `<option value="${name}" ${name===selected?"selected":""}>${glassLabel(name)}</option>`).join("");
+}
+
 function glassN(glassName, preset /* d,g,c */) {
   const g = GLASS_DB[glassName] || GLASS_DB.AIR;
   if (glassName === "AIR") return 1.0;
@@ -165,8 +200,47 @@ function omit50ConceptV1() {
   };
 }
 
+// -------------------- Blank lens (always includes an iris / stop) --------------------
+function newBlankLens() {
+  // Minimal start that always traces: OBJ -> STOP -> IMS
+  // Keep STOP as a plane at the origin, with a small but reasonable clear semi-diameter.
+  // Use some air thickness so rays actually propagate.
+  return {
+    name: "New lens (blank)",
+    surfaces: [
+      { type:"OBJ",  R:0.0, t:0.0,  ap:60.0,  glass:"AIR", stop:false },
+      { type:"STOP", R:0.0, t:25.0, ap:10.0,  glass:"AIR", stop:true  },
+      { type:"IMS",  R:0.0, t:0.0,  ap:12.77, glass:"AIR", stop:false },
+    ],
+  };
+}
+
 // -------------------- lens state --------------------
 let lens = sanitizeLens(omit50ConceptV1());
+
+// -------------------- NEW LENS (blank scaffold) --------------------
+function makeBlankLens(name = "New lens (blank)") {
+  // Default scaffold: OBJ -> STOP (iris) -> IMS
+  // NOTE: This is a *builder* scaffold, not an optical design.
+  const { halfH } = getSensorWH();
+  return sanitizeLens({
+    name,
+    notes: [
+      "Blank scaffold: OBJ + STOP + IMS.",
+      "Use +Element to generate groups, then tweak radii/spacing.",
+    ],
+    surfaces: [
+      { type: "OBJ",  R: 0.0, t: 20.0, ap: 80.0,  glass: "AIR", stop: false },
+      { type: "STOP", R: 0.0, t: 40.0, ap: 12.0,  glass: "AIR", stop: true  },
+      { type: "IMS",  R: 0.0, t: 0.0,  ap: halfH, glass: "AIR", stop: false },
+    ],
+  });
+}
+
+function newLensClear(keepName = false) {
+  const nm = keepName ? (lens?.name || "New lens") : "New lens (blank)";
+  loadLens(makeBlankLens(nm));
+}
 
 // -------------------- sanitize/load --------------------
 function sanitizeLens(obj) {
@@ -1082,32 +1156,342 @@ function insertAfterSelected(surfaceObj) {
   insertSurface(at, surfaceObj);
 }
 
+// -------------------- Element generator modal --------------------
+let _elementModal = null;
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+function suggestAchromatGlasses() {
+  // pragmatic defaults available in GLASS_DB
+  const crown = GLASS_DB["BK7"] ? "BK7" : "S-LAM3";
+  const flint = GLASS_DB["F2"]  ? "F2"  : (GLASS_DB["N-SF5"] ? "N-SF5" : "SF10");
+  return { crown, flint };
+}
+
+function thinLensPowerFromGlass(n, R1, R2) {
+  // φ ≈ (n-1)(1/R1 - 1/R2)  (thin lens, in air)
+  const eps = 1e-9;
+  return (n - 1) * ((1 / (Math.abs(R1) < eps ? eps : R1)) - (1 / (Math.abs(R2) < eps ? eps : R2)));
+}
+
+function solveSymmetricRadiusesForF(n, f, bend = 1.0) {
+  // A very usable heuristic:
+  // choose symmetric magnitudes, optionally bent toward front/back.
+  // For symmetric biconvex: R1 = +R, R2 = -R, gives φ = 2(n-1)/R  => R = 2(n-1) f
+  // bend>1 => stronger front surface, weaker back.
+  const R = 2 * (n - 1) * f;
+  const b = clamp(bend, 0.6, 1.8);
+  const R1 = +R / b;
+  const R2 = -R * b;
+  return { R1, R2 };
+}
+
+function buildSinglet({ f, ap, tCenter, rearAir, glass1, form }) {
+  const n = glassN(glass1, "d");
+  const bend = (form === "meniscus_pos") ? 1.4 : (form === "meniscus_neg") ? 0.8 : 1.0;
+  const { R1, R2 } = solveSymmetricRadiusesForF(n, f, bend);
+  // surfaces in OSLO-ish format: medium AFTER surface
+  return [
+    { type: "", R: R1,  t: tCenter, ap, glass: glass1, stop: false },
+    { type: "", R: R2,  t: rearAir, ap, glass: "AIR", stop: false },
+  ];
+}
+
+function buildAchromatAirSpaced({ f, ap, t1, t2, gap, rearAir, glass1, glass2, form }) {
+  // Air-spaced 4-surface achromat-ish group.
+  // We split power between crown/flint using Abbe numbers (very rough but sane).
+  const g1 = GLASS_DB[glass1] || GLASS_DB.AIR;
+  const g2 = GLASS_DB[glass2] || GLASS_DB.AIR;
+  const V1 = Math.max(10, Number(g1.Vd || 50));
+  const V2 = Math.max(10, Number(g2.Vd || 30));
+  const n1 = glassN(glass1, "d");
+  const n2 = glassN(glass2, "d");
+
+  // Classic achromat condition (approx): φ1/V1 + φ2/V2 ≈ 0
+  // Total φ = 1/f. Solve: φ1 = (V1/(V1-V2)) * (1/f), φ2 = -(V2/(V1-V2))*(1/f)
+  const phi = 1 / Math.max(1e-6, f);
+  const denom = (V1 - V2) || 1;
+  const phi1 = (V1 / denom) * phi;
+  const phi2 = -(V2 / denom) * phi;
+
+  // Convert each φ to a symmetric lens with chosen bend.
+  const bend = (form === "symmetric") ? 1.0 : (form === "bent") ? 1.35 : 1.0;
+  // For symmetric thin lens: φ = 2(n-1)/R => R = 2(n-1)/φ
+  const R1mag = 2 * (n1 - 1) / Math.max(1e-9, phi1);
+  const R2mag = 2 * (n2 - 1) / Math.max(1e-9, phi2);
+  // Keep signs sensible: crown usually positive, flint negative.
+  const crown = [
+    { type: "", R: +Math.abs(R1mag) / bend, t: t1, ap, glass: glass1, stop: false },
+    { type: "", R: -Math.abs(R1mag) * bend, t: gap, ap, glass: "AIR", stop: false },
+  ];
+  const flint = [
+    { type: "", R: -Math.abs(R2mag) / bend, t: t2, ap, glass: glass2, stop: false },
+    { type: "", R: +Math.abs(R2mag) * bend, t: rearAir, ap, glass: "AIR", stop: false },
+  ];
+  return crown.concat(flint);
+}
+
+function openAddElementModal() {
+  if (_elementModal) {
+    _elementModal.classList.add("open");
+    _elementModal.querySelector(".em-type")?.focus();
+    return;
+  }
+
+  const { crown, flint } = suggestAchromatGlasses();
+
+  const wrap = document.createElement("div");
+  wrap.id = "tvlElementModal";
+  wrap.innerHTML = `
+    <div class="em-backdrop" data-em-close="1"></div>
+    <div class="em-panel" role="dialog" aria-modal="true" aria-label="Add Element">
+      <div class="em-header">
+        <div>
+          <div class="em-title">Add Element</div>
+          <div class="em-sub">Auto (singlet/achromat) of Custom surfaces. Stop = aparte insert.</div>
+        </div>
+        <button class="em-x" data-em-close="1" aria-label="Close">×</button>
+      </div>
+
+      <div class="em-grid">
+        <label class="em-lbl">Type
+          <select class="em-in em-type">
+            <option value="achromat4">Achromat (4 surfaces)</option>
+            <option value="singlet">Singlet (2 surfaces)</option>
+          </select>
+        </label>
+
+        <label class="em-lbl">Mode
+          <select class="em-in em-mode">
+            <option value="auto">Auto</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+
+        <label class="em-lbl">Element f (mm)
+          <input class="em-in em-f" type="number" step="0.1" value="50" />
+        </label>
+
+        <label class="em-lbl">Clear ap (semi-diam, mm)
+          <input class="em-in em-ap" type="number" step="0.1" value="18" />
+        </label>
+
+        <label class="em-lbl">Center thickness (mm)
+          <input class="em-in em-tc" type="number" step="0.1" value="4" />
+        </label>
+
+        <label class="em-lbl">Internal gap (mm)
+          <input class="em-in em-gap" type="number" step="0.1" value="0" />
+        </label>
+
+        <label class="em-lbl">Rear air to next (mm)
+          <input class="em-in em-rear" type="number" step="0.1" value="4" />
+        </label>
+
+        <label class="em-lbl">Form
+          <select class="em-in em-form">
+            <option value="symmetric">Symmetric</option>
+            <option value="bent">Bent</option>
+            <option value="meniscus_pos">Meniscus +</option>
+            <option value="meniscus_neg">Meniscus -</option>
+          </select>
+        </label>
+
+        <label class="em-lbl">Glass 1
+          <select class="em-in em-g1">
+            ${Object.keys(GLASS_DB).map(n => `<option value="${n}" ${n===crown?"selected":""}>${n}</option>`).join("")}
+          </select>
+        </label>
+
+        <label class="em-lbl">Glass 2
+          <select class="em-in em-g2">
+            ${Object.keys(GLASS_DB).map(n => `<option value="${n}" ${n===flint?"selected":""}>${n}</option>`).join("")}
+          </select>
+        </label>
+
+        <div class="em-note">
+          <div class="em-note-title">Glass note</div>
+          <div class="em-note-body">
+            UI guidance only. Real pricing depends on supplier, diameter, tolerance, coatings, MOQ.<br>
+            • AIR: cost=— • avail=— • No glass.<br>
+            • Choose crown+flint for achromat-ish behaviour.
+          </div>
+        </div>
+      </div>
+
+      <div class="em-footer">
+        <button class="em-btn" data-em-close="1">Cancel</button>
+        <button class="em-btn em-primary" data-em-insert="1">Insert</button>
+      </div>
+    </div>
+  `;
+
+  const style = document.createElement("style");
+  style.textContent = `
+    #tvlElementModal{position:fixed; inset:0; z-index:9999; display:none; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;}
+    #tvlElementModal.open{display:block;}
+    #tvlElementModal .em-backdrop{position:absolute; inset:0; background: rgba(0,0,0,.35);}
+    #tvlElementModal .em-panel{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+      width:min(860px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
+      background: rgba(18,18,18,.96); color:#f2f2f2; border:1px solid rgba(255,255,255,.10);
+      border-radius: 14px; box-shadow: 0 12px 50px rgba(0,0,0,.45);
+      overflow:hidden;}
+    #tvlElementModal .em-header{display:flex; align-items:flex-start; justify-content:space-between;
+      padding:16px 18px; border-bottom:1px solid rgba(255,255,255,.08);}
+    #tvlElementModal .em-title{font-weight:700; font-size:16px; line-height:1.2;}
+    #tvlElementModal .em-sub{opacity:.75; font-size:12px; margin-top:3px;}
+    #tvlElementModal .em-x{background:transparent; color:#fff; border:0; font-size:22px; line-height:1; cursor:pointer; opacity:.85;}
+    #tvlElementModal .em-x:hover{opacity:1;}
+    #tvlElementModal .em-grid{display:grid; grid-template-columns: 1fr 1fr; gap:12px 14px; padding:16px 18px; overflow:auto; max-height: calc(100vh - 160px);}
+    #tvlElementModal .em-lbl{display:flex; flex-direction:column; gap:6px; font-size:12px; opacity:.92;}
+    #tvlElementModal .em-in{height:34px; border-radius:10px; border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06); color:#fff; padding:0 10px; outline:none;}
+    #tvlElementModal .em-in:focus{border-color: rgba(120,170,255,.75); box-shadow: 0 0 0 3px rgba(80,140,255,.18);}
+    #tvlElementModal .em-note{grid-column: 1 / -1; border:1px solid rgba(255,255,255,.10);
+      border-radius:12px; padding:12px 12px; background: rgba(255,255,255,.04);}
+    #tvlElementModal .em-note-title{font-weight:700; font-size:12px; margin-bottom:6px; opacity:.95;}
+    #tvlElementModal .em-note-body{font-size:12px; opacity:.80; line-height:1.35;}
+    #tvlElementModal .em-footer{display:flex; justify-content:flex-end; gap:10px; padding:14px 18px; border-top:1px solid rgba(255,255,255,.08);}
+    #tvlElementModal .em-btn{height:34px; padding:0 14px; border-radius:10px; border:1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06); color:#fff; cursor:pointer;}
+    #tvlElementModal .em-btn:hover{background: rgba(255,255,255,.10);}
+    #tvlElementModal .em-primary{border-color: rgba(120,170,255,.55); background: rgba(80,140,255,.28);}
+    #tvlElementModal .em-primary:hover{background: rgba(80,140,255,.40);}
+  `;
+
+  document.head.appendChild(style);
+  document.body.appendChild(wrap);
+  _elementModal = wrap;
+
+  const close = () => wrap.classList.remove("open");
+  wrap.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t && t.dataset && t.dataset.emClose) close();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (!wrap.classList.contains("open")) return;
+    if (e.key === "Escape") close();
+  });
+
+  const typeEl = wrap.querySelector(".em-type");
+  const modeEl = wrap.querySelector(".em-mode");
+  const fEl    = wrap.querySelector(".em-f");
+  const apEl   = wrap.querySelector(".em-ap");
+  const tcEl   = wrap.querySelector(".em-tc");
+  const gapEl  = wrap.querySelector(".em-gap");
+  const rearEl = wrap.querySelector(".em-rear");
+  const formEl = wrap.querySelector(".em-form");
+  const g1El   = wrap.querySelector(".em-g1");
+  const g2El   = wrap.querySelector(".em-g2");
+
+  function syncVisibility() {
+    const type = typeEl.value;
+    const isAch = type === "achromat4";
+    // for singlet: gap and glass2 are less relevant (but we keep them visible)
+    gapEl.disabled = !isAch;
+    g2El.disabled  = !isAch;
+  }
+  typeEl.addEventListener("change", syncVisibility);
+  syncVisibility();
+
+  wrap.querySelector("[data-em-insert]").addEventListener("click", () => {
+    const type = typeEl.value;
+    const mode = modeEl.value;
+
+    const f = Math.max(1, Number(fEl.value || 50));
+    const ap = Math.max(0.5, Number(apEl.value || 18));
+    const tc = Math.max(0.1, Number(tcEl.value || 4));
+    const gap = Math.max(0, Number(gapEl.value || 0));
+    const rear = Math.max(0, Number(rearEl.value || 4));
+    const form = formEl.value;
+    const glass1 = g1El.value || "BK7";
+    const glass2 = g2El.value || "F2";
+
+    // Determine insertion index (always before IMS)
+    clampSelected();
+    let insertAt = selectedIndex + 1;
+    const imsIdx = lens.surfaces.findIndex(s => String(s?.type || "").toUpperCase() === "IMS");
+    if (imsIdx >= 0) insertAt = Math.min(insertAt, imsIdx);
+    if (String(lens.surfaces[selectedIndex]?.type || "").toUpperCase() === "IMS") {
+      insertAt = Math.max(0, imsIdx);
+    }
+
+    let group = [];
+
+    if (type === "singlet") {
+      group = buildSinglet({ f, ap, tCenter: tc, rearAir: rear, glass1, form });
+    } else {
+      // achromat (4 surfaces)
+      const t1 = tc;
+      const t2 = tc;
+      const gapUse = (mode === "custom") ? gap : Math.max(0.15, gap);
+      group = buildAchromatAirSpaced({ f, ap, t1, t2, gap: gapUse, rearAir: rear, glass1, glass2, form });
+    }
+
+    // label surfaces automatically (helps scanning the table)
+    const baseLabel = (type === "singlet") ? "E" : "A";
+    group = group.map((s, k) => ({ ...s, type: s.type && s.type.trim() ? s.type : `${baseLabel}${k+1}` }));
+
+    lens.surfaces.splice(insertAt, 0, ...group);
+    selectedIndex = insertAt;
+    buildTable();
+    renderAll();
+    close();
+  });
+
+  wrap.classList.add("open");
+  wrap.querySelector(".em-type")?.focus();
+}
+
 // -------------------- buttons --------------------
+// New/Clear + New Lens buttons (supports multiple id names so your old white UI works)
+[
+  "#btnNewClear",
+  "#btnNew",
+  "#btnClear",
+  "#btnNewLensClear",
+  "#btnNewClearLens",
+].forEach(sel => on(sel, "click", () => newLensClear(false)));
+
+[
+  "#btnNewLens",
+  "#btnNewLensPrompt",
+].forEach(sel => on(sel, "click", () => {
+  const nm = prompt("New lens name", "New lens (blank)") || "New lens (blank)";
+  loadLens(makeBlankLens(nm));
+}));
+
 on("#btnAdd", "click", ()=>{
   insertAfterSelected({ type:"", R:0, t:5.0, ap:12.0, glass:"AIR", stop:false });
 });
 
 on("#btnAddElement", "click", ()=>{
-  clampSelected();
+  // Default: open the generator modal (like the dark UI screenshot).
+  // SHIFT+click = quick legacy insert (2 surfaces).
+  if (window.event && window.event.shiftKey) {
+    clampSelected();
+    let insertAt = selectedIndex + 1;
+    if (String(lens.surfaces[selectedIndex]?.type || "").toUpperCase() === "IMS") {
+      insertAt = Math.max(0, lens.surfaces.length - 1);
+    }
+    if (insertAt >= lens.surfaces.length) insertAt = lens.surfaces.length - 1;
 
-  let insertAt = selectedIndex + 1;
-  if (String(lens.surfaces[selectedIndex]?.type || "").toUpperCase() === "IMS") {
-    insertAt = Math.max(0, lens.surfaces.length - 1);
+    const glassName = "BK7";
+    const centerThickness = 6.0;
+    const airGap = 4.0;
+    const ap = 18.0;
+
+    const s1 = { type:"", R: 40.0, t: centerThickness, ap, glass: glassName, stop:false };
+    const s2 = { type:"", R:-40.0, t: airGap,         ap, glass: "AIR",   stop:false };
+
+    lens.surfaces.splice(insertAt, 0, s1, s2);
+    selectedIndex = insertAt;
+    buildTable();
+    renderAll();
+    return;
   }
-  if (insertAt >= lens.surfaces.length) insertAt = lens.surfaces.length - 1;
 
-  const glassName = "BK7";
-  const centerThickness = 6.0;
-  const airGap = 4.0;
-  const ap = 18.0;
-
-  const s1 = { type:"", R: 40.0, t: centerThickness, ap, glass: glassName, stop:false };
-  const s2 = { type:"", R:-40.0, t: airGap,         ap, glass: "AIR",   stop:false };
-
-  lens.surfaces.splice(insertAt, 0, s1, s2);
-  selectedIndex = insertAt;
-  buildTable();
-  renderAll();
+  openAddElementModal();
 });
 
 on("#btnDuplicate", "click", ()=>{
