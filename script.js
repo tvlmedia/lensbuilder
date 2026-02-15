@@ -5,7 +5,10 @@
    - Aperture ap: clear semi-diameter at surface
    - Glass column = medium AFTER the surface (OSLO-ish)
    - Stop-aware ray sampling: rays fill the first STOP surface
-   - Includes: built-in OMlT 50mm T2 concept preset (no upload needed)
+   - Built-in OMIT 50mm concept preset (no upload needed)
+   - Sensor presets: Alexa Mini (S35), Fuji GFX, Alexa Mini LF, Sony VENICE
+   - Focal length: shows EFL/BFL sanity (paraxial axis crossing)
+   - T-stop: shows **approx** T ≈ EFL / (2 * stop semi-diameter) (no pupil imaging / no transmission)
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -23,8 +26,13 @@ const ui = {
   status: $("#statusText"),
   efl: $("#badgeEfl"),
   bfl: $("#badgeBfl"),
+  tnum: $("#badgeT"),
   vig: $("#badgeVig"),
   footerWarn: $("#footerWarn"),
+
+  sensorPreset: $("#sensorPreset"),
+  sensorW: $("#sensorW"),
+  sensorH: $("#sensorH"),
 
   fieldAngle: $("#fieldAngle"),
   rayCount: $("#rayCount"),
@@ -34,6 +42,37 @@ const ui = {
 };
 
 let selectedIndex = 0;
+
+// -------------------- sensor presets --------------------
+const SENSOR_PRESETS = {
+  // Values in mm (active image area)
+  ALEXA_MINI:    { name: "ARRI Alexa Mini (S35)",  w: 28.25, h: 18.17 },
+  ALEXA_MINI_LF: { name: "ARRI Alexa Mini LF",     w: 36.70, h: 25.54 },
+  SONY_VENICE:   { name: "Sony VENICE (FF)",       w: 36.2,  h: 24.1  },
+  FUJI_GFX:      { name: "Fujifilm GFX (MF)",      w: 43.8,  h: 32.9  },
+  CUSTOM:        { name: "Custom",                 w: 28.25, h: 18.17 }
+};
+
+function getSensor() {
+  const w = Number(ui.sensorW.value || 0);
+  const h = Number(ui.sensorH.value || 0);
+  return {
+    w: Number.isFinite(w) && w > 0 ? w : 28.25,
+    h: Number.isFinite(h) && h > 0 ? h : 18.17
+  };
+}
+
+function applySensorPreset(key) {
+  const p = SENSOR_PRESETS[key] || SENSOR_PRESETS.ALEXA_MINI;
+  ui.sensorW.value = p.w.toFixed(2);
+  ui.sensorH.value = p.h.toFixed(2);
+
+  const isCustom = key === "CUSTOM";
+  ui.sensorW.disabled = !isCustom;
+  ui.sensorH.disabled = !isCustom;
+
+  renderAll();
+}
 
 // -------------------- glass db --------------------
 const GLASS_DB = {
@@ -48,7 +87,7 @@ const GLASS_DB = {
   "S-LAM3":  { nd: 1.717004, Vd: 47.927969 },
   "S-BAH11": { nd: 1.666718, Vd: 48.325247 },
 
-  // ✅ added for Zeiss patent JSON
+  // Optional placeholders from earlier patent JSON naming
   glass_I:   { nd: 1.6129, Vd: 50.0 },
   glass_II:  { nd: 1.6112, Vd: 50.0 },
   glass_III: { nd: 1.5163, Vd: 60.0 },
@@ -70,30 +109,30 @@ function glassN(glassName, preset /* d,g,c */) {
 // -------------------- built-in lenses --------------------
 function demoLensSimple() {
   return {
-    name: "No name",
+    name: "Demo lens (toy)",
     surfaces: [
-      { type:"OBJ", R:0,      t:10.0,  ap:22.0, glass:"AIR",     stop:false },
-      { type:"1",   R:42.0,   t:10.0,  ap:22.0, glass:"LASF35",  stop:false },
-      { type:"2",   R:-140.0, t:10.0,  ap:21.0, glass:"AIR",     stop:false },
-      { type:"3",   R:-30.0,  t:10.0,  ap:19.0, glass:"LASFN31", stop:false },
-      { type:"STOP",R:0.0,    t:10.0,  ap:14.0, glass:"AIR",     stop:true  },
-      { type:"5",   R:12.42,  t:10.0,  ap:8.5,  glass:"AIR",     stop:false },
-      { type:"AST", R:0.0,    t:6.4,   ap:8.5,  glass:"AIR",     stop:false },
-      { type:"7",   R:-18.93, t:10.0,  ap:11.0, glass:"LF5",     stop:false },
-      { type:"8",   R:59.6,   t:10.0,  ap:13.0, glass:"LASFN31", stop:false },
-      { type:"9",   R:-40.49, t:10.0,  ap:13.0, glass:"AIR",     stop:false },
-      { type:"IMS", R:0.0,    t:0.0,   ap:12.0, glass:"AIR",     stop:false },
+      { type:"OBJ",  R:0,      t:10.0,  ap:22.0, glass:"AIR",     stop:false },
+      { type:"1",    R:42.0,   t:10.0,  ap:22.0, glass:"LASF35",  stop:false },
+      { type:"2",    R:-140.0, t:10.0,  ap:21.0, glass:"AIR",     stop:false },
+      { type:"3",    R:-30.0,  t:10.0,  ap:19.0, glass:"LASFN31", stop:false },
+      { type:"STOP", R:0.0,    t:10.0,  ap:14.0, glass:"AIR",     stop:true  },
+      { type:"5",    R:12.42,  t:10.0,  ap:8.5,  glass:"AIR",     stop:false },
+      { type:"AST",  R:0.0,    t:6.4,   ap:8.5,  glass:"AIR",     stop:false },
+      { type:"7",    R:-18.93, t:10.0,  ap:11.0, glass:"LF5",     stop:false },
+      { type:"8",    R:59.6,   t:10.0,  ap:13.0, glass:"LASFN31", stop:false },
+      { type:"9",    R:-40.49, t:10.0,  ap:13.0, glass:"AIR",     stop:false },
+      { type:"IMS",  R:0.0,    t:0.0,   ap:12.0, glass:"AIR",     stop:false },
     ],
   };
 }
 
-// Embedded from your uploaded omit_50mm_concept_v1_scaled_double_gauss.json
+// Built-in OMIT 50mm concept v1 (scaled Double-Gauss base)
 function omit50ConceptV1() {
   return {
-    name: "OMIT 50mm T2 (concept v1 — scaled Double-Gauss base)",
+    name: "OMIT 50mm (concept v1 — scaled Double-Gauss base)",
     notes: [
-      "Scaled from COMSOL/Lautebacher&Brendel Double-Gauss 100.2mm f/1.7 by k≈0.499.",
-      "Geometric sanity/spacing/stop baseline for 2D meridional tracer; not optimized."
+      "Scaled from a Double-Gauss baseline; geometric sanity/spacing/stop baseline only.",
+      "2D meridional tracer: no aspheres, no full optimization, no coatings/transmission model."
     ],
     surfaces: [
       { type:"OBJ",  R: 0.0,       t: 0.0,      ap: 60.0,     glass:"AIR",     stop:false },
@@ -120,8 +159,7 @@ function omit50ConceptV1() {
   };
 }
 
-// Choose which one is your default on load:
-let lens = omit50ConceptV1(); // <- default preset (no more uploads)
+let lens = sanitizeLens(omit50ConceptV1()); // default preset
 
 // -------------------- sanitize/load --------------------
 function sanitizeLens(obj) {
@@ -146,7 +184,7 @@ function sanitizeLens(obj) {
     safe.surfaces.forEach((s, i) => { if (i !== firstStop) s.stop = false; });
   }
 
-  // ensure type labels not empty
+  // fill types
   safe.surfaces.forEach((s, i) => { if (!s.type || !s.type.trim()) s.type = String(i); });
 
   return safe;
@@ -260,7 +298,7 @@ function refract(I, N, n1, n2) {
   const cosi = -dot(N, I);
   const eta = n1 / n2;
   const k = 1 - eta*eta*(1 - cosi*cosi);
-  if (k < 0) return null;
+  if (k < 0) return null; // TIR
   const T = add(mul(I, eta), mul(N, (eta*cosi - Math.sqrt(k))));
   return normalize(T);
 }
@@ -275,8 +313,8 @@ function intersectSurface(ray, surf) {
     const t = (vx - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     const hit = add(ray.p, mul(ray.d, t));
-    if (Math.abs(hit.y) > ap + 1e-9) return { hit, t, vignetted:true, normal:{x:-1,y:0} };
-    return { hit, t, vignetted:false, normal:{x:-1,y:0} };
+    const vignetted = (Math.abs(hit.y) > ap + 1e-9);
+    return { hit, t, vignetted, normal:{x:-1,y:0} };
   }
 
   // sphere
@@ -396,7 +434,7 @@ function lastPhysicalVertexX(surfaces) {
 }
 
 function estimateEflBfl(surfaces, wavePreset) {
-  const xStart = (surfaces[0]?.vx ?? 0) - 80;
+  const xStart = (surfaces[0]?.vx ?? 0) - 100;
   const heights = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
 
   const rays = heights.map(h => ({
@@ -422,12 +460,24 @@ function estimateEflBfl(surfaces, wavePreset) {
   const xFocal = xCrosses.reduce((a,b)=>a+b,0) / xCrosses.length;
   const lastVx = lastPhysicalVertexX(surfaces);
   const bfl = xFocal - lastVx;
+
+  // NOTE: Without principal planes, we show EFL as this sanity value.
   const efl = bfl;
 
   return { efl, bfl };
 }
 
-// --- autofocus (optional button) ---
+// --- Approx T-stop (very simplified) ---
+function approxTNumber(efl, surfaces) {
+  if (!Number.isFinite(efl) || !surfaces?.length) return null;
+  const stopIdx = findStopSurfaceIndex(surfaces);
+  if (stopIdx < 0) return null;
+  const stopAp = Number(surfaces[stopIdx]?.ap ?? 0);
+  if (!Number.isFinite(stopAp) || stopAp <= 0) return null;
+  return efl / (2 * stopAp);
+}
+
+// --- autofocus ---
 function rayHitYAtX(endRay, x) {
   if (!endRay?.d || Math.abs(endRay.d.x) < 1e-9) return null;
   const t = (x - endRay.p.x) / endRay.d.x;
@@ -525,7 +575,7 @@ function drawAxes(world) {
   ctx.strokeStyle = "#d0d0d0";
   ctx.beginPath();
   const p1 = worldToScreen({x:-200, y:0}, world);
-  const p2 = worldToScreen({x: 600, y:0}, world);
+  const p2 = worldToScreen({x: 800, y:0}, world);
   ctx.moveTo(p1.x, p1.y);
   ctx.lineTo(p2.x, p2.y);
   ctx.stroke();
@@ -556,7 +606,7 @@ function drawSurface(world, s) {
   const rad = Math.abs(R);
   const sign = Math.sign(R) || 1;
 
-  const steps = 80;
+  const steps = 90;
   ctx.beginPath();
   for (let i=0;i<=steps;i++){
     const y = -ap + (i/steps)*(2*ap);
@@ -582,7 +632,7 @@ function drawRays(world, rayTraces, sensorX) {
 
   for (const tr of rayTraces){
     if (!tr.pts || tr.pts.length < 2) continue;
-    ctx.globalAlpha = tr.vignetted ? 0.15 : 0.9;
+    ctx.globalAlpha = tr.vignetted ? 0.12 : 0.9;
 
     ctx.beginPath();
     const p0 = worldToScreen(tr.pts[0], world);
@@ -592,7 +642,6 @@ function drawRays(world, rayTraces, sensorX) {
       ctx.lineTo(p.x, p.y);
     }
 
-    // extend to sensor plane for display
     const last = tr.endRay;
     if (last && Number.isFinite(sensorX) && last.d && Math.abs(last.d.x) > 1e-9) {
       const t = (sensorX - last.p.x) / last.d.x;
@@ -608,13 +657,13 @@ function drawRays(world, rayTraces, sensorX) {
   ctx.restore();
 }
 
-function drawSensor(world, sensorX, ap) {
+function drawSensor(world, sensorX, sensorHalfH) {
   ctx.save();
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#111";
   ctx.setLineDash([6,6]);
-  const a = worldToScreen({x:sensorX, y:-ap}, world);
-  const b = worldToScreen({x:sensorX, y: ap}, world);
+  const a = worldToScreen({x:sensorX, y:-sensorHalfH}, world);
+  const b = worldToScreen({x:sensorX, y: sensorHalfH}, world);
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
@@ -656,6 +705,9 @@ function renderAll() {
   computeVertices(lens.surfaces);
   clampSelected();
 
+  const sensor = getSensor();
+  const sensorHalfH = sensor.h * 0.5;
+
   const fieldAngle = Number(ui.fieldAngle.value || 0);
   const rayCount   = Number(ui.rayCount.value || 31);
   const wavePreset = ui.wavePreset.value;
@@ -672,8 +724,11 @@ function renderAll() {
   const vigPct = Math.round((vCount / traces.length) * 100);
 
   const { efl, bfl } = estimateEflBfl(lens.surfaces, wavePreset);
+  const tApprox = approxTNumber(efl, lens.surfaces);
+
   ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  ui.tnum.textContent = `T≈: ${tApprox == null ? "—" : tApprox.toFixed(2)}`;
   ui.vig.textContent = `Vignette: ${vigPct}%`;
 
   if (tirCount > 0) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
@@ -689,11 +744,9 @@ function renderAll() {
   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
   drawRays(world, traces, sensorX);
+  drawSensor(world, sensorX, sensorHalfH);
 
-  const sensorAp = Math.max(5, last?.ap ?? 12);
-  drawSensor(world, sensorX, sensorAp);
-
-  drawTitleOverlay(`${lens.name} • sensorX=${sensorX.toFixed(2)}mm`);
+  drawTitleOverlay(`${lens.name} • sensor=${sensor.w.toFixed(2)}×${sensor.h.toFixed(2)}mm • sensorX=${sensorX.toFixed(2)}mm`);
 }
 
 // -------------------- view controls --------------------
@@ -832,12 +885,10 @@ on("#btnRemove", "click", ()=>{
   renderAll();
 });
 
-// Load demo lens button: now loads OMIT 50 by default (so you never upload)
+// Load preset buttons
 on("#btnReset", "click", ()=>{
   loadLens(omit50ConceptV1());
 });
-
-// Optional: if you ever add a second button in HTML with id="btnResetSimple"
 on("#btnResetSimple", "click", ()=>{
   loadLens(demoLensSimple());
 });
@@ -853,7 +904,6 @@ on("#btnSave", "click", ()=>{
   URL.revokeObjectURL(url);
 });
 
-// Optional autofocus button (only works if you add it in HTML)
 on("#btnAutoFocus", "click", ()=>{
   autoFocusSensorOffset();
 });
@@ -866,7 +916,7 @@ on("#fileLoad", "change", async (e)=>{
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
-    // ✅ merge optional glass_note into GLASS_DB (before loadLens -> so dropdown has the keys)
+    // Optional: merge extra glasses from JSON (if it has glass_note)
     if (obj.glass_note && typeof obj.glass_note === "object") {
       for (const [k, v] of Object.entries(obj.glass_note)) {
         const nd = Number(v?.nd);
@@ -886,6 +936,13 @@ on("#fileLoad", "change", async (e)=>{
   }
 });
 
+// sensor preset wiring
+on("#sensorPreset", "change", ()=>{
+  applySensorPreset(ui.sensorPreset.value);
+});
+on("#sensorW", "input", ()=>{ ui.sensorPreset.value = "CUSTOM"; ui.sensorW.disabled=false; ui.sensorH.disabled=false; renderAll(); });
+on("#sensorH", "input", ()=>{ ui.sensorPreset.value = "CUSTOM"; ui.sensorW.disabled=false; ui.sensorH.disabled=false; renderAll(); });
+
 // rerender on controls
 ["fieldAngle","rayCount","wavePreset","sensorOffset","renderScale"].forEach(id=>{
   on("#"+id, "input", renderAll);
@@ -896,4 +953,6 @@ window.addEventListener("resize", renderAll);
 // init
 buildTable();
 bindViewControls();
+ui.sensorPreset.value = "ALEXA_MINI";
+applySensorPreset("ALEXA_MINI");
 renderAll();

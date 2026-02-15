@@ -17,7 +17,8 @@
     </div>
 
     <div class="topActions">
-      <button id="btnReset" class="btn">Load demo lens</button>
+      <button id="btnReset" class="btn">Load OMIT 50 preset</button>
+      <button id="btnResetSimple" class="btn">Load demo lens</button>
 
       <button id="btnAdd" class="btn">+ Surface</button>
       <button id="btnAddElement" class="btn">+ Element</button>
@@ -30,6 +31,7 @@
 
       <button id="btnSave" class="btn">Save JSON</button>
       <button id="btnAutoFocus" class="btn">Auto focus</button>
+
       <label class="btn fileBtn">
         Load JSON
         <input id="fileLoad" type="file" accept="application/json" />
@@ -42,12 +44,30 @@
       <div class="panelHeader">
         <div class="panelTitle">Surface Data</div>
         <div class="panelHint">
-          Klik een rij om te selecteren. R=0 is plane. Glass = medium ná surface.
+          Klik een rij om te selecteren. R=0 is plane. Glass = medium ná surface. Stop is 1 surface.
         </div>
       </div>
 
       <div class="panelBody">
         <div class="controlsGrid">
+          <div class="ctl">
+            <label>Sensor preset</label>
+            <select id="sensorPreset">
+              <option value="ALEXA_MINI">ARRI Alexa Mini (S35)</option>
+              <option value="ALEXA_MINI_LF">ARRI Alexa Mini LF (LF)</option>
+              <option value="SONY_VENICE">Sony VENICE (FF)</option>
+              <option value="FUJI_GFX">Fujifilm GFX (MF)</option>
+              <option value="CUSTOM">Custom…</option>
+            </select>
+          </div>
+          <div class="ctl">
+            <label>Sensor W × H (mm)</label>
+            <div class="row2">
+              <input id="sensorW" type="number" step="0.01" value="28.25" />
+              <input id="sensorH" type="number" step="0.01" value="18.17" />
+            </div>
+          </div>
+
           <div class="ctl">
             <label>Field angle (deg)</label>
             <input id="fieldAngle" type="number" step="0.1" value="0" />
@@ -96,6 +116,7 @@
           <div class="statusRight">
             <span class="badge" id="badgeEfl">EFL: —</span>
             <span class="badge" id="badgeBfl">BFL: —</span>
+            <span class="badge" id="badgeT">T≈: —</span>
             <span class="badge" id="badgeVig">Vignette: —</span>
           </div>
         </div>
