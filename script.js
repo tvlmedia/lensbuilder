@@ -472,6 +472,49 @@ function buildRays(surfaces, fieldAngleDeg, count) {
   return rays;
 }
 
+function buildChiefRay(surfaces, fieldAngleDeg){
+  const theta = (fieldAngleDeg * Math.PI) / 180;
+  const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
+
+  const xStart = (surfaces[0]?.vx ?? 0) - 120;
+
+  const stopIdx = findStopSurfaceIndex(surfaces);
+  const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
+  const xStop = stopSurf.vx;
+
+  const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
+
+  // chief ray: door het midden van de stop => yAtStop = 0
+  const y0 = 0 - tanT * (xStop - xStart);
+
+  return { p:{x:xStart, y:y0}, d:dir };
+}
+
+function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH){
+  // zoek max field waarbij chief ray nog sensor bereikt zonder vignette
+  let lo = 0, hi = 60; // 60° is al absurd hoog; prima als bracket
+  let best = 0;
+
+  for (let iter=0; iter<18; iter++){
+    const mid = (lo + hi) * 0.5;
+    const ray = buildChiefRay(surfaces, mid);
+    const tr = traceRayThroughLens(structuredClone(ray), surfaces, wavePreset);
+    if (!tr || tr.vignetted || tr.tir) { hi = mid; continue; }
+
+    const y = rayHitYAtX(tr.endRay, sensorX);
+    if (y == null) { hi = mid; continue; }
+
+    if (Math.abs(y) <= halfH) {
+      best = mid;
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return best; // degrees to just reach sensor edge (ish)
+}
+
+
 // -------------------- EFL/BFL (paraxial) --------------------
 function lastPhysicalVertexX(surfaces) {
   if (!surfaces?.length) return 0;
