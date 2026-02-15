@@ -85,9 +85,19 @@ function applySensorToIMS() {
   const ims = lens?.surfaces?.[lens.surfaces.length - 1];
   if (ims && String(ims.type).toUpperCase() === "IMS") {
     ims.ap = halfH;
+    syncIMSCellApertureToUI(); // ✅ update de tabel-input mee
   }
 }
+function syncIMSCellApertureToUI() {
+  if (!ui.tbody || !lens?.surfaces?.length) return;
 
+  const i = lens.surfaces.length - 1;
+  const s = lens.surfaces[i];
+  if (!s || String(s.type).toUpperCase() !== "IMS") return;
+
+  const apInput = ui.tbody.querySelector(`input.cellInput[data-k="ap"][data-i="${i}"]`);
+  if (apInput) apInput.value = Number(s.ap || 0).toFixed(2);
+}
 function applyPreset(name) {
   const p = SENSOR_PRESETS[name] || SENSOR_PRESETS["ARRI Alexa Mini LF (LF)"];
   if (ui.sensorW) ui.sensorW.value = p.w.toFixed(2);
@@ -1125,6 +1135,40 @@ on("#btnAddElement", "click", ()=>{
   renderAll();
 });
 
+function newClear() {
+  // 1) reset lens naar een lege template (of kies je default preset)
+  lens = sanitizeLens({
+    name: "New Lens",
+    surfaces: [
+      { type:"OBJ", R:0.0, t:0.0, ap:60.0, glass:"AIR", stop:false },
+      // simpele start surface zodat je meteen iets hebt
+      { type:"1",   R:40.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
+      { type:"2",   R:-40.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
+      { type:"STOP",R:0.0,  t:10.0, ap:8.0,  glass:"AIR", stop:true  },
+      { type:"IMS", R:0.0,  t:0.0,  ap:12.77,glass:"AIR", stop:false },
+    ],
+  });
+
+  selectedIndex = 0;
+
+  // 2) reset UI controls
+  if (ui.fieldAngle) ui.fieldAngle.value = 0;
+  if (ui.rayCount) ui.rayCount.value = 31;
+  if (ui.wavePreset) ui.wavePreset.value = "d";
+  if (ui.sensorOffset) ui.sensorOffset.value = 0;
+  if (ui.renderScale) ui.renderScale.value = 1.25;
+
+  // 3) reset view (pan/zoom)
+  view.panX = 0; view.panY = 0; view.zoom = 1.0;
+
+  // 4) apply sensor -> IMS ap, rebuild + render
+  applySensorToIMS();
+  buildTable();
+  renderAll();
+}
+
+on("#btnNewClear", "click", newClear);
+
 on("#btnDuplicate", "click", ()=>{
   clampSelected();
   const s = lens.surfaces[selectedIndex];
@@ -1235,13 +1279,6 @@ window.addEventListener("resize", renderAll);
 
 // -------------------- init --------------------
 function init() {
-  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-  loadLens(lens);
-  buildTable();
-  bindViewControls();
-  renderAll();
-}
-function init() {
   populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
   loadLens(lens);
@@ -1250,3 +1287,4 @@ function init() {
   renderAll();
 }
 init();
+
