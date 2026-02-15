@@ -1168,6 +1168,49 @@ function insertAfterSelected(surfaceObj) {
   insertSurface(at, surfaceObj);
 }
 
+function elementPresetMenu() {
+  const presets = [
+    { key:"1", name:"Biconvex (BK7)", make: () => ([
+      { type:"", R: 40.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
+      { type:"", R:-40.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
+    ])},
+    { key:"2", name:"Biconcave (BK7)", make: () => ([
+      { type:"", R:-40.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
+      { type:"", R: 40.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
+    ])},
+    { key:"3", name:"Plano-Convex (BK7)  (plane -> convex)", make: () => ([
+      { type:"", R: 0.0,  t:6.0, ap:18.0, glass:"BK7", stop:false },
+      { type:"", R:-50.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
+    ])},
+    { key:"4", name:"Plano-Concave (BK7) (plane -> concave)", make: () => ([
+      { type:"", R: 0.0,  t:6.0, ap:18.0, glass:"BK7", stop:false },
+      { type:"", R: 50.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
+    ])},
+    { key:"5", name:"Positive meniscus (BK7) (strong front)", make: () => ([
+      { type:"", R: 30.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
+      { type:"", R:-80.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
+    ])},
+    { key:"6", name:"Negative meniscus (BK7) (strong back)", make: () => ([
+      { type:"", R:-80.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
+      { type:"", R: 30.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
+    ])},
+    { key:"7", name:"Cemented doublet (BK7 + F2) (simple)", make: () => ([
+      { type:"", R: 50.0, t:4.0, ap:18.0, glass:"BK7", stop:false }, // front
+      { type:"", R:-40.0, t:4.0, ap:18.0, glass:"F2",  stop:false }, // cement interface, medium after = F2
+      { type:"", R: 90.0, t:6.0, ap:18.0, glass:"AIR", stop:false }, // back, then air gap
+    ])},
+  ];
+
+  const msg =
+    "Kies element preset:\n" +
+    presets.map(p => `${p.key}) ${p.name}`).join("\n") +
+    "\n\n(Annuleer = niets toevoegen)";
+
+  const choice = (prompt(msg, "1") || "").trim();
+  const picked = presets.find(p => p.key === choice);
+  return picked ? picked.make() : null;
+}
+
 // -------------------- buttons --------------------
 on("#btnAdd", "click", () => {
   insertAfterSelected({ type: "", R: 0, t: 5.0, ap: 12.0, glass: "AIR", stop: false });
@@ -1176,50 +1219,50 @@ on("#btnAdd", "click", () => {
 on("#btnAddElement", "click", () => {
   clampSelected();
 
+  const chunk = elementPresetMenu();
+  if (!chunk) return; // user cancelled
+
+  // insert before IMS if needed
   let insertAt = selectedIndex + 1;
   if (String(lens.surfaces[selectedIndex]?.type || "").toUpperCase() === "IMS") {
     insertAt = Math.max(0, lens.surfaces.length - 1);
   }
   if (insertAt >= lens.surfaces.length) insertAt = lens.surfaces.length - 1;
 
-  const glassName = "BK7";
-  const centerThickness = 6.0;
-  const airGap = 4.0;
-  const ap = 18.0;
+  // safety: never insert after IMS
+  const imsIdx = lens.surfaces.findIndex(s => String(s.type).toUpperCase() === "IMS");
+  if (imsIdx >= 0) insertAt = Math.min(insertAt, imsIdx);
 
-  const s1 = { type: "", R: 40.0, t: centerThickness, ap, glass: glassName, stop: false };
-  const s2 = { type: "", R: -40.0, t: airGap, ap, glass: "AIR", stop: false };
-
-  lens.surfaces.splice(insertAt, 0, s1, s2);
+  lens.surfaces.splice(insertAt, 0, ...chunk);
   selectedIndex = insertAt;
+
   buildTable();
   applySensorToIMS();
   renderAll();
 });
 
 function newClear() {
+  // minimal template: OBJ + STOP + IMS
   lens = sanitizeLens({
     name: "New Lens",
     surfaces: [
-      { type: "OBJ", R: 0.0, t: 0.0, ap: 60.0, glass: "AIR", stop: false },
-      { type: "1", R: 40.0, t: 6.0, ap: 18.0, glass: "BK7", stop: false },
-      { type: "2", R: -40.0, t: 6.0, ap: 18.0, glass: "AIR", stop: false },
-      { type: "STOP", R: 0.0, t: 10.0, ap: 8.0, glass: "AIR", stop: true },
-      { type: "IMS", R: 0.0, t: 0.0, ap: 12.77, glass: "AIR", stop: false },
+      { type:"OBJ",  R:0.0, t:0.0,  ap:60.0, glass:"AIR", stop:false },
+      { type:"STOP", R:0.0, t:20.0, ap:8.0,  glass:"AIR", stop:true  },
+      { type:"IMS",  R:0.0, t:0.0,  ap:12.77,glass:"AIR", stop:false },
     ],
   });
 
   selectedIndex = 0;
 
+  // reset UI controls
   if (ui.fieldAngle) ui.fieldAngle.value = 0;
   if (ui.rayCount) ui.rayCount.value = 31;
   if (ui.wavePreset) ui.wavePreset.value = "d";
   if (ui.sensorOffset) ui.sensorOffset.value = 0;
   if (ui.renderScale) ui.renderScale.value = 1.25;
 
-  view.panX = 0;
-  view.panY = 0;
-  view.zoom = 1.0;
+  // reset view
+  view.panX = 0; view.panY = 0; view.zoom = 1.0;
 
   buildTable();
   applySensorToIMS();
