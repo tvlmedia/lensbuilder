@@ -12,14 +12,22 @@
       <div class="brandDot"></div>
       <div class="brandText">
         <div class="title">Meridional Raytracer (2D)</div>
-        <div class="sub">OSLO-ish lens doorsnede + rays • spheres/planes • apertures • sensor plane</div>
+        <div class="sub">OSLO-ish lens doorsnede + rays • spheres/planes • apertures • stop-aware</div>
       </div>
     </div>
 
     <div class="topActions">
       <button id="btnReset" class="btn">Load demo lens</button>
+
       <button id="btnAdd" class="btn">+ Surface</button>
-      <button id="btnRemove" class="btn danger">– Last</button>
+      <button id="btnAddElement" class="btn">+ Element</button>
+
+      <button id="btnDuplicate" class="btn">Duplicate</button>
+      <button id="btnMoveUp" class="btn">↑</button>
+      <button id="btnMoveDown" class="btn">↓</button>
+
+      <button id="btnRemove" class="btn danger">Delete</button>
+
       <button id="btnSave" class="btn">Save JSON</button>
       <label class="btn fileBtn">
         Load JSON
@@ -32,7 +40,9 @@
     <section class="panelLeft">
       <div class="panelHeader">
         <div class="panelTitle">Surface Data</div>
-        <div class="panelHint">R in mm, thickness naar volgende surface, aperture = clear semi-diameter</div>
+        <div class="panelHint">
+          Klik een rij om te selecteren. R=0 is plane. Glass = medium ná surface.
+        </div>
       </div>
 
       <div class="panelBody">
@@ -95,7 +105,7 @@
       <div class="viewerHeader">
         <div class="viewerTitle">Autodraw</div>
         <div class="viewerMeta">
-          <span id="metaUnits">UNITS: mm</span>
+          <span>UNITS: mm</span>
           <span>•</span>
           <span id="metaInfo">2D meridional trace</span>
         </div>
