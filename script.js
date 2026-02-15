@@ -887,10 +887,13 @@ function renderAll() {
   // coverage (meridional) test
   const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
 
-  // "diag" is strictest; set to "h" if you only want width-driven YES/NO
-const covMode = "h";
-   const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
-  const covTxt = `COV(V): ±${maxField.toFixed(1)}° • REQ(${covMode.toUpperCase()}): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+  // coverage (meridional) test: dit is V (height) in 2D
+const covMode = "v"; // ✅ matcht maxField (meridional) met sensor hoogte requirement
+const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+
+const covTxt = !fov
+  ? "COV(V): —"
+  : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
   if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
