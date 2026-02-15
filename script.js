@@ -1,4 +1,5 @@
 /* Meridional Raytracer (2D) — TVL Rebuild (FULL SCRIPT)
+   ✅ FIXED: input focus/caret no longer jumps out while typing (no rebuildTable on "input")
    - Optical axis: +x, height: y
    - Surfaces: spherical (R!=0) or plane (R=0)
    - Thickness t: distance to next surface vertex (along x)
@@ -245,7 +246,7 @@ function loadLens(obj) {
   selectedIndex = 0;
 
   clampAllApertures(lens.surfaces);
-   
+
   buildTable();        // table first (so IMS sync can find the input)
   applySensorToIMS();  // set IMS ap + update table cell
   renderAll();
@@ -263,11 +264,50 @@ function enforceSingleStop(changedIndex) {
   });
 }
 
+// -------------------- number + focus helpers (FIX typing jump) --------------------
+function num(v, fallback = 0) {
+  const s = String(v ?? "").trim().replace(",", ".");
+  const x = parseFloat(s);
+  return Number.isFinite(x) ? x : fallback;
+}
 
+let _focusMemo = null;
 
+function rememberTableFocus() {
+  const a = document.activeElement;
+  if (!a) return;
+  if (!(a.classList && a.classList.contains("cellInput"))) return;
+
+  _focusMemo = {
+    i: a.dataset.i,
+    k: a.dataset.k,
+    ss: typeof a.selectionStart === "number" ? a.selectionStart : null,
+    se: typeof a.selectionEnd === "number" ? a.selectionEnd : null,
+  };
+}
+
+function restoreTableFocus() {
+  if (!_focusMemo || !ui.tbody) return;
+
+  const sel = `input.cellInput[data-i="${_focusMemo.i}"][data-k="${_focusMemo.k}"]`;
+  const el = ui.tbody.querySelector(sel);
+  if (!el) return;
+
+  el.focus({ preventScroll: true });
+  if (_focusMemo.ss != null && _focusMemo.se != null) {
+    try { el.setSelectionRange(_focusMemo.ss, _focusMemo.se); } catch (_) {}
+  }
+  _focusMemo = null;
+}
+
+// -------------------- table build + events (FIXED) --------------------
 function buildTable() {
   clampSelected();
   if (!ui.tbody) return;
+
+  // remember focus/caret before we nuke DOM
+  rememberTableFocus();
+
   ui.tbody.innerHTML = "";
 
   lens.surfaces.forEach((s, idx) => {
@@ -304,13 +344,54 @@ function buildTable() {
     ui.tbody.appendChild(tr);
   });
 
-  ui.tbody.querySelectorAll("input,select").forEach((el) => {
-    el.addEventListener("input", onCellChange);
-    el.addEventListener("change", onCellChange);
+  // ✅ split events:
+  // - input: update value + renderAll (NO buildTable)
+  // - change/blur/enter: clamp + buildTable (but restore focus)
+  ui.tbody.querySelectorAll("input.cellInput").forEach((el) => {
+    el.addEventListener("input", onCellInput);
+    el.addEventListener("change", onCellCommit);
+    el.addEventListener("blur", onCellCommit);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); onCellCommit(e); }
+    });
   });
+
+  ui.tbody.querySelectorAll("select.cellSelect").forEach((el) => {
+    el.addEventListener("change", onCellCommit);
+  });
+
+  ui.tbody.querySelectorAll('input[type="checkbox"][data-k="stop"]').forEach((el) => {
+    el.addEventListener("change", onCellCommit);
+  });
+
+  restoreTableFocus();
 }
 
-function onCellChange(e) {
+function onCellInput(e) {
+  const el = e.target;
+  const i = Number(el.dataset.i);
+  const k = el.dataset.k;
+  if (!Number.isFinite(i) || !k) return;
+
+  selectedIndex = i;
+
+  const s = lens.surfaces[i];
+  if (!s) return;
+
+  if (k === "type") {
+    s.type = el.value;
+  } else if (k === "R" || k === "t" || k === "ap") {
+    s[k] = num(el.value, s[k] ?? 0);
+  } else {
+    s[k] = num(el.value, s[k] ?? 0);
+  }
+
+  // live update only; keep focus stable
+  applySensorToIMS();
+  renderAll();
+}
+
+function onCellCommit(e) {
   const el = e.target;
   const i = Number(el.dataset.i);
   const k = el.dataset.k;
@@ -322,23 +403,23 @@ function onCellChange(e) {
   if (!s) return;
 
   if (k === "stop") {
-    s.stop = el.checked;
+    s.stop = !!el.checked;
     enforceSingleStop(i);
-    buildTable();
   } else if (k === "glass") {
     s.glass = el.value;
   } else if (k === "type") {
     s.type = el.value;
   } else {
-    s[k] = Number(el.value);
+    s[k] = num(el.value, s[k] ?? 0);
   }
 
-    applySensorToIMS();
+  applySensorToIMS();
 
   // HARD PHYSICS: prevent impossible clear apertures on spherical surfaces
   clampAllApertures(lens.surfaces);
-  buildTable(); // refresh values (so user sees clamped ap)
 
+  // rebuild so clamped values show, but caret stays (restoreTableFocus)
+  buildTable();
   renderAll();
 }
 
@@ -348,15 +429,9 @@ function normalize(v) {
   if (m < 1e-12) return { x: 0, y: 0 };
   return { x: v.x / m, y: v.y / m };
 }
-function dot(a, b) {
-  return a.x * b.x + a.y * b.y;
-}
-function add(a, b) {
-  return { x: a.x + b.x, y: a.y + b.y };
-}
-function mul(a, s) {
-  return { x: a.x * s, y: a.y * s };
-}
+function dot(a, b) { return a.x * b.x + a.y * b.y; }
+function add(a, b) { return { x: a.x + b.x, y: a.y + b.y }; }
+function mul(a, s) { return { x: a.x * s, y: a.y * s }; }
 
 function refract(I, N, n1, n2) {
   I = normalize(I);
@@ -433,22 +508,14 @@ function findStopSurfaceIndex(surfaces) {
   return surfaces.findIndex((s) => !!s.stop);
 }
 
-
 // -------------------- physical sanity clamps --------------------
-// Doel: geometrisch onmogelijke apertures voorkomen (sphere bestaat alleen tot |y|<=|R|)
-// en planes/STOP niet oneindig laten worden.
-
-const AP_SAFETY = 0.90;     // blijf weg van de rand van de sphere (sqrt instabiliteit)
-const AP_MAX_PLANE = 30.0;  // mm semi-diameter cap voor plane/STOP
+const AP_SAFETY = 0.90;     // stay away from sphere rim
+const AP_MAX_PLANE = 30.0;  // mm semi-diameter cap for plane/STOP
 const AP_MIN = 0.01;
 
 function maxApForSurface(s) {
   const R = Number(s?.R || 0);
-
-  // plane / STOP / AST etc
   if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
-
-  // spherical: max semi-diameter is |R|
   return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
 }
 
@@ -465,6 +532,41 @@ function clampAllApertures(surfaces) {
   if (!Array.isArray(surfaces)) return;
   for (const s of surfaces) clampSurfaceAp(s);
 }
+
+const AUTO_AP_FROM_OVERLAP = true; // later optional toggle
+const MIN_CT = 0.10;              // mm min center thickness margin
+
+function enforceElementAperturesFromGeometry(surfaces, minCT = MIN_CT) {
+  if (!Array.isArray(surfaces)) return;
+
+  for (let i = 0; i < surfaces.length - 1; i++) {
+    const sA = surfaces[i];
+    const sB = surfaces[i + 1];
+
+    const typeA = String(sA.type || "").toUpperCase();
+    const typeB = String(sB.type || "").toUpperCase();
+    if (typeA === "OBJ" || typeB === "OBJ") continue;
+    if (typeA === "IMS" || typeB === "IMS") continue;
+
+    // glass region = medium AFTER surface A
+    const medium = String(sA.glass || "AIR").toUpperCase();
+    if (medium === "AIR") continue;
+
+    const capA = maxApForSurface(sA);
+    const capB = maxApForSurface(sB);
+
+    let capOverlap = Infinity;
+    if (Math.abs(Number(sA.R || 0)) > 1e-9 && Math.abs(Number(sB.R || 0)) > 1e-9) {
+      capOverlap = maxNonOverlappingSemiDiameter(sA, sB, minCT);
+    }
+
+    const cap = Math.max(AP_MIN, Math.min(capA, capB, capOverlap));
+
+    if (Number(sA.ap) > cap) sA.ap = cap;
+    if (Number(sB.ap) > cap) sB.ap = cap;
+  }
+}
+
 // -------------------- tracing --------------------
 function traceRayThroughLens(ray, surfaces, wavePreset) {
   const pts = [{ x: ray.p.x, y: ray.p.y }];
@@ -559,9 +661,8 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
 
 // -------------------- ray bundles (reference plane) --------------------
 function getRayReferencePlane(surfaces) {
-  const stopIdx = findStopSurfaceIndex(surfaces);
-
-  let refIdx = stopIdx >= 0 ? stopIdx : 1;
+  // ✅ per jouw comment: rays vullen reference plane (front element by default)
+  let refIdx = 1;
   if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") refIdx = 0;
 
   const s = surfaces[refIdx] || surfaces[0];
@@ -924,7 +1025,7 @@ function drawElementsClosed(world, surfaces) {
     ui.footerWarn.textContent =
       "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
   }
-} // ✅ DIT miste bij jou
+}
 
 function drawSurface(world, s) {
   ctx.save();
@@ -932,7 +1033,8 @@ function drawSurface(world, s) {
   ctx.strokeStyle = "#1b1b1b";
 
   const vx = s.vx;
-  const ap = Math.max(0, s.ap);
+  // ✅ keep draw stable vs impossible ap
+  const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
 
   if (Math.abs(s.R) < 1e-9) {
     const a = worldToScreen({ x: vx, y: -ap }, world);
@@ -1073,7 +1175,11 @@ function renderAll() {
   const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
   applySensorToIMS();
-   clampAllApertures(lens.surfaces);
+  clampAllApertures(lens.surfaces);
+
+  if (AUTO_AP_FROM_OVERLAP) {
+    enforceElementAperturesFromGeometry(lens.surfaces, 0.10);
+  }
 
   const ims = lens.surfaces[lens.surfaces.length - 1];
   const sensorX = (ims?.vx ?? 0) + sensorOffset;
@@ -1213,7 +1319,7 @@ function safeInsertAtAfterSelected() {
   return insertAt;
 }
 
-// -------------------- +ELEMENT MODAL (zoals je oude UI) --------------------
+// -------------------- +ELEMENT MODAL --------------------
 // Pas deze IDs aan als jouw HTML andere IDs gebruikt:
 const EL_UI_IDS = {
   modal: "#elementModal",
@@ -1247,7 +1353,6 @@ const elUI = {
   insert: $(EL_UI_IDS.insert),
 };
 
-// ✅ FIX: less strict; only MUST-have fields block opening
 function modalExists() {
   return !!(elUI.modal && elUI.insert && elUI.cancel && elUI.type && elUI.mode && elUI.f && elUI.ap && elUI.ct);
 }
@@ -1255,7 +1360,6 @@ function modalExists() {
 function openElementModal() {
   if (!modalExists()) return false;
 
-  // populate glass selects once (optional)
   if (elUI.g1 && elUI.g2 && !elUI.g1.dataset._filled) {
     const keys = Object.keys(GLASS_DB);
     elUI.g1.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
@@ -1265,7 +1369,6 @@ function openElementModal() {
     elUI.g1.dataset._filled = "1";
   }
 
-  // sensible defaults (only if empty)
   if (elUI.type && !elUI.type.querySelector("option")) {
     elUI.type.innerHTML = `
       <option value="achromat">Achromat (4 surfaces)</option>
@@ -1295,16 +1398,13 @@ function openElementModal() {
     elUI.form.value = "symmetric";
   }
 
-  // keep current values if present, else defaults
   if (elUI.f) elUI.f.value = Number(elUI.f.value || 50);
   if (elUI.ap) elUI.ap.value = Number(elUI.ap.value || 18);
   if (elUI.ct) elUI.ct.value = Number(elUI.ct.value || 4);
   if (elUI.gap) elUI.gap.value = Number(elUI.gap.value || 0);
   if (elUI.rear) elUI.rear.value = Number(elUI.rear.value || 4);
 
-  // OPEN
   elUI.modal.classList.remove("hidden");
-  // extra robustness if CSS uses opacity/pointer-events
   elUI.modal.style.pointerEvents = "auto";
   elUI.modal.style.opacity = "1";
 
@@ -1320,8 +1420,6 @@ function closeElementModal() {
 
 // thin-lens helper (rough): for symmetric biconvex singlet
 function radiusForSymmetricSinglet(f, n) {
-  // 1/f ≈ (n-1)*(1/R1 - 1/R2), with R1=+R, R2=-R => 1/f ≈ (n-1)*(2/R)
-  // => R ≈ 2*(n-1)*f
   return 2 * Math.max(0.01, (n - 1)) * Math.max(1e-3, f);
 }
 
@@ -1369,7 +1467,7 @@ function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
   const t1 = ct;
   const t2 = ct;
 
-    if (gap > 1e-9) {
+  if (gap > 1e-9) {
     const chunk = [
       { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
       { type: "", R: R2, t: gap, ap, glass: "AIR", stop: false },
@@ -1380,7 +1478,7 @@ function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
     return chunk;
   }
 
-    const chunk = [
+  const chunk = [
     { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
     { type: "", R: R2, t: t2, ap, glass: glass2, stop: false },
     { type: "", R: R3, t: 0.01, ap, glass: glass2, stop: false },
@@ -1413,7 +1511,6 @@ function insertElementFromModal() {
   const gap = Math.max(0.0, v.gap);
   const rearAir = Math.max(0.0, v.rearAir);
 
-  // ✅ FIX: support STOP and AIRGAP choices
   if (v.type === "stop") {
     const insertAt = safeInsertAtAfterSelected();
     lens.surfaces.splice(insertAt, 0, { type: "STOP", R: 0.0, t: rearAir, ap, glass: "AIR", stop: true });
@@ -1479,12 +1576,10 @@ if (modalExists()) {
     closeElementModal();
   });
 
-  // click outside to close
   elUI.modal.addEventListener("mousedown", (e) => {
     if (e.target === elUI.modal) closeElementModal();
   });
 
-  // ESC to close
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && elUI.modal && !elUI.modal.classList.contains("hidden")) {
       closeElementModal();
