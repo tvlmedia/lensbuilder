@@ -720,6 +720,94 @@ function drawAxes(world) {
   ctx.restore();
 }
 
+function surfaceXatY(s, y) {
+  const vx = s.vx;
+  const R  = s.R;
+
+  // plane
+  if (Math.abs(R) < 1e-9) return vx;
+
+  const cx  = vx + R;
+  const rad = Math.abs(R);
+  const sign = Math.sign(R) || 1;
+
+  const inside = rad*rad - y*y;
+  if (inside < 0) return null;
+
+  // same as your drawSurface: take the "optical" intersection branch
+  return cx - sign * Math.sqrt(inside);
+}
+
+function buildSurfacePolyline(s, ap, steps = 90) {
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const y = -ap + (i / steps) * (2 * ap);
+    const x = surfaceXatY(s, y);
+    if (x == null) continue;
+    pts.push({ x, y });
+  }
+  return pts;
+}
+
+function drawElementBody(world, sFront, sBack, apRegion) {
+  // build front and back polylines
+  const front = buildSurfacePolyline(sFront, apRegion, 90);
+  const back  = buildSurfacePolyline(sBack,  apRegion, 90);
+
+  if (front.length < 2 || back.length < 2) return;
+
+  // polygon: front top->bottom, then back bottom->top (reverse)
+  const poly = front.concat(back.slice().reverse());
+
+  ctx.save();
+
+  // fill light glass body (OSLO-ish)
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = "#000"; // alpha handles it; looks like subtle grey
+  ctx.beginPath();
+  let p0 = worldToScreen(poly[0], world);
+  ctx.moveTo(p0.x, p0.y);
+  for (let i = 1; i < poly.length; i++) {
+    const p = worldToScreen(poly[i], world);
+    ctx.lineTo(p.x, p.y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // stroke outline
+  ctx.globalAlpha = 1.0;
+  ctx.lineWidth = 1.25;
+  ctx.strokeStyle = "#1b1b1b";
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawElementsClosed(world, surfaces) {
+  // draw closed bodies wherever the gap medium is glass (surface[i].glass !== AIR)
+  for (let i = 0; i < surfaces.length - 1; i++) {
+    const sA = surfaces[i];
+    const sB = surfaces[i + 1];
+
+    const typeA = String(sA.type || "").toUpperCase();
+    const typeB = String(sB.type || "").toUpperCase();
+
+    // don't try to make bodies involving OBJ/IMS
+    if (typeA === "OBJ" || typeB === "OBJ") continue;
+    if (typeA === "IMS" || typeB === "IMS") continue;
+
+    const medium = String(sA.glass || "AIR").toUpperCase();
+    if (medium === "AIR") continue;
+
+    // choose a safe aperture to "close" top/bottom
+    const apA = Math.max(0, Number(sA.ap || 0));
+    const apB = Math.max(0, Number(sB.ap || 0));
+    const apRegion = Math.max(0.01, Math.min(apA, apB));
+
+    drawElementBody(world, sA, sB, apRegion);
+  }
+}
+
 function drawSurface(world, s) {
   ctx.save();
   ctx.lineWidth = 1.25;
@@ -761,6 +849,10 @@ function drawSurface(world, s) {
 }
 
 function drawLens(world, surfaces) {
+  // 1) eerst bodies (gesloten elementen)
+  drawElementsClosed(world, surfaces);
+
+  // 2) daarna de losse surfaces eroverheen (geeft die OSLO “lijnen” look)
   for (const s of surfaces) drawSurface(world, s);
 }
 
