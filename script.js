@@ -435,12 +435,18 @@ function findStopSurfaceIndex(surfaces) {
 
 
 // -------------------- physical sanity clamps --------------------
-// For a spherical surface, geometry exists only for |y| <= |R|
-// We clamp clear semi-diameter (ap) to <= k * |R|
-// k < 1 to avoid numeric edge artifacts (and your "candy wrapper" pinch).
-const AP_SAFETY = 0.95;
+const AP_MAX_GLOBAL = 30; // mm semi-diameter (60mm dia). Cap for planes/STOP too.
+const AP_SAFETY = 0.90;
 
 function maxApForSurface(s) {
+  const R = Number(s?.R || 0);
+
+  // plane (incl STOP): cap it too
+  if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_GLOBAL;
+
+  // spherical: geometric existence
+  return Math.max(0.01, Math.abs(R) * AP_SAFETY);
+}
   const R = Number(s?.R || 0);
   if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return Infinity; // plane has no spherical limit
   return Math.max(0.01, Math.abs(R) * AP_SAFETY);
