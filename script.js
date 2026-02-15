@@ -27,6 +27,9 @@ const ui = {
   vig: $("#badgeVig"),
   footerWarn: $("#footerWarn"),
   metaInfo: $("#metaInfo"),
+     eflTop: $("#badgeEflTop"),
+  bflTop: $("#badgeBflTop"),
+  tstopTop: $("#badgeTTop"),
 
   sensorPreset: $("#sensorPreset"),
   sensorW: $("#sensorW"),
@@ -782,6 +785,10 @@ function renderAll() {
   const T = estimateTStopApprox(efl, lens.surfaces);
   ui.tstop.textContent = `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
 
+   if (ui.eflTop) ui.eflTop.textContent = ui.efl.textContent;
+if (ui.bflTop) ui.bflTop.textContent = ui.bfl.textContent;
+if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop.textContent;
+
   ui.vig.textContent = `Vignette: ${vigPct}%`;
 
   if (tirCount > 0) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
@@ -801,7 +808,11 @@ function renderAll() {
   drawRays(world, traces, sensorX);
   drawSensor(world, sensorX, halfH);
 
-  drawTitleOverlay(`${lens.name} • sensorX=${sensorX.toFixed(2)}mm`);
+  const eflTxt = (efl == null) ? "—" : efl.toFixed(2) + "mm";
+const bflTxt = (bfl == null) ? "—" : bfl.toFixed(2) + "mm";
+const tTxt   = (T == null) ? "—" : ("T" + T.toFixed(2));
+
+drawTitleOverlay(`${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`);
 }
 
 // -------------------- view controls --------------------
