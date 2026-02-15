@@ -1,40 +1,41 @@
-<!-- index.html -->
 <!doctype html>
 <html lang="nl">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Meridional Raytracer (2D) — TVL Modern</title>
+  <title>Meridional Raytracer (2D) — TVL Lensbuilder</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
+
 <body>
   <header class="topbar">
     <div class="brand">
-      <div class="brandMark"></div>
-      <div class="brandText">
-        <div class="brandTitle">Meridional Raytracer <span class="muted">(2D)</span></div>
+      <div class="dot"></div>
+      <div class="brandTxt">
+        <div class="brandTitle">Meridional Raytracer (2D)</div>
         <div class="brandSub">OSLO-ish doorsnede + rays • spheres/planes • apertures • stop-aware • element builder</div>
       </div>
     </div>
 
-    <div class="topActions">
+    <div class="actions">
       <button id="btnNew" class="btn">New / Clear</button>
       <button id="btnLoadOmit" class="btn">Load OMIT 50 preset</button>
       <button id="btnLoadDemo" class="btn">Load demo lens</button>
 
-      <div class="sep"></div>
+      <span class="sep"></span>
 
       <button id="btnAdd" class="btn">+ Surface</button>
-      <button id="btnAddElement" class="btn accent">+ Element</button>
+      <button id="btnAddElement" class="btn">+ Element</button>
       <button id="btnDuplicate" class="btn">Duplicate</button>
-      <button id="btnMoveUp" class="btn icon" title="Move up">↑</button>
-      <button id="btnMoveDown" class="btn icon" title="Move down">↓</button>
+      <button id="btnMoveUp" class="btn">↑</button>
+      <button id="btnMoveDown" class="btn">↓</button>
       <button id="btnRemove" class="btn danger">Delete</button>
 
-      <div class="sep"></div>
+      <span class="sep"></span>
 
       <button id="btnSave" class="btn">Save JSON</button>
       <button id="btnAutoFocus" class="btn">Auto focus</button>
+
       <label class="btn fileBtn">
         Load JSON
         <input id="fileLoad" type="file" accept="application/json" />
@@ -42,17 +43,18 @@
     </div>
   </header>
 
-  <main class="layout">
+  <main class="grid">
+    <!-- LEFT -->
     <section class="panel left">
       <div class="panelHead">
-        <div class="panelTitle">Surface Data</div>
-        <div class="panelHint">
-          Klik een rij om te selecteren. R=0 is plane. Glass = medium ná surface. Stop = 1 surface. IMS ap = sensor half-height.
+        <div>
+          <div class="panelTitle">Surface Data</div>
+          <div class="panelHint">Klik een rij om te selecteren. R=0 is plane. Glass = medium ná surface. Stop = 1 surface.</div>
         </div>
       </div>
 
       <div class="panelBody">
-        <div class="controlsGrid">
+        <div class="controls">
           <div class="ctl span2">
             <label>Sensor preset</label>
             <select id="sensorPreset">
@@ -67,6 +69,7 @@
             <label>Sensor W (mm)</label>
             <input id="sensorW" type="number" step="0.01" value="36.70" />
           </div>
+
           <div class="ctl">
             <label>Sensor H (mm)</label>
             <input id="sensorH" type="number" step="0.01" value="25.54" />
@@ -76,13 +79,14 @@
             <label>Field angle (deg)</label>
             <input id="fieldAngle" type="number" step="0.1" value="0" />
           </div>
+
           <div class="ctl">
             <label># Rays</label>
             <input id="rayCount" type="number" min="3" max="101" step="2" value="31" />
           </div>
 
           <div class="ctl">
-            <label>Wavelength preset</label>
+            <label>Wavelength</label>
             <select id="wavePreset">
               <option value="d" selected>d-line (587.6nm) — simple n</option>
               <option value="g">g-line (435.8nm) — approx</option>
@@ -97,252 +101,191 @@
 
           <div class="ctl span2">
             <label>Render scale</label>
-            <input id="renderScale" type="range" min="0.6" max="2.6" step="0.01" value="1.25" />
+            <input id="renderScale" type="range" min="0.6" max="2.4" step="0.01" value="1.25" />
           </div>
         </div>
 
         <div class="tableWrap">
-          <table class="surfTable" id="surfTable">
+          <table class="tbl">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Type</th>
-                <th>Radius R</th>
-                <th>Thickness</th>
-                <th>Aperture</th>
-                <th>Glass</th>
-                <th>Stop?</th>
+                <th style="width:34px">#</th>
+                <th style="width:72px">Type</th>
+                <th style="width:92px">Radius R</th>
+                <th style="width:92px">Thickness</th>
+                <th style="width:92px">Aperture</th>
+                <th style="width:140px">Glass</th>
+                <th style="width:58px">Stop?</th>
               </tr>
             </thead>
             <tbody id="surfTbody"></tbody>
           </table>
         </div>
 
-        <div class="statusBar">
-          <div id="statusText" class="statusText">Ready.</div>
-          <div class="statusRight">
-            <span class="badge" id="badgeEfl">EFL: —</span>
-            <span class="badge" id="badgeBfl">BFL: —</span>
-            <span class="badge" id="badgeT">T≈ —</span>
-            <span class="badge" id="badgeVig">Vignette: —</span>
-            <span class="badge" id="badgeFov">FOV: —</span>
-            <span class="badge" id="badgeCov">COV: —</span>
-          </div>
+        <div class="footerMeta">
+          <div id="statusText" class="status">—</div>
+          <div id="metaInfo" class="meta">—</div>
+          <div id="footerWarn" class="warn"></div>
         </div>
       </div>
     </section>
 
+    <!-- RIGHT -->
     <section class="panel right">
-      <div class="viewerHead">
-        <div class="viewerTitle">
-          Autodraw
-          <div class="viewerBadges">
-            <span class="badge" id="badgeEflTop">EFL: —</span>
-            <span class="badge" id="badgeBflTop">BFL: —</span>
-            <span class="badge" id="badgeTTop">T≈ —</span>
-            <span class="badge" id="badgeFovTop">FOV: —</span>
-            <span class="badge" id="badgeCovTop">COV: —</span>
-          </div>
+      <div class="panelHead rightHead">
+        <div class="panelTitle">Autodraw</div>
+
+        <div class="badges">
+          <span id="badgeEflTop" class="badge">EFL: —</span>
+          <span id="badgeBflTop" class="badge">BFL: —</span>
+          <span id="badgeTTop" class="badge">T≈ —</span>
+          <span id="badgeFovTop" class="badge">FOV: —</span>
+          <span id="badgeCovTop" class="badge">COV: —</span>
         </div>
 
-        <div class="viewerMeta">
+        <div class="miniMeta">
           <span class="chip">UNITS: mm</span>
-          <span class="chip" id="metaInfo">2D meridional trace</span>
+          <span class="chip" id="sensorChip">sensor: —</span>
         </div>
       </div>
 
-      <div class="viewerCanvasWrap">
-        <canvas id="canvas" width="1400" height="820"></canvas>
-      </div>
+      <div class="viewer">
+        <canvas id="canvas"></canvas>
 
-      <div class="viewerFoot">
-        <div class="footLeft">
-          <span class="kbd">drag</span> pan • <span class="kbd">wheel</span> zoom • <span class="kbd">dblclick</span> reset view
+        <!-- bottom info strip (optional) -->
+        <div class="viewerFooter">
+          <div class="badges small">
+            <span id="badgeEfl" class="badge">EFL: —</span>
+            <span id="badgeBfl" class="badge">BFL: —</span>
+            <span id="badgeT" class="badge">T≈ —</span>
+            <span id="badgeVig" class="badge">Vignette: —</span>
+            <span id="badgeFov" class="badge">FOV: —</span>
+            <span id="badgeCov" class="badge">COV: —</span>
+          </div>
+          <div class="hint">drag = pan • wheel = zoom • dblclick = reset view</div>
         </div>
-        <div class="footRight" id="footerWarn"></div>
       </div>
     </section>
   </main>
 
   <!-- Element Builder Modal -->
-  <div id="elementModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div id="elementModal" class="modal hidden">
     <div class="modalCard">
       <div class="modalHead">
         <div>
-          <div class="modalTitle">Add Element</div>
-          <div class="modalSub">Kies type + mode. Klik in de mini-timeline om insert-positie te zetten.</div>
+          <div class="modalTitle">Element Builder</div>
+          <div class="modalSub">Auto singlet/achromat of custom surfaces. Inserts after selected row (before IMS).</div>
         </div>
-        <button id="elClose" class="btn icon" title="Close">✕</button>
+        <button id="elClose" class="btn ghost">Close</button>
       </div>
 
       <div class="modalBody">
-        <div class="modalTwoCol">
-          <div class="modalCol">
-            <div class="modalGrid">
-              <div class="ctl">
-                <label>Element type</label>
-                <select id="elType">
-                  <option value="singlet">Singlet (1 lens)</option>
-                  <option value="achromat" selected>Achromat (2 lenses, cemented)</option>
-                  <option value="stop">Stop / Iris</option>
-                  <option value="airgap">Air gap only</option>
-                </select>
-              </div>
-
-              <div class="ctl">
-                <label>Mode</label>
-                <select id="elMode">
-                  <option value="auto" selected>Auto-calc (from focal length)</option>
-                  <option value="custom">Custom values (you type R/t/ap/glass)</option>
-                </select>
-              </div>
-
-              <div class="ctl">
-                <label>Target focal length (mm)</label>
-                <input id="elF" type="number" step="0.1" value="50" />
-              </div>
-
-              <div class="ctl">
-                <label>Clear semi-diameter (ap) (mm)</label>
-                <input id="elAp" type="number" step="0.1" value="18" />
-              </div>
-
-              <div class="ctl">
-                <label>Center thickness per lens (mm)</label>
-                <input id="elCt" type="number" step="0.1" value="4.0" />
-              </div>
-
-              <div class="ctl">
-                <label>Cement / gap thickness (mm)</label>
-                <input id="elGap" type="number" step="0.1" value="0.0" />
-              </div>
-
-              <div class="ctl">
-                <label>Rear air gap (mm)</label>
-                <input id="elAir" type="number" step="0.1" value="4.0" />
-              </div>
-
-              <div class="ctl">
-                <label>Form (shape)</label>
-                <select id="elForm">
-                  <option value="symmetric" selected>Symmetric (R2 = -R1)</option>
-                  <option value="plano">Plano (R2 = plane)</option>
-                  <option value="weakMeniscus">Weak meniscus</option>
-                </select>
-              </div>
-
-              <div class="ctl">
-                <label>Glass 1 (positive / crown)</label>
-                <select id="elGlass1"></select>
-              </div>
-
-              <div class="ctl">
-                <label>Glass 2 (negative / flint)</label>
-                <select id="elGlass2"></select>
-              </div>
-
-              <div class="ctl span2">
-                <label>Glass note</label>
-                <div id="elGlassNote" class="noteBox">—</div>
-              </div>
-
-              <div class="ctl span2">
-                <label>Insert position</label>
-                <div class="insertRow">
-                  <select id="elInsertMode">
-                    <option value="afterSelected" selected>After selected surface</option>
-                    <option value="beforeIMS">Before IMS (safe default)</option>
-                    <option value="afterOBJ">After OBJ</option>
-                  </select>
-                  <div class="smallPill">Target index: <span id="elInsertIdx">—</span></div>
-                </div>
-              </div>
-
-              <div class="ctl span2">
-                <label>Mini timeline (click to set insert)</label>
-                <canvas id="elTimeline" width="740" height="92"></canvas>
-                <div class="hintTiny">OBJ links • IMS rechts • rood = STOP • blauw = selected • groen = insert</div>
-              </div>
-
-              <div class="ctl span2">
-                <label>Note</label>
-                <div class="noteBox">
-                  Auto-calc is thin-lens start-math (nice voor “shape”). Niet Zemax-optimized.
-                  Jouw tool is 2D meridional: hij pakt vooral geometrie + basic refraction.
-                </div>
-              </div>
-            </div>
+        <div class="controls modalGrid">
+          <div class="ctl">
+            <label>Type</label>
+            <select id="elType">
+              <option value="achromat" selected>Achromat (4 surfaces)</option>
+              <option value="singlet">Singlet (2 surfaces)</option>
+              <option value="stop">Stop (single surface)</option>
+              <option value="airgap">Air / spacer (single plane)</option>
+            </select>
           </div>
 
-          <div class="modalCol">
-            <div id="customBox" class="customBox hidden">
-              <div class="customTitle">Custom insert</div>
-              <div class="customGrid">
-                <div class="ctl">
-                  <label>Custom # surfaces</label>
-                  <select id="elCustomCount">
-                    <option value="2">2 surfaces (singlet)</option>
-                    <option value="4" selected>4 surfaces (achromat)</option>
-                    <option value="1">1 surface (stop/plane)</option>
-                  </select>
-                </div>
+          <div class="ctl">
+            <label>Mode</label>
+            <select id="elMode">
+              <option value="auto" selected>Auto</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
 
-                <div class="ctl">
-                  <label>Custom preset</label>
-                  <select id="elCustomPreset">
-                    <option value="blank" selected>Blank (all zeros)</option>
-                    <option value="starter">Starter (reasonable defaults)</option>
-                  </select>
-                </div>
+          <div class="ctl">
+            <label>Target f (mm)</label>
+            <input id="elF" type="number" step="0.1" value="50" />
+          </div>
 
-                <div class="hintTiny span2">
-                  In custom mode: we insert surfaces exactly as typed. Glass is still “medium after surface”.
-                </div>
+          <div class="ctl">
+            <label>Aperture (semi-dia)</label>
+            <input id="elAp" type="number" step="0.1" value="18" />
+          </div>
 
-                <div class="customTableWrap span2">
-                  <table class="customTable">
-                    <thead>
-                      <tr>
-                        <th>#</th>
-                        <th>Type</th>
-                        <th>R</th>
-                        <th>t</th>
-                        <th>ap</th>
-                        <th>glass</th>
-                      </tr>
-                    </thead>
-                    <tbody id="elCustomTbody"></tbody>
-                  </table>
-                </div>
+          <div class="ctl">
+            <label>Center thickness (ct)</label>
+            <input id="elCt" type="number" step="0.1" value="4" />
+          </div>
 
-                <div class="hintTiny span2">
-                  Tip: stop = type STOP + stop=true (maar je kan ook gewoon in main table “Stop?” aanvinken).
-                </div>
-              </div>
-            </div>
+          <div class="ctl">
+            <label>Internal gap</label>
+            <input id="elGap" type="number" step="0.1" value="0" />
+          </div>
 
-            <div class="sideHelp">
-              <div class="sideHelpTitle">Quick rules</div>
-              <ul class="sideHelpList">
-                <li><b>New</b> maakt altijd OBJ + <b>STOP</b> + IMS (met spacing).</li>
-                <li><b>IMS ap</b> = <b>sensorH/2</b> (altijd automatisch).</li>
-                <li><b>IMS</b> wordt altijd forced als <b>laatste surface</b>.</li>
-                <li><b>STOP</b> wordt altijd <b>single</b> enforced.</li>
-                <li>Coverage check is op <b>vertical</b> (meridional y).</li>
-              </ul>
-              <div class="sideHelpTitle">UX</div>
-              <div class="noteBox">
-                Je kunt in de timeline klikken om insert-positie te zetten. Dit werkt voor alle element types
-                (dus ook stop/iris). Als je “Before IMS” kiest, blijft het altijd safe.
-              </div>
-            </div>
+          <div class="ctl">
+            <label>Rear air</label>
+            <input id="elAir" type="number" step="0.1" value="4" />
+          </div>
 
+          <div class="ctl">
+            <label>Form</label>
+            <select id="elForm">
+              <option value="symmetric" selected>Symmetric</option>
+              <option value="weakMeniscus">Weak meniscus</option>
+              <option value="plano">Plano</option>
+            </select>
+          </div>
+
+          <div class="ctl">
+            <label>Glass 1 (crown)</label>
+            <select id="elGlass1"></select>
+          </div>
+
+          <div class="ctl">
+            <label>Glass 2 (flint)</label>
+            <select id="elGlass2"></select>
+          </div>
+
+          <div class="ctl span2">
+            <label>Glass note</label>
+            <pre id="elGlassNote" class="noteBox">—</pre>
           </div>
         </div>
+
+        <div id="customBox" class="customBox hidden">
+          <div class="customTop">
+            <div class="ctl">
+              <label>Custom surface count</label>
+              <input id="elCustomCount" type="number" min="1" max="20" step="1" value="4" />
+            </div>
+            <div class="ctl">
+              <label>Preset</label>
+              <select id="elCustomPreset">
+                <option value="blank" selected>Blank</option>
+                <option value="starter">Starter</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="tableWrap">
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th style="width:34px">#</th>
+                  <th style="width:90px">Type</th>
+                  <th style="width:110px">Radius R</th>
+                  <th style="width:110px">Thickness</th>
+                  <th style="width:110px">Aperture</th>
+                  <th style="width:200px">Glass</th>
+                </tr>
+              </thead>
+              <tbody id="elCustomTbody"></tbody>
+            </table>
+          </div>
+        </div>
+
       </div>
 
       <div class="modalFoot">
-        <button id="elAdd" class="btn accent">Insert element</button>
+        <button id="elAdd" class="btn primary">Insert element</button>
+        <div class="modalHint">Tip: voor “realistic” spacing: maak air-gaps ruimer, en check apertures per group.</div>
       </div>
     </div>
   </div>
