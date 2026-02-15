@@ -44,10 +44,16 @@ const GLASS_DB = {
   LASF35: { nd: 1.8061, Vd: 25.4 },
   LASFN31:{ nd: 1.8052, Vd: 25.3 },
   LF5:    { nd: 1.5800, Vd: 40.0 },
-
   "N-SF5":   { nd: 1.67271,  Vd: 32.25 },
   "S-LAM3":  { nd: 1.717004, Vd: 47.927969 },
   "S-BAH11": { nd: 1.666718, Vd: 48.325247 },
+
+  // ✅ added for Zeiss patent JSON
+  glass_I:   { nd: 1.6129, Vd: 50.0 },
+  glass_II:  { nd: 1.6112, Vd: 50.0 },
+  glass_III: { nd: 1.5163, Vd: 60.0 },
+  glass_IV:  { nd: 1.5163, Vd: 60.0 },
+  glass_V:   { nd: 1.6489, Vd: 50.0 },
 };
 
 function glassN(glassName, preset /* d,g,c */) {
@@ -859,6 +865,19 @@ on("#fileLoad", "change", async (e)=>{
     const txt = await file.text();
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
+
+    // ✅ merge optional glass_note into GLASS_DB (before loadLens -> so dropdown has the keys)
+    if (obj.glass_note && typeof obj.glass_note === "object") {
+      for (const [k, v] of Object.entries(obj.glass_note)) {
+        const nd = Number(v?.nd);
+        if (Number.isFinite(nd)) {
+          GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
+          GLASS_DB[k].nd = nd;
+          if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
+        }
+      }
+    }
+
     loadLens(obj);
   }catch(err){
     ui.footerWarn.textContent = `Load failed: ${err.message}`;
