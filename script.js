@@ -244,6 +244,8 @@ function loadLens(obj) {
   lens = sanitizeLens(obj);
   selectedIndex = 0;
 
+  clampAllApertures(lens.surfaces);
+   
   buildTable();        // table first (so IMS sync can find the input)
   applySensorToIMS();  // set IMS ap + update table cell
   renderAll();
@@ -260,6 +262,8 @@ function enforceSingleStop(changedIndex) {
     if (i !== changedIndex) s.stop = false;
   });
 }
+
+
 
 function buildTable() {
   clampSelected();
@@ -329,7 +333,12 @@ function onCellChange(e) {
     s[k] = Number(el.value);
   }
 
-  applySensorToIMS();
+    applySensorToIMS();
+
+  // HARD PHYSICS: prevent impossible clear apertures on spherical surfaces
+  clampAllApertures(lens.surfaces);
+  buildTable(); // refresh values (so user sees clamped ap)
+
   renderAll();
 }
 
@@ -424,6 +433,30 @@ function findStopSurfaceIndex(surfaces) {
   return surfaces.findIndex((s) => !!s.stop);
 }
 
+
+// -------------------- physical sanity clamps --------------------
+// For a spherical surface, geometry exists only for |y| <= |R|
+// We clamp clear semi-diameter (ap) to <= k * |R|
+// k < 1 to avoid numeric edge artifacts (and your "candy wrapper" pinch).
+const AP_SAFETY = 0.95;
+
+function maxApForSurface(s) {
+  const R = Number(s?.R || 0);
+  if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return Infinity; // plane has no spherical limit
+  return Math.max(0.01, Math.abs(R) * AP_SAFETY);
+}
+
+function clampSurfaceAp(s) {
+  if (!s) return;
+  const lim = maxApForSurface(s);
+  if (!Number.isFinite(lim)) return;
+  s.ap = Math.max(0.01, Math.min(Number(s.ap || 0), lim));
+}
+
+function clampAllApertures(surfaces) {
+  if (!Array.isArray(surfaces)) return;
+  for (const s of surfaces) clampSurfaceAp(s);
+}
 // -------------------- tracing --------------------
 function traceRayThroughLens(ray, surfaces, wavePreset) {
   const pts = [{ x: ray.p.x, y: ray.p.y }];
@@ -842,8 +875,11 @@ function drawElementsClosed(world, surfaces) {
 
     const apA = Math.max(0, Number(sA.ap || 0));
     const apB = Math.max(0, Number(sB.ap || 0));
-    const apRegion = Math.max(0.01, Math.min(apA, apB));
-
+    // Drawing safety clamp: never draw beyond spherical existence
+    const limA = maxApForSurface(sA);
+    const limB = maxApForSurface(sB);
+    const apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
+     
     drawElementBody(world, sA, sB, apRegion);
   }
 }
@@ -1258,10 +1294,13 @@ function buildSingletAuto({ f, ap, ct, rearAir, form, glass1 }) {
   if (form === "plano_front")  { R1 = 0.0; R2 = -Rbase * 1.6; }
   if (form === "plano_rear")   { R1 = +Rbase * 1.6; R2 = 0.0; }
 
-  return [
+  const chunk = [
     { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
     { type: "", R: R2, t: rearAir, ap, glass: "AIR", stop: false },
   ];
+
+  clampAllApertures(chunk);
+  return chunk;
 }
 
 function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
@@ -1287,21 +1326,25 @@ function buildAchromatAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
   const t1 = ct;
   const t2 = ct;
 
-  if (gap > 1e-9) {
-    return [
+    if (gap > 1e-9) {
+    const chunk = [
       { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
       { type: "", R: R2, t: gap, ap, glass: "AIR", stop: false },
       { type: "", R: R3, t: t2, ap, glass: glass2, stop: false },
       { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
     ];
+    clampAllApertures(chunk);
+    return chunk;
   }
 
-  return [
+    const chunk = [
     { type: "", R: R1, t: t1, ap, glass: glass1, stop: false },
     { type: "", R: R2, t: t2, ap, glass: glass2, stop: false },
     { type: "", R: R3, t: 0.01, ap, glass: glass2, stop: false },
     { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
   ];
+  clampAllApertures(chunk);
+  return chunk;
 }
 
 function readElementModalValues() {
@@ -1436,7 +1479,7 @@ function newClear() {
   if (ui.renderScale) ui.renderScale.value = 1.25;
 
   view.panX = 0; view.panY = 0; view.zoom = 1.0;
-
+  clampAllApertures(lens.surfaces);
   buildTable();
   applySensorToIMS();
   renderAll();
