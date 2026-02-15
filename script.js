@@ -13,7 +13,17 @@
 */
 
 const $ = (sel) => document.querySelector(sel);
-const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); return el; };
+const on = (sel, ev, fn) => {
+  const el = $(sel);
+  if (el) el.addEventListener(ev, fn);
+  return el;
+};
+
+// structuredClone fallback (older browsers)
+const clone = (obj) =>
+  typeof structuredClone === "function"
+    ? structuredClone(obj)
+    : JSON.parse(JSON.stringify(obj));
 
 const canvas = $("#canvas");
 const ctx = canvas.getContext("2d");
@@ -54,10 +64,10 @@ let selectedIndex = 0;
 
 // -------------------- sensor presets --------------------
 const SENSOR_PRESETS = {
-  "ARRI Alexa Mini (S35)":   { w: 28.25, h: 18.17 },
-  "ARRI Alexa Mini LF (LF)": { w: 36.70, h: 25.54 },
-  "Sony VENICE (FF)":        { w: 36.00, h: 24.00 },
-  "Fuji GFX (MF)":           { w: 43.80, h: 32.90 },
+  "ARRI Alexa Mini (S35)": { w: 28.25, h: 18.17 },
+  "ARRI Alexa Mini LF (LF)": { w: 36.7, h: 25.54 },
+  "Sony VENICE (FF)": { w: 36.0, h: 24.0 },
+  "Fuji GFX (MF)": { w: 43.8, h: 32.9 },
 };
 
 function populateSensorPresetsSelect() {
@@ -66,12 +76,9 @@ function populateSensorPresetsSelect() {
   const current = ui.sensorPreset.value;
   const keys = Object.keys(SENSOR_PRESETS);
 
-  ui.sensorPreset.innerHTML = keys
-    .map(k => `<option value="${k}">${k}</option>`)
-    .join("");
+  ui.sensorPreset.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
 
-  // restore selection if possible, else default
-  ui.sensorPreset.value = SENSOR_PRESETS[current] ? current : (keys[0] || "");
+  ui.sensorPreset.value = SENSOR_PRESETS[current] ? current : keys[0] || "";
 }
 
 function getSensorWH() {
@@ -80,14 +87,6 @@ function getSensorWH() {
   return { w, h, halfH: Math.max(0.1, h * 0.5) };
 }
 
-function applySensorToIMS() {
-  const { halfH } = getSensorWH();
-  const ims = lens?.surfaces?.[lens.surfaces.length - 1];
-  if (ims && String(ims.type).toUpperCase() === "IMS") {
-    ims.ap = halfH;
-    syncIMSCellApertureToUI(); // ✅ update de tabel-input mee
-  }
-}
 function syncIMSCellApertureToUI() {
   if (!ui.tbody || !lens?.surfaces?.length) return;
 
@@ -95,9 +94,21 @@ function syncIMSCellApertureToUI() {
   const s = lens.surfaces[i];
   if (!s || String(s.type).toUpperCase() !== "IMS") return;
 
-  const apInput = ui.tbody.querySelector(`input.cellInput[data-k="ap"][data-i="${i}"]`);
+  const apInput = ui.tbody.querySelector(
+    `input.cellInput[data-k="ap"][data-i="${i}"]`
+  );
   if (apInput) apInput.value = Number(s.ap || 0).toFixed(2);
 }
+
+function applySensorToIMS() {
+  const { halfH } = getSensorWH();
+  const ims = lens?.surfaces?.[lens.surfaces.length - 1];
+  if (ims && String(ims.type).toUpperCase() === "IMS") {
+    ims.ap = halfH;
+    syncIMSCellApertureToUI();
+  }
+}
+
 function applyPreset(name) {
   const p = SENSOR_PRESETS[name] || SENSOR_PRESETS["ARRI Alexa Mini LF (LF)"];
   if (ui.sensorW) ui.sensorW.value = p.w.toFixed(2);
@@ -109,21 +120,21 @@ function applyPreset(name) {
 const GLASS_DB = {
   AIR: { nd: 1.0, Vd: 999.0 },
   BK7: { nd: 1.5168, Vd: 64.17 },
-  F2:  { nd: 1.6200, Vd: 36.37 },
-  SF10:{ nd: 1.7283, Vd: 28.41 },
-  LASF35:  { nd: 1.8061, Vd: 25.4 },
+  F2: { nd: 1.62, Vd: 36.37 },
+  SF10: { nd: 1.7283, Vd: 28.41 },
+  LASF35: { nd: 1.8061, Vd: 25.4 },
   LASFN31: { nd: 1.8052, Vd: 25.3 },
-  LF5:     { nd: 1.5800, Vd: 40.0 },
-  "N-SF5":   { nd: 1.67271,  Vd: 32.25 },
-  "S-LAM3":  { nd: 1.717004, Vd: 47.927969 },
+  LF5: { nd: 1.58, Vd: 40.0 },
+  "N-SF5": { nd: 1.67271, Vd: 32.25 },
+  "S-LAM3": { nd: 1.717004, Vd: 47.927969 },
   "S-BAH11": { nd: 1.666718, Vd: 48.325247 },
 
   CZJ_1: { nd: 1.5182, Vd: 63.8 },
   CZJ_2: { nd: 1.6465, Vd: 47.5 },
   CZJ_3: { nd: 1.6055, Vd: 60.4 },
   CZJ_4: { nd: 1.7343, Vd: 28.1 },
-  CZJ_5: { nd: 1.6810, Vd: 54.7 },
-  CZJ_6: { nd: 1.6229, Vd: 60.0 }
+  CZJ_5: { nd: 1.681, Vd: 54.7 },
+  CZJ_6: { nd: 1.6229, Vd: 60.0 },
 };
 
 function glassN(glassName, preset /* d,g,c */) {
@@ -142,17 +153,17 @@ function demoLensSimple() {
   return {
     name: "Demo (simple)",
     surfaces: [
-      { type:"OBJ", R:0.0,    t:10.0, ap:22.0, glass:"AIR",     stop:false },
-      { type:"1",   R:42.0,   t:10.0, ap:22.0, glass:"LASF35",  stop:false },
-      { type:"2",   R:-140.0, t:10.0, ap:21.0, glass:"AIR",     stop:false },
-      { type:"3",   R:-30.0,  t:10.0, ap:19.0, glass:"LASFN31", stop:false },
-      { type:"STOP",R:0.0,    t:10.0, ap:14.0, glass:"AIR",     stop:true  },
-      { type:"5",   R:12.42,  t:10.0, ap:8.5,  glass:"AIR",     stop:false },
-      { type:"AST", R:0.0,    t:6.4,  ap:8.5,  glass:"AIR",     stop:false },
-      { type:"7",   R:-18.93, t:10.0, ap:11.0, glass:"LF5",     stop:false },
-      { type:"8",   R:59.6,   t:10.0, ap:13.0, glass:"LASFN31", stop:false },
-      { type:"9",   R:-40.49, t:10.0, ap:13.0, glass:"AIR",     stop:false },
-      { type:"IMS", R:0.0,    t:0.0,  ap:12.0, glass:"AIR",     stop:false },
+      { type: "OBJ", R: 0.0, t: 10.0, ap: 22.0, glass: "AIR", stop: false },
+      { type: "1", R: 42.0, t: 10.0, ap: 22.0, glass: "LASF35", stop: false },
+      { type: "2", R: -140.0, t: 10.0, ap: 21.0, glass: "AIR", stop: false },
+      { type: "3", R: -30.0, t: 10.0, ap: 19.0, glass: "LASFN31", stop: false },
+      { type: "STOP", R: 0.0, t: 10.0, ap: 14.0, glass: "AIR", stop: true },
+      { type: "5", R: 12.42, t: 10.0, ap: 8.5, glass: "AIR", stop: false },
+      { type: "AST", R: 0.0, t: 6.4, ap: 8.5, glass: "AIR", stop: false },
+      { type: "7", R: -18.93, t: 10.0, ap: 11.0, glass: "LF5", stop: false },
+      { type: "8", R: 59.6, t: 10.0, ap: 13.0, glass: "LASFN31", stop: false },
+      { type: "9", R: -40.49, t: 10.0, ap: 13.0, glass: "AIR", stop: false },
+      { type: "IMS", R: 0.0, t: 0.0, ap: 12.0, glass: "AIR", stop: false },
     ],
   };
 }
@@ -162,29 +173,29 @@ function omit50ConceptV1() {
     name: "OMIT 50mm (concept v1 — scaled Double-Gauss base)",
     notes: [
       "Scaled from Double-Gauss base; used as geometric sanity for this 2D meridional tracer.",
-      "Not optimized; coatings/stop/entrance pupil are not modeled."
+      "Not optimized; coatings/stop/entrance pupil are not modeled.",
     ],
     surfaces: [
-      { type:"OBJ",  R: 0.0,       t: 0.0,      ap: 60.0,     glass:"AIR",     stop:false },
+      { type: "OBJ", R: 0.0, t: 0.0, ap: 60.0, glass: "AIR", stop: false },
 
-      { type:"1",    R: 37.4501,   t: 4.49102,  ap: 16.46707, glass:"S-LAM3",  stop:false },
-      { type:"2",    R: 135.07984, t: 0.0499,   ap: 16.46707, glass:"AIR",     stop:false },
+      { type: "1", R: 37.4501, t: 4.49102, ap: 16.46707, glass: "S-LAM3", stop: false },
+      { type: "2", R: 135.07984, t: 0.0499, ap: 16.46707, glass: "AIR", stop: false },
 
-      { type:"3",    R: 19.59581,  t: 8.23852,  ap: 13.72255, glass:"S-BAH11", stop:false },
-      { type:"4",    R: 0.0,       t: 0.998,    ap: 12.22555, glass:"N-SF5",   stop:false },
+      { type: "3", R: 19.59581, t: 8.23852, ap: 13.72255, glass: "S-BAH11", stop: false },
+      { type: "4", R: 0.0, t: 0.998, ap: 12.22555, glass: "N-SF5", stop: false },
 
-      { type:"5",    R: 12.7994,   t: 5.48403,  ap: 9.73054,  glass:"AIR",     stop:false },
+      { type: "5", R: 12.7994, t: 5.48403, ap: 9.73054, glass: "AIR", stop: false },
 
-      { type:"STOP", R: 0.0,       t: 6.48703,  ap: 9.28144,  glass:"AIR",     stop:true  },
+      { type: "STOP", R: 0.0, t: 6.48703, ap: 9.28144, glass: "AIR", stop: true },
 
-      { type:"7",    R: -15.90319, t: 3.50798,  ap: 9.23154,  glass:"N-SF5",   stop:false },
-      { type:"8",    R: 0.0,       t: 4.48104,  ap: 10.47904, glass:"S-LAM3",  stop:false },
-      { type:"9",    R: -21.71158, t: 0.0499,   ap: 10.47904, glass:"AIR",     stop:false },
+      { type: "7", R: -15.90319, t: 3.50798, ap: 9.23154, glass: "N-SF5", stop: false },
+      { type: "8", R: 0.0, t: 4.48104, ap: 10.47904, glass: "S-LAM3", stop: false },
+      { type: "9", R: -21.71158, t: 0.0499, ap: 10.47904, glass: "AIR", stop: false },
 
-      { type:"10",   R: 110.3493,  t: 3.98204,  ap: 11.47705, glass:"S-BAH11", stop:false },
-      { type:"11",   R: -44.30639, t: 30.6477,  ap: 11.47705, glass:"AIR",     stop:false },
+      { type: "10", R: 110.3493, t: 3.98204, ap: 11.47705, glass: "S-BAH11", stop: false },
+      { type: "11", R: -44.30639, t: 30.6477, ap: 11.47705, glass: "AIR", stop: false },
 
-      { type:"IMS",  R: 0.0,       t: 0.0,      ap: 12.77,    glass:"AIR",     stop:false },
+      { type: "IMS", R: 0.0, t: 0.0, ap: 12.77, glass: "AIR", stop: false },
     ],
   };
 }
@@ -211,10 +222,15 @@ function sanitizeLens(obj) {
 
   // enforce single stop (first wins)
   const firstStop = safe.surfaces.findIndex((s) => s.stop);
-  if (firstStop >= 0) safe.surfaces.forEach((s, i) => { if (i !== firstStop) s.stop = false; });
+  if (firstStop >= 0)
+    safe.surfaces.forEach((s, i) => {
+      if (i !== firstStop) s.stop = false;
+    });
 
   // ensure types
-  safe.surfaces.forEach((s, i) => { if (!s.type || !s.type.trim()) s.type = String(i); });
+  safe.surfaces.forEach((s, i) => {
+    if (!s.type || !s.type.trim()) s.type = String(i);
+  });
 
   return safe;
 }
@@ -222,8 +238,9 @@ function sanitizeLens(obj) {
 function loadLens(obj) {
   lens = sanitizeLens(obj);
   selectedIndex = 0;
-  applySensorToIMS();
-  buildTable();
+
+  buildTable();        // table first (so IMS sync can find the input)
+  applySensorToIMS();  // set IMS ap + update table cell
   renderAll();
 }
 
@@ -234,7 +251,9 @@ function clampSelected() {
 
 function enforceSingleStop(changedIndex) {
   if (!lens.surfaces[changedIndex]?.stop) return;
-  lens.surfaces.forEach((s, i) => { if (i !== changedIndex) s.stop = false; });
+  lens.surfaces.forEach((s, i) => {
+    if (i !== changedIndex) s.stop = false;
+  });
 }
 
 function buildTable() {
@@ -247,7 +266,7 @@ function buildTable() {
     tr.classList.toggle("selected", idx === selectedIndex);
 
     tr.addEventListener("click", (ev) => {
-      if (["INPUT","SELECT","OPTION"].includes(ev.target.tagName)) return;
+      if (["INPUT", "SELECT", "OPTION", "TEXTAREA"].includes(ev.target.tagName)) return;
       selectedIndex = idx;
       buildTable();
     });
@@ -260,18 +279,23 @@ function buildTable() {
       <td style="width:92px"><input class="cellInput" data-k="ap" data-i="${idx}" type="number" step="0.01" value="${s.ap}"></td>
       <td style="width:110px">
         <select class="cellSelect" data-k="glass" data-i="${idx}">
-          ${Object.keys(GLASS_DB).map(name => `<option value="${name}" ${name===s.glass?"selected":""}>${name}</option>`).join("")}
+          ${Object.keys(GLASS_DB)
+            .map(
+              (name) =>
+                `<option value="${name}" ${name === s.glass ? "selected" : ""}>${name}</option>`
+            )
+            .join("")}
         </select>
       </td>
       <td class="cellChk" style="width:58px">
-        <input type="checkbox" data-k="stop" data-i="${idx}" ${s.stop ? "checked":""}>
+        <input type="checkbox" data-k="stop" data-i="${idx}" ${s.stop ? "checked" : ""}>
       </td>
     `;
 
     ui.tbody.appendChild(tr);
   });
 
-  ui.tbody.querySelectorAll("input,select").forEach(el => {
+  ui.tbody.querySelectorAll("input,select").forEach((el) => {
     el.addEventListener("input", onCellChange);
     el.addEventListener("change", onCellChange);
   });
@@ -307,12 +331,18 @@ function onCellChange(e) {
 // -------------------- math helpers --------------------
 function normalize(v) {
   const m = Math.hypot(v.x, v.y);
-  if (m < 1e-12) return {x:0, y:0};
-  return {x:v.x/m, y:v.y/m};
+  if (m < 1e-12) return { x: 0, y: 0 };
+  return { x: v.x / m, y: v.y / m };
 }
-function dot(a,b){ return a.x*b.x + a.y*b.y; }
-function add(a,b){ return {x:a.x+b.x, y:a.y+b.y}; }
-function mul(a, s){ return {x:a.x*s, y:a.y*s}; }
+function dot(a, b) {
+  return a.x * b.x + a.y * b.y;
+}
+function add(a, b) {
+  return { x: a.x + b.x, y: a.y + b.y };
+}
+function mul(a, s) {
+  return { x: a.x * s, y: a.y * s };
+}
 
 function refract(I, N, n1, n2) {
   I = normalize(I);
@@ -323,9 +353,9 @@ function refract(I, N, n1, n2) {
 
   const cosi = -dot(N, I);
   const eta = n1 / n2;
-  const k = 1 - eta*eta*(1 - cosi*cosi);
+  const k = 1 - eta * eta * (1 - cosi * cosi);
   if (k < 0) return null;
-  const T = add(mul(I, eta), mul(N, (eta*cosi - Math.sqrt(k))));
+  const T = add(mul(I, eta), mul(N, eta * cosi - Math.sqrt(k)));
   return normalize(T);
 }
 
@@ -339,8 +369,9 @@ function intersectSurface(ray, surf) {
     const t = (vx - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     const hit = add(ray.p, mul(ray.d, t));
-    if (Math.abs(hit.y) > ap + 1e-9) return { hit, t, vignetted:true, normal:{x:-1,y:0} };
-    return { hit, t, vignetted:false, normal:{x:-1,y:0} };
+    if (Math.abs(hit.y) > ap + 1e-9)
+      return { hit, t, vignetted: true, normal: { x: -1, y: 0 } };
+    return { hit, t, vignetted: false, normal: { x: -1, y: 0 } };
   }
 
   // sphere
@@ -352,16 +383,16 @@ function intersectSurface(ray, surf) {
   const dx = ray.d.x;
   const dy = ray.d.y;
 
-  const A = dx*dx + dy*dy;
-  const B = 2*(px*dx + py*dy);
-  const C = px*px + py*py - rad*rad;
+  const A = dx * dx + dy * dy;
+  const B = 2 * (px * dx + py * dy);
+  const C = px * px + py * py - rad * rad;
 
-  const disc = B*B - 4*A*C;
+  const disc = B * B - 4 * A * C;
   if (disc < 0) return null;
 
   const sdisc = Math.sqrt(disc);
-  const t1 = (-B - sdisc) / (2*A);
-  const t2 = (-B + sdisc) / (2*A);
+  const t1 = (-B - sdisc) / (2 * A);
+  const t2 = (-B + sdisc) / (2 * A);
 
   let t = null;
   if (t1 > 1e-9 && t2 > 1e-9) t = Math.min(t1, t2);
@@ -370,14 +401,14 @@ function intersectSurface(ray, surf) {
   else return null;
 
   const hit = add(ray.p, mul(ray.d, t));
-  const vignetted = (Math.abs(hit.y) > ap + 1e-9);
-  const Nout = normalize({x: hit.x - cx, y: hit.y});
+  const vignetted = Math.abs(hit.y) > ap + 1e-9;
+  const Nout = normalize({ x: hit.x - cx, y: hit.y });
   return { hit, t, vignetted, normal: Nout };
 }
 
 function computeVertices(surfaces) {
   let x = 0;
-  for (let i=0;i<surfaces.length;i++){
+  for (let i = 0; i < surfaces.length; i++) {
     surfaces[i].vx = x;
     x += Number(surfaces[i].t || 0);
   }
@@ -385,7 +416,7 @@ function computeVertices(surfaces) {
 }
 
 function findStopSurfaceIndex(surfaces) {
-  return surfaces.findIndex(s => !!s.stop);
+  return surfaces.findIndex((s) => !!s.stop);
 }
 
 // -------------------- tracing --------------------
@@ -396,15 +427,21 @@ function traceRayThroughLens(ray, surfaces, wavePreset) {
 
   let nBefore = 1.0;
 
-  for (let i=0;i<surfaces.length;i++){
+  for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i];
 
     const hitInfo = intersectSurface(ray, s);
-    if (!hitInfo) { vignetted = true; break; }
+    if (!hitInfo) {
+      vignetted = true;
+      break;
+    }
 
     pts.push(hitInfo.hit);
 
-    if (hitInfo.vignetted) { vignetted = true; break; }
+    if (hitInfo.vignetted) {
+      vignetted = true;
+      break;
+    }
 
     const nAfter = glassN(s.glass, wavePreset);
 
@@ -415,7 +452,10 @@ function traceRayThroughLens(ray, surfaces, wavePreset) {
     }
 
     const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-    if (!newDir) { tir = true; break; }
+    if (!newDir) {
+      tir = true;
+      break;
+    }
 
     ray = { p: hitInfo.hit, d: newDir };
     nBefore = nAfter;
@@ -432,17 +472,23 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
 
   let nBefore = 1.0;
 
-  for (let i=0;i<surfaces.length;i++){
+  for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i];
     const isIMS = String(s?.type || "").toUpperCase() === "IMS";
 
     const hitInfo = intersectSurface(ray, s);
-    if (!hitInfo) { vignetted = true; break; }
+    if (!hitInfo) {
+      vignetted = true;
+      break;
+    }
 
     pts.push(hitInfo.hit);
 
     // DO NOT clip at IMS
-    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+    if (!isIMS && hitInfo.vignetted) {
+      vignetted = true;
+      break;
+    }
 
     const nAfter = glassN(s.glass, wavePreset);
 
@@ -453,7 +499,10 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
     }
 
     const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-    if (!newDir) { tir = true; break; }
+    if (!newDir) {
+      tir = true;
+      break;
+    }
 
     ray = { p: hitInfo.hit, d: newDir };
     nBefore = nAfter;
@@ -464,51 +513,47 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
 
 // -------------------- ray bundles (reference plane) --------------------
 function getRayReferencePlane(surfaces) {
-  // choose first surface after OBJ that is not IMS; fallback to STOP or OBJ
   const stopIdx = findStopSurfaceIndex(surfaces);
 
   let refIdx = 1;
   if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") {
-    refIdx = (stopIdx >= 0) ? stopIdx : 0;
+    refIdx = stopIdx >= 0 ? stopIdx : 0;
   }
 
   const s = surfaces[refIdx] || surfaces[0];
   return {
     xRef: s.vx,
     apRef: Math.max(1e-3, Number(s.ap || 10)),
-    refIdx
+    refIdx,
   };
 }
 
 function buildRays(surfaces, fieldAngleDeg, count) {
-  const n = Math.max(3, Math.min(101, count|0));
+  const n = Math.max(3, Math.min(101, count | 0));
   const theta = (fieldAngleDeg * Math.PI) / 180;
   const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
 
   const xStart = (surfaces[0]?.vx ?? 0) - 80;
 
-  // reference plane = front element (so rays hit edges too)
   const { xRef, apRef } = getRayReferencePlane(surfaces);
 
   const hMax = apRef * 0.98;
   const rays = [];
 
-  const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
+  const tanT = Math.abs(dir.x) < 1e-9 ? 0 : dir.y / dir.x;
 
-  for (let k=0;k<n;k++){
-    const a = (k/(n-1))*2 - 1;
+  for (let k = 0; k < n; k++) {
+    const a = (k / (n - 1)) * 2 - 1;
     const yAtRef = a * hMax;
 
-    // start y so ray is at yAtRef when x==xRef
     const y0 = yAtRef - tanT * (xRef - xStart);
-
-    rays.push({ p:{x:xStart, y:y0}, d:dir });
+    rays.push({ p: { x: xStart, y: y0 }, d: dir });
   }
 
   return rays;
 }
 
-function buildChiefRay(surfaces, fieldAngleDeg){
+function buildChiefRay(surfaces, fieldAngleDeg) {
   const theta = (fieldAngleDeg * Math.PI) / 180;
   const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
 
@@ -518,12 +563,12 @@ function buildChiefRay(surfaces, fieldAngleDeg){
   const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
   const xStop = stopSurf.vx;
 
-  const tanT = (Math.abs(dir.x) < 1e-9) ? 0 : (dir.y / dir.x);
+  const tanT = Math.abs(dir.x) < 1e-9 ? 0 : dir.y / dir.x;
 
   // chief ray through stop center (y=0 at stop)
   const y0 = 0 - tanT * (xStop - xStart);
 
-  return { p:{x:xStart, y:y0}, d:dir };
+  return { p: { x: xStart, y: y0 }, d: dir };
 }
 
 function rayHitYAtX(endRay, x) {
@@ -534,18 +579,25 @@ function rayHitYAtX(endRay, x) {
 }
 
 // crude but useful: max field angle (meridional) that still lands within sensor half-height
-function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH){
-  let lo = 0, hi = 60;
+function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH) {
+  let lo = 0,
+    hi = 60;
   let best = 0;
 
-  for (let iter=0; iter<18; iter++){
+  for (let iter = 0; iter < 18; iter++) {
     const mid = (lo + hi) * 0.5;
     const ray = buildChiefRay(surfaces, mid);
-    const tr = traceRayThroughLens(structuredClone(ray), surfaces, wavePreset);
-    if (!tr || tr.vignetted || tr.tir) { hi = mid; continue; }
+    const tr = traceRayThroughLens(clone(ray), surfaces, wavePreset);
+    if (!tr || tr.vignetted || tr.tir) {
+      hi = mid;
+      continue;
+    }
 
     const y = rayHitYAtX(tr.endRay, sensorX);
-    if (y == null) { hi = mid; continue; }
+    if (y == null) {
+      hi = mid;
+      continue;
+    }
 
     if (Math.abs(y) <= halfH) {
       best = mid;
@@ -567,8 +619,6 @@ function lastPhysicalVertexX(surfaces) {
 }
 
 function estimateEflBflParaxial(surfaces, wavePreset) {
-  // Paraxial: f = -y / u_out  where u_out = dy/dx after last surface (in air)
-  // BFL: axis crossing location relative to last physical vertex.
   const lastVx = lastPhysicalVertexX(surfaces);
   const xStart = (surfaces[0]?.vx ?? 0) - 160;
 
@@ -577,12 +627,13 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
   const xCrossVals = [];
 
   for (const y0 of heights) {
-    const ray = { p:{x:xStart, y:y0}, d: normalize({x:1,y:0}) };
-    const tr = traceRayThroughLensSkipIMS(structuredClone(ray), surfaces, wavePreset);
+    const ray = { p: { x: xStart, y: y0 }, d: normalize({ x: 1, y: 0 }) };
+    const tr = traceRayThroughLensSkipIMS(clone(ray), surfaces, wavePreset);
     if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
 
     const er = tr.endRay;
-    const dx = er.d.x, dy = er.d.y;
+    const dx = er.d.x,
+      dy = er.d.y;
     if (Math.abs(dx) < 1e-12) continue;
 
     const uOut = dy / dx;
@@ -601,11 +652,11 @@ function estimateEflBflParaxial(surfaces, wavePreset) {
 
   if (fVals.length < 2) return { efl: null, bfl: null };
 
-  const efl = fVals.reduce((a,b)=>a+b,0) / fVals.length;
+  const efl = fVals.reduce((a, b) => a + b, 0) / fVals.length;
 
   let bfl = null;
   if (xCrossVals.length >= 2) {
-    const xF = xCrossVals.reduce((a,b)=>a+b,0) / xCrossVals.length;
+    const xF = xCrossVals.reduce((a, b) => a + b, 0) / xCrossVals.length;
     bfl = xF - lastVx;
   }
   return { efl, bfl };
@@ -621,29 +672,29 @@ function estimateTStopApprox(efl, surfaces) {
 }
 
 // -------------------- FOV --------------------
-function rad2deg(r){ return r * 180 / Math.PI; }
+function rad2deg(r) {
+  return (r * 180) / Math.PI;
+}
 
 function computeFovDeg(efl, sensorW, sensorH) {
   if (!Number.isFinite(efl) || efl <= 0) return null;
   const diag = Math.hypot(sensorW, sensorH);
   const hfov = 2 * Math.atan(sensorW / (2 * efl));
   const vfov = 2 * Math.atan(sensorH / (2 * efl));
-  const dfov = 2 * Math.atan(diag    / (2 * efl));
+  const dfov = 2 * Math.atan(diag / (2 * efl));
   return { hfov: rad2deg(hfov), vfov: rad2deg(vfov), dfov: rad2deg(dfov) };
 }
 
 // Coverage YES/NO (simple, pragmatic)
-function coversSensorYesNo({ fov, maxField, mode="diag", marginDeg=0.5 }) {
-  // NOTE: maxField is meridional (vertical) capability.
-  // mode decides what the sensor "requires" as half-angle.
-  if (!fov || !Number.isFinite(maxField)) return { ok:false, req:null };
+function coversSensorYesNo({ fov, maxField, mode = "diag", marginDeg = 0.5 }) {
+  if (!fov || !Number.isFinite(maxField)) return { ok: false, req: null };
 
   let req = null;
   if (mode === "h") req = fov.hfov * 0.5;
   else if (mode === "v") req = fov.vfov * 0.5;
-  else req = fov.dfov * 0.5; // strict
+  else req = fov.dfov * 0.5;
 
-  const ok = (maxField + marginDeg) >= req;
+  const ok = maxField + marginDeg >= req;
   return { ok, req };
 }
 
@@ -657,8 +708,8 @@ function spotRmsAtSensorX(traces, sensorX) {
     ys.push(y);
   }
   if (ys.length < 5) return { rms: null, n: ys.length };
-  const mean = ys.reduce((a,b)=>a+b,0) / ys.length;
-  const rms = Math.sqrt(ys.reduce((acc,y)=>acc + (y-mean)*(y-mean),0) / ys.length);
+  const mean = ys.reduce((a, b) => a + b, 0) / ys.length;
+  const rms = Math.sqrt(ys.reduce((acc, y) => acc + (y - mean) * (y - mean), 0) / ys.length);
   return { rms, n: ys.length };
 }
 
@@ -666,11 +717,11 @@ function autoFocusSensorOffset() {
   computeVertices(lens.surfaces);
 
   const fieldAngle = Number(ui.fieldAngle?.value || 0);
-  const rayCount   = Number(ui.rayCount?.value || 31);
+  const rayCount = Number(ui.rayCount?.value || 31);
   const wavePreset = ui.wavePreset?.value || "d";
 
-  const rays   = buildRays(lens.surfaces, fieldAngle, rayCount);
-  const traces = rays.map(r => traceRayThroughLens(structuredClone(r), lens.surfaces, wavePreset));
+  const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
+  const traces = rays.map((r) => traceRayThroughLens(clone(r), lens.surfaces, wavePreset));
 
   const ims = lens.surfaces[lens.surfaces.length - 1];
   const baseX = ims?.vx ?? 0;
@@ -684,7 +735,7 @@ function autoFocusSensorOffset() {
 
   function scan(center, halfRange, step) {
     const start = center - halfRange;
-    const end   = center + halfRange;
+    const end = center + halfRange;
     for (let off = start; off <= end + 1e-9; off += step) {
       const sensorX = baseX + off;
       const { rms, n } = spotRmsAtSensorX(traces, sensorX);
@@ -697,35 +748,40 @@ function autoFocusSensorOffset() {
   if (Number.isFinite(best.rms)) scan(best.off, 3.0, fineStep);
 
   if (!Number.isFinite(best.rms) || best.n < 5) {
-    if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
+    if (ui.footerWarn)
+      ui.footerWarn.textContent =
+        "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
     return;
   }
 
   if (ui.sensorOffset) ui.sensorOffset.value = best.off.toFixed(2);
-  if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+  if (ui.footerWarn)
+    ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(
+      2
+    )}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
   renderAll();
 }
 
 // -------------------- drawing --------------------
-let view = { panX:0, panY:0, zoom:1.0, dragging:false, lastX:0, lastY:0 };
+let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
 
 function resizeCanvasToCSS() {
   const r = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.max(2, Math.floor(r.width * dpr));
   canvas.height = Math.max(2, Math.floor(r.height * dpr));
-  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 function worldToScreen(p, world) {
   const { cx, cy, s } = world;
-  return { x: cx + (p.x* s), y: cy - (p.y* s) };
+  return { x: cx + p.x * s, y: cy - p.y * s };
 }
 
 function makeWorldTransform() {
   const r = canvas.getBoundingClientRect();
-  const cx = r.width/2 + view.panX;
-  const cy = r.height/2 + view.panY;
+  const cx = r.width / 2 + view.panX;
+  const cy = r.height / 2 + view.panY;
   const base = Number(ui.renderScale?.value || 1.25) * 3.2;
   const s = base * view.zoom;
   return { cx, cy, s };
@@ -734,11 +790,10 @@ function makeWorldTransform() {
 function drawAxes(world) {
   ctx.save();
   ctx.lineWidth = 1;
-  // canvas is now light -> axes should be subtle but visible
   ctx.strokeStyle = "rgba(20,25,35,.28)";
   ctx.beginPath();
-  const p1 = worldToScreen({x:-240, y:0}, world);
-  const p2 = worldToScreen({x: 800, y:0}, world);
+  const p1 = worldToScreen({ x: -240, y: 0 }, world);
+  const p2 = worldToScreen({ x: 800, y: 0 }, world);
   ctx.moveTo(p1.x, p1.y);
   ctx.lineTo(p2.x, p2.y);
   ctx.stroke();
@@ -747,19 +802,17 @@ function drawAxes(world) {
 
 function surfaceXatY(s, y) {
   const vx = s.vx;
-  const R  = s.R;
+  const R = s.R;
 
-  // plane
   if (Math.abs(R) < 1e-9) return vx;
 
-  const cx  = vx + R;
+  const cx = vx + R;
   const rad = Math.abs(R);
   const sign = Math.sign(R) || 1;
 
-  const inside = rad*rad - y*y;
+  const inside = rad * rad - y * y;
   if (inside < 0) return null;
 
-  // same as your drawSurface: take the "optical" intersection branch
   return cx - sign * Math.sqrt(inside);
 }
 
@@ -775,20 +828,16 @@ function buildSurfacePolyline(s, ap, steps = 90) {
 }
 
 function drawElementBody(world, sFront, sBack, apRegion) {
-  // build front and back polylines
   const front = buildSurfacePolyline(sFront, apRegion, 90);
-  const back  = buildSurfacePolyline(sBack,  apRegion, 90);
-
+  const back = buildSurfacePolyline(sBack, apRegion, 90);
   if (front.length < 2 || back.length < 2) return;
 
-  // polygon: front top->bottom, then back bottom->top (reverse)
   const poly = front.concat(back.slice().reverse());
 
   ctx.save();
 
-  // fill light glass body (OSLO-ish)
   ctx.globalAlpha = 0.12;
-  ctx.fillStyle = "#000"; // alpha handles it; looks like subtle grey
+  ctx.fillStyle = "#000";
   ctx.beginPath();
   let p0 = worldToScreen(poly[0], world);
   ctx.moveTo(p0.x, p0.y);
@@ -799,7 +848,6 @@ function drawElementBody(world, sFront, sBack, apRegion) {
   ctx.closePath();
   ctx.fill();
 
-  // stroke outline
   ctx.globalAlpha = 1.0;
   ctx.lineWidth = 1.25;
   ctx.strokeStyle = "#1b1b1b";
@@ -809,7 +857,6 @@ function drawElementBody(world, sFront, sBack, apRegion) {
 }
 
 function drawElementsClosed(world, surfaces) {
-  // draw closed bodies wherever the gap medium is glass (surface[i].glass !== AIR)
   for (let i = 0; i < surfaces.length - 1; i++) {
     const sA = surfaces[i];
     const sB = surfaces[i + 1];
@@ -817,14 +864,12 @@ function drawElementsClosed(world, surfaces) {
     const typeA = String(sA.type || "").toUpperCase();
     const typeB = String(sB.type || "").toUpperCase();
 
-    // don't try to make bodies involving OBJ/IMS
     if (typeA === "OBJ" || typeB === "OBJ") continue;
     if (typeA === "IMS" || typeB === "IMS") continue;
 
     const medium = String(sA.glass || "AIR").toUpperCase();
     if (medium === "AIR") continue;
 
-    // choose a safe aperture to "close" top/bottom
     const apA = Math.max(0, Number(sA.ap || 0));
     const apB = Math.max(0, Number(sB.ap || 0));
     const apRegion = Math.max(0.01, Math.min(apA, apB));
@@ -842,8 +887,8 @@ function drawSurface(world, s) {
   const ap = Math.max(0, s.ap);
 
   if (Math.abs(s.R) < 1e-9) {
-    const a = worldToScreen({x:vx, y:-ap}, world);
-    const b = worldToScreen({x:vx, y: ap}, world);
+    const a = worldToScreen({ x: vx, y: -ap }, world);
+    const b = worldToScreen({ x: vx, y: ap }, world);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
@@ -860,24 +905,23 @@ function drawSurface(world, s) {
   const steps = 90;
   ctx.beginPath();
   let moved = false;
-  for (let i=0;i<=steps;i++){
-    const y = -ap + (i/steps)*(2*ap);
-    const inside = rad*rad - y*y;
+  for (let i = 0; i <= steps; i++) {
+    const y = -ap + (i / steps) * (2 * ap);
+    const inside = rad * rad - y * y;
     if (inside < 0) continue;
-    const x = cx - sign*Math.sqrt(inside);
-    const sp = worldToScreen({x, y}, world);
-    if (!moved) { ctx.moveTo(sp.x, sp.y); moved = true; }
-    else ctx.lineTo(sp.x, sp.y);
+    const x = cx - sign * Math.sqrt(inside);
+    const sp = worldToScreen({ x, y }, world);
+    if (!moved) {
+      ctx.moveTo(sp.x, sp.y);
+      moved = true;
+    } else ctx.lineTo(sp.x, sp.y);
   }
   ctx.stroke();
   ctx.restore();
 }
 
 function drawLens(world, surfaces) {
-  // 1) eerst bodies (gesloten elementen)
   drawElementsClosed(world, surfaces);
-
-  // 2) daarna de losse surfaces eroverheen (geeft die OSLO “lijnen” look)
   for (const s of surfaces) drawSurface(world, s);
 }
 
@@ -886,19 +930,18 @@ function drawRays(world, rayTraces, sensorX) {
   ctx.lineWidth = 1;
   ctx.strokeStyle = "#2a6ef2";
 
-  for (const tr of rayTraces){
+  for (const tr of rayTraces) {
     if (!tr.pts || tr.pts.length < 2) continue;
     ctx.globalAlpha = tr.vignetted ? 0.15 : 0.9;
 
     ctx.beginPath();
     const p0 = worldToScreen(tr.pts[0], world);
     ctx.moveTo(p0.x, p0.y);
-    for (let i=1;i<tr.pts.length;i++){
+    for (let i = 1; i < tr.pts.length; i++) {
       const p = worldToScreen(tr.pts[i], world);
       ctx.lineTo(p.x, p.y);
     }
 
-    // extend to sensor plane for display
     const last = tr.endRay;
     if (last && Number.isFinite(sensorX) && last.d && Math.abs(last.d.x) > 1e-9) {
       const t = (sensorX - last.p.x) / last.d.x;
@@ -922,8 +965,8 @@ function drawStop(world, surfaces) {
   ctx.save();
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#b23b3b";
-  const a = worldToScreen({x:s.vx, y:-ap}, world);
-  const b = worldToScreen({x:s.vx, y: ap}, world);
+  const a = worldToScreen({ x: s.vx, y: -ap }, world);
+  const b = worldToScreen({ x: s.vx, y: ap }, world);
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
@@ -935,26 +978,27 @@ function drawSensor(world, sensorX, halfH) {
   ctx.save();
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#111";
-  ctx.setLineDash([6,6]);
+  ctx.setLineDash([6, 6]);
 
-  const a = worldToScreen({x:sensorX, y:-halfH}, world);
-  const b = worldToScreen({x:sensorX, y: halfH}, world);
+  const a = worldToScreen({ x: sensorX, y: -halfH }, world);
+  const b = worldToScreen({ x: sensorX, y: halfH }, world);
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
 
-  // gate markers
-  ctx.setLineDash([3,6]);
+  ctx.setLineDash([3, 6]);
   ctx.lineWidth = 1.25;
-  const l1 = worldToScreen({x:sensorX-2.5, y: halfH}, world);
-  const l2 = worldToScreen({x:sensorX+2.5, y: halfH}, world);
-  const l3 = worldToScreen({x:sensorX-2.5, y:-halfH}, world);
-  const l4 = worldToScreen({x:sensorX+2.5, y:-halfH}, world);
+  const l1 = worldToScreen({ x: sensorX - 2.5, y: halfH }, world);
+  const l2 = worldToScreen({ x: sensorX + 2.5, y: halfH }, world);
+  const l3 = worldToScreen({ x: sensorX - 2.5, y: -halfH }, world);
+  const l4 = worldToScreen({ x: sensorX + 2.5, y: -halfH }, world);
 
   ctx.beginPath();
-  ctx.moveTo(l1.x, l1.y); ctx.lineTo(l2.x, l2.y);
-  ctx.moveTo(l3.x, l3.y); ctx.lineTo(l4.x, l4.y);
+  ctx.moveTo(l1.x, l1.y);
+  ctx.lineTo(l2.x, l2.y);
+  ctx.moveTo(l3.x, l3.y);
+  ctx.lineTo(l4.x, l4.y);
   ctx.stroke();
 
   ctx.setLineDash([]);
@@ -963,7 +1007,8 @@ function drawSensor(world, sensorX, halfH) {
 
 function drawTitleOverlay(text) {
   ctx.save();
-  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
+  const mono =
+    getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
   ctx.font = "14px " + mono;
   ctx.fillStyle = "#333";
   ctx.fillText(text, 14, 20);
@@ -974,47 +1019,50 @@ function drawTitleOverlay(text) {
 function renderAll() {
   if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-  applySensorToIMS();
   computeVertices(lens.surfaces);
   clampSelected();
 
   const { w: sensorW, h: sensorH, halfH } = getSensorWH();
-
   const fieldAngle = Number(ui.fieldAngle?.value || 0);
-  const rayCount   = Number(ui.rayCount?.value || 31);
+  const rayCount = Number(ui.rayCount?.value || 31);
   const wavePreset = ui.wavePreset?.value || "d";
   const sensorOffset = Number(ui.sensorOffset?.value || 0);
+
+  // keep IMS aperture tied to sensor height
+  applySensorToIMS();
 
   const ims = lens.surfaces[lens.surfaces.length - 1];
   const sensorX = (ims?.vx ?? 0) + sensorOffset;
 
   const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-  const traces = rays.map(r => traceRayThroughLens(structuredClone(r), lens.surfaces, wavePreset));
+  const traces = rays.map((r) => traceRayThroughLens(clone(r), lens.surfaces, wavePreset));
 
-  const vCount = traces.filter(t => t.vignetted).length;
-  const tirCount = traces.filter(t => t.tir).length;
+  const vCount = traces.filter((t) => t.vignetted).length;
+  const tirCount = traces.filter((t) => t.tir).length;
   const vigPct = Math.round((vCount / traces.length) * 100);
 
   const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
   const T = estimateTStopApprox(efl, lens.surfaces);
 
   const fov = computeFovDeg(efl, sensorW, sensorH);
-  const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+  const fovTxt = !fov
+    ? "FOV: —"
+    : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-  // coverage (meridional) test
+  // coverage (meridional) test (2D = vertical)
   const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
+  const covMode = "v";
+  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
 
-  // coverage (meridional) test: dit is V (height) in 2D
-const covMode = "v"; // ✅ matcht maxField (meridional) met sensor hoogte requirement
-const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
-
-const covTxt = !fov
-  ? "COV(V): —"
-  : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+  const covTxt = !fov
+    ? "COV(V): —"
+    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${
+        covers ? "COVERS ✅" : "NO ❌"
+      }`;
 
   if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
+  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
   if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
   if (ui.fov) ui.fov.textContent = fovTxt;
 
@@ -1022,21 +1070,23 @@ const covTxt = !fov
 
   if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : ("T" + T.toFixed(2))}`;
+  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
   if (ui.fovTop) ui.fovTop.textContent = fovTxt;
   if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+  if (tirCount > 0 && ui.footerWarn)
+    ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
   if (ui.status) {
-    ui.status.textContent =
-      `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
+    ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(
+      2
+    )}° • vignetted ${vCount} • ${covTxt}`;
   }
 
   if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
   resizeCanvasToCSS();
-  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const world = makeWorldTransform();
   drawAxes(world);
@@ -1045,23 +1095,29 @@ const covTxt = !fov
   drawRays(world, traces, sensorX);
   drawSensor(world, sensorX, halfH);
 
-  const eflTxt = (efl == null) ? "—" : efl.toFixed(2) + "mm";
-  const bflTxt = (bfl == null) ? "—" : bfl.toFixed(2) + "mm";
-  const tTxt   = (T == null) ? "—" : ("T" + T.toFixed(2));
+  const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
+  const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
+  const tTxt = T == null ? "—" : "T" + T.toFixed(2);
 
-  drawTitleOverlay(`${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`);
+  drawTitleOverlay(
+    `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(
+      2
+    )}mm`
+  );
 }
 
 // -------------------- view controls --------------------
 function bindViewControls() {
-  canvas.addEventListener("mousedown", (e)=>{
+  canvas.addEventListener("mousedown", (e) => {
     view.dragging = true;
     view.lastX = e.clientX;
     view.lastY = e.clientY;
   });
-  window.addEventListener("mouseup", ()=>{ view.dragging=false; });
+  window.addEventListener("mouseup", () => {
+    view.dragging = false;
+  });
 
-  window.addEventListener("mousemove", (e)=>{
+  window.addEventListener("mousemove", (e) => {
     if (!view.dragging) return;
     const dx = e.clientX - view.lastX;
     const dy = e.clientY - view.lastY;
@@ -1072,15 +1128,19 @@ function bindViewControls() {
     renderAll();
   });
 
-  canvas.addEventListener("wheel", (e)=>{
-    e.preventDefault();
-    const delta = Math.sign(e.deltaY);
-    const factor = (delta > 0) ? 0.92 : 1.08;
-    view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-    renderAll();
-  }, { passive:false });
+  canvas.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const delta = Math.sign(e.deltaY);
+      const factor = delta > 0 ? 0.92 : 1.08;
+      view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+      renderAll();
+    },
+    { passive: false }
+  );
 
-  canvas.addEventListener("dblclick", ()=>{
+  canvas.addEventListener("dblclick", () => {
     view.panX = 0;
     view.panY = 0;
     view.zoom = 1.0;
@@ -1098,6 +1158,7 @@ function insertSurface(atIndex, surfaceObj) {
   lens.surfaces.splice(atIndex, 0, surfaceObj);
   selectedIndex = atIndex;
   buildTable();
+  applySensorToIMS();
   renderAll();
 }
 
@@ -1108,11 +1169,11 @@ function insertAfterSelected(surfaceObj) {
 }
 
 // -------------------- buttons --------------------
-on("#btnAdd", "click", ()=>{
-  insertAfterSelected({ type:"", R:0, t:5.0, ap:12.0, glass:"AIR", stop:false });
+on("#btnAdd", "click", () => {
+  insertAfterSelected({ type: "", R: 0, t: 5.0, ap: 12.0, glass: "AIR", stop: false });
 });
 
-on("#btnAddElement", "click", ()=>{
+on("#btnAddElement", "click", () => {
   clampSelected();
 
   let insertAt = selectedIndex + 1;
@@ -1126,83 +1187,84 @@ on("#btnAddElement", "click", ()=>{
   const airGap = 4.0;
   const ap = 18.0;
 
-  const s1 = { type:"", R: 40.0, t: centerThickness, ap, glass: glassName, stop:false };
-  const s2 = { type:"", R:-40.0, t: airGap,         ap, glass: "AIR",   stop:false };
+  const s1 = { type: "", R: 40.0, t: centerThickness, ap, glass: glassName, stop: false };
+  const s2 = { type: "", R: -40.0, t: airGap, ap, glass: "AIR", stop: false };
 
   lens.surfaces.splice(insertAt, 0, s1, s2);
   selectedIndex = insertAt;
   buildTable();
+  applySensorToIMS();
   renderAll();
 });
 
 function newClear() {
-  // 1) reset lens naar een lege template (of kies je default preset)
   lens = sanitizeLens({
     name: "New Lens",
     surfaces: [
-      { type:"OBJ", R:0.0, t:0.0, ap:60.0, glass:"AIR", stop:false },
-      // simpele start surface zodat je meteen iets hebt
-      { type:"1",   R:40.0, t:6.0, ap:18.0, glass:"BK7", stop:false },
-      { type:"2",   R:-40.0, t:6.0, ap:18.0, glass:"AIR", stop:false },
-      { type:"STOP",R:0.0,  t:10.0, ap:8.0,  glass:"AIR", stop:true  },
-      { type:"IMS", R:0.0,  t:0.0,  ap:12.77,glass:"AIR", stop:false },
+      { type: "OBJ", R: 0.0, t: 0.0, ap: 60.0, glass: "AIR", stop: false },
+      { type: "1", R: 40.0, t: 6.0, ap: 18.0, glass: "BK7", stop: false },
+      { type: "2", R: -40.0, t: 6.0, ap: 18.0, glass: "AIR", stop: false },
+      { type: "STOP", R: 0.0, t: 10.0, ap: 8.0, glass: "AIR", stop: true },
+      { type: "IMS", R: 0.0, t: 0.0, ap: 12.77, glass: "AIR", stop: false },
     ],
   });
 
   selectedIndex = 0;
 
-  // 2) reset UI controls
   if (ui.fieldAngle) ui.fieldAngle.value = 0;
   if (ui.rayCount) ui.rayCount.value = 31;
   if (ui.wavePreset) ui.wavePreset.value = "d";
   if (ui.sensorOffset) ui.sensorOffset.value = 0;
   if (ui.renderScale) ui.renderScale.value = 1.25;
 
-  // 3) reset view (pan/zoom)
-  view.panX = 0; view.panY = 0; view.zoom = 1.0;
+  view.panX = 0;
+  view.panY = 0;
+  view.zoom = 1.0;
 
-  // 4) apply sensor -> IMS ap, rebuild + render
-  applySensorToIMS();
   buildTable();
+  applySensorToIMS();
   renderAll();
 }
 
 on("#btnNew", "click", newClear);
 
-on("#btnDuplicate", "click", ()=>{
+on("#btnDuplicate", "click", () => {
   clampSelected();
   const s = lens.surfaces[selectedIndex];
   if (!s) return;
-  const copy = structuredClone(s);
+  const copy = clone(s);
   lens.surfaces.splice(selectedIndex + 1, 0, copy);
   selectedIndex += 1;
   buildTable();
+  applySensorToIMS();
   renderAll();
 });
 
-on("#btnMoveUp", "click", ()=>{
+on("#btnMoveUp", "click", () => {
   clampSelected();
   if (selectedIndex <= 0) return;
   const a = lens.surfaces[selectedIndex];
-  lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex-1];
-  lens.surfaces[selectedIndex-1] = a;
+  lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex - 1];
+  lens.surfaces[selectedIndex - 1] = a;
   selectedIndex -= 1;
   buildTable();
+  applySensorToIMS();
   renderAll();
 });
 
-on("#btnMoveDown", "click", ()=>{
+on("#btnMoveDown", "click", () => {
   clampSelected();
-  if (selectedIndex >= lens.surfaces.length-1) return;
+  if (selectedIndex >= lens.surfaces.length - 1) return;
   const a = lens.surfaces[selectedIndex];
-  lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex+1];
-  lens.surfaces[selectedIndex+1] = a;
+  lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex + 1];
+  lens.surfaces[selectedIndex + 1] = a;
   selectedIndex += 1;
   buildTable();
+  applySensorToIMS();
   renderAll();
 });
 
-on("#btnRemove", "click", ()=>{
+on("#btnRemove", "click", () => {
   clampSelected();
   if (lens.surfaces.length <= 2) return;
   if (isProtectedIndex(selectedIndex)) {
@@ -1212,12 +1274,13 @@ on("#btnRemove", "click", ()=>{
   lens.surfaces.splice(selectedIndex, 1);
   selectedIndex = Math.max(0, selectedIndex - 1);
   buildTable();
+  applySensorToIMS();
   renderAll();
 });
 
-on("#btnSave", "click", ()=>{
+on("#btnSave", "click", () => {
   const payload = JSON.stringify(lens, null, 2);
-  const blob = new Blob([payload], {type:"application/json"});
+  const blob = new Blob([payload], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -1226,20 +1289,20 @@ on("#btnSave", "click", ()=>{
   URL.revokeObjectURL(url);
 });
 
-on("#btnAutoFocus", "click", ()=> autoFocusSensorOffset());
+on("#btnAutoFocus", "click", () => autoFocusSensorOffset());
 
-on("#btnLoadOmit", "click", ()=>{
+on("#btnLoadOmit", "click", () => {
   loadLens(omit50ConceptV1());
 });
 
-on("#btnLoadDemo", "click", ()=>{
+on("#btnLoadDemo", "click", () => {
   loadLens(demoLensSimple());
 });
 
-on("#fileLoad", "change", async (e)=>{
+on("#fileLoad", "change", async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
-  try{
+  try {
     const txt = await file.text();
     const obj = JSON.parse(txt);
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
@@ -1257,20 +1320,20 @@ on("#fileLoad", "change", async (e)=>{
     }
 
     loadLens(obj);
-  }catch(err){
+  } catch (err) {
     if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err.message}`;
-  }finally{
+  } finally {
     e.target.value = "";
   }
 });
 
 // -------------------- controls -> rerender --------------------
-["fieldAngle","rayCount","wavePreset","sensorOffset","renderScale","sensorW","sensorH"].forEach(id=>{
-  on("#"+id, "input", renderAll);
-  on("#"+id, "change", renderAll);
+["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
+  on("#" + id, "input", renderAll);
+  on("#" + id, "change", renderAll);
 });
 
-on("#sensorPreset", "change", (e)=>{
+on("#sensorPreset", "change", (e) => {
   applyPreset(e.target.value);
   renderAll();
 });
@@ -1281,10 +1344,7 @@ window.addEventListener("resize", renderAll);
 function init() {
   populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-  loadLens(lens);
-  buildTable();
+  loadLens(lens);       // does buildTable + applySensorToIMS + renderAll
   bindViewControls();
-  renderAll();
 }
 init();
-
