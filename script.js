@@ -1174,9 +1174,6 @@ function modalExists() {
 
 function openElementModal() {
   if (!modalExists()) return false;
-  elUI.modal.classList.remove("hidden");
-  return true;
-}
 
   // populate selects once
   if (elUI.g1 && !elUI.g1.dataset._filled) {
@@ -1188,21 +1185,22 @@ function openElementModal() {
     elUI.g1.dataset._filled = "1";
   }
 
-  // sensible defaults matching your screenshot
-  if (elUI.type && !elUI.type.value) {
-    // if HTML already has its own options, we respect them.
-    // but if it is empty, we inject basic set.
-    if (!elUI.type.querySelector("option")) {
-      elUI.type.innerHTML = `
-        <option value="singlet">Singlet (2 surfaces)</option>
-        <option value="achromat">Achromat (4 surfaces)</option>
-      `;
-    }
-    elUI.type.value = elUI.type.value || "achromat";
+  // sensible defaults (alleen als select leeg is)
+  if (elUI.type && !elUI.type.querySelector("option")) {
+    elUI.type.innerHTML = `
+      <option value="achromat">Achromat (4 surfaces)</option>
+      <option value="singlet">Singlet (2 surfaces)</option>
+      <option value="stop">STOP (1 surface)</option>
+      <option value="airgap">Air gap (1 surface)</option>
+    `;
+    elUI.type.value = "achromat";
   }
 
   if (elUI.mode && !elUI.mode.querySelector("option")) {
-    elUI.mode.innerHTML = `<option value="auto">Auto</option>`;
+    elUI.mode.innerHTML = `
+      <option value="auto">Auto</option>
+      <option value="custom">Custom</option>
+    `;
     elUI.mode.value = "auto";
   }
 
@@ -1217,13 +1215,15 @@ function openElementModal() {
     elUI.form.value = "symmetric";
   }
 
-  if (elUI.f) elUI.f.value = Number(elUI.f.value || 50);
-  if (elUI.ap) elUI.ap.value = Number(elUI.ap.value || 18);
-  if (elUI.ct) elUI.ct.value = Number(elUI.ct.value || 4);
+  // keep current values if present, else set defaults
+  if (elUI.f)   elUI.f.value = Number(elUI.f.value || 50);
+  if (elUI.ap)  elUI.ap.value = Number(elUI.ap.value || 18);
+  if (elUI.ct)  elUI.ct.value = Number(elUI.ct.value || 4);
   if (elUI.gap) elUI.gap.value = Number(elUI.gap.value || 0);
   if (elUI.rear) elUI.rear.value = Number(elUI.rear.value || 4);
 
-  elUI.modal.classList.add("open");
+  // OPEN (jouw HTML gebruikt .hidden)
+  elUI.modal.classList.remove("hidden");
   return true;
 }
 
@@ -1388,6 +1388,7 @@ if (modalExists()) {
     closeElementModal();
   }
 });
+   }
 
 // -------------------- buttons --------------------
 on("#btnAdd", "click", () => {
