@@ -41,7 +41,7 @@ body{
 .brandText .title{ font-weight:700; letter-spacing:.2px; }
 .brandText .sub{ font-size:12px; color:var(--muted); margin-top:2px; }
 
-.topActions{ display:flex; gap:8px; align-items:center; }
+.topActions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 
 .btn{
   appearance:none;
@@ -97,7 +97,6 @@ body{
   margin-bottom:10px;
 }
 .ctl{ display:flex; flex-direction:column; gap:5px; }
-.ctl span{ font-size:12px; color:var(--muted); }
 .ctl label{ font-size:12px; color:var(--muted); }
 .ctl input, .ctl select{
   height:32px;
@@ -137,6 +136,7 @@ body{
   vertical-align:middle;
 }
 .surfTable tbody tr:hover td{ background:#f0f6ff; }
+.surfTable tbody tr.selected td{ background:#dbe9ff !important; }
 
 .cellInput, .cellSelect{
   width:100%;
@@ -147,10 +147,7 @@ body{
   background:white;
   font-size:12px;
 }
-.cellSelect{ background:white; }
-.cellChk{
-  display:flex; justify-content:center;
-}
+.cellChk{ display:flex; justify-content:center; }
 .cellChk input{ transform:scale(1.05); }
 
 .badge{
