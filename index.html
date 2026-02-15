@@ -12,11 +12,12 @@
       <div class="brandDot"></div>
       <div class="brandText">
         <div class="title">Meridional Raytracer (2D)</div>
-        <div class="sub">OSLO-ish lens doorsnede + rays • spheres/planes • apertures • stop-aware</div>
+        <div class="sub">OSLO-ish lens doorsnede + rays • spheres/planes • apertures • stop-aware • element builder</div>
       </div>
     </div>
 
     <div class="topActions">
+      <button id="btnNew" class="btn">New / Clear</button>
       <button id="btnLoadOmit" class="btn">Load OMIT 50 preset</button>
       <button id="btnLoadDemo" class="btn">Load demo lens</button>
 
@@ -161,6 +162,140 @@
       </div>
     </section>
   </main>
+
+  <!-- Element Builder Modal -->
+  <div id="elementModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modalCard">
+      <div class="modalHead">
+        <div class="modalTitle">Add Element</div>
+        <button id="elClose" class="btn">✕</button>
+      </div>
+
+      <div class="modalBody">
+        <div class="modalGrid">
+          <div class="ctl">
+            <label>Element type</label>
+            <select id="elType">
+              <option value="singlet">Singlet (1 lens)</option>
+              <option value="achromat" selected>Achromat (2 lenses, cemented)</option>
+              <option value="stop">Stop / Iris</option>
+              <option value="airgap">Air gap only</option>
+            </select>
+          </div>
+
+          <div class="ctl">
+            <label>Mode</label>
+            <select id="elMode">
+              <option value="auto" selected>Auto-calc (from focal length)</option>
+              <option value="custom">Custom values (you type R/t/ap/glass)</option>
+            </select>
+          </div>
+
+          <div class="ctl">
+            <label>Target focal length (mm)</label>
+            <input id="elF" type="number" step="0.1" value="50" />
+          </div>
+
+          <div class="ctl">
+            <label>Clear semi-diameter (ap) (mm)</label>
+            <input id="elAp" type="number" step="0.1" value="18" />
+          </div>
+
+          <div class="ctl">
+            <label>Center thickness per lens (mm)</label>
+            <input id="elCt" type="number" step="0.1" value="4.0" />
+          </div>
+
+          <div class="ctl">
+            <label>Cement / gap thickness (mm)</label>
+            <input id="elGap" type="number" step="0.1" value="0.0" />
+          </div>
+
+          <div class="ctl">
+            <label>Rear air gap (mm)</label>
+            <input id="elAir" type="number" step="0.1" value="4.0" />
+          </div>
+
+          <div class="ctl">
+            <label>Form (shape)</label>
+            <select id="elForm">
+              <option value="symmetric" selected>Symmetric (R2 = -R1)</option>
+              <option value="plano">Plano (R2 = plane)</option>
+              <option value="weakMeniscus">Weak meniscus</option>
+            </select>
+          </div>
+
+          <div class="ctl">
+            <label>Glass 1 (positive / crown)</label>
+            <select id="elGlass1"></select>
+          </div>
+
+          <div class="ctl">
+            <label>Glass 2 (negative / flint)</label>
+            <select id="elGlass2"></select>
+          </div>
+
+          <div class="ctl span2">
+            <label>Glass note</label>
+            <div id="elGlassNote" class="smallNote">—</div>
+          </div>
+
+          <!-- Custom section -->
+          <div id="customBox" class="customBox span2 hidden">
+            <div class="customTitle">Custom insert</div>
+            <div class="customGrid">
+              <div class="ctl">
+                <label>Custom # surfaces</label>
+                <select id="elCustomCount">
+                  <option value="2">2 surfaces (singlet)</option>
+                  <option value="4" selected>4 surfaces (achromat)</option>
+                </select>
+              </div>
+
+              <div class="ctl">
+                <label>Custom preset</label>
+                <select id="elCustomPreset">
+                  <option value="blank" selected>Blank (all zeros)</option>
+                  <option value="starter">Starter (reasonable defaults)</option>
+                </select>
+              </div>
+
+              <div class="customHint span2">
+                In custom mode: we insert surfaces exactly as typed. Glass is still “medium after surface”.
+              </div>
+
+              <div class="customTableWrap span2">
+                <table class="customTable">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Type</th>
+                      <th>R</th>
+                      <th>t</th>
+                      <th>ap</th>
+                      <th>glass</th>
+                    </tr>
+                  </thead>
+                  <tbody id="elCustomTbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="ctl span2">
+            <label>Note</label>
+            <div class="smallNote">
+              Auto-calc is thin-lens starting math (great to start, not Zemax-optimized). You can tweak radii/diktes daarna handmatig.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modalFoot">
+        <button id="elAdd" class="btn">Insert element</button>
+      </div>
+    </div>
+  </div>
 
   <script src="./script.js"></script>
 </body>
