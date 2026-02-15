@@ -1169,9 +1169,8 @@ const elUI = {
 };
 
 function modalExists() {
-  return !!(elUI.modal && elUI.type && elUI.mode && elUI.f && elUI.ap && elUI.ct && elUI.g1 && elUI.g2 && elUI.insert && elUI.cancel);
+  return !!(elUI.modal && elUI.insert && elUI.cancel && elUI.type && elUI.mode && elUI.f && elUI.ap && elUI.ct);
 }
-
 function openElementModal() {
   if (!modalExists()) return false;
 
