@@ -1664,7 +1664,7 @@
           const yO = yS * inv * rO;
 
           const u = 0.5 + (xO / (2 * halfObjH));
-          const v = 0.5 - (yO / (2 * halfObjH));
+          const v = 0.5 + (yO / (2 * halfObjH));
           const c = sample(u, v);
           rr = c[0]; gg = c[1]; bb = c[2]; aa = c[3];
         }
