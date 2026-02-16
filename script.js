@@ -1693,36 +1693,38 @@ drawPreviewViewport();
 
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
+  if (!e.deltaY) return; // ✅ voorkomt zoom-jumps bij deltaY==0 events
 
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
 
-  // base scale (zonder pan/zoom)
-  const base = Number(ui.renderScale?.value || 1.25) * 3.2;
+const base = num(ui.renderScale?.value, 1.25) * 3.2;
+   if (!Number.isFinite(base) || base <= 0) return;
+
   const cx0 = rect.width / 2;
   const cy0 = rect.height / 2;
 
-  // world transform vóór zoom (met huidige pan/zoom)
   const s0 = base * view.zoom;
   if (!Number.isFinite(s0) || s0 <= 0) return;
 
   const wx = (mx - (cx0 + view.panX)) / s0;
   const wy = ((cy0 + view.panY) - my) / s0;
 
-  // update zoom
-  const delta = Math.sign(e.deltaY);
-  const factor = delta > 0 ? 0.92 : 1.08;
-  const zNew = Math.max(0.12, Math.min(12, view.zoom * factor));
-  view.zoom = zNew;
+  // ✅ smooth zoom (trackpad-friendly)
+  const zoomFactor = Math.exp(-e.deltaY * 0.0015); // tweak 0.001..0.003 naar smaak
+  view.zoom = Math.max(0.12, Math.min(12, view.zoom * zoomFactor));
 
-  // world transform na zoom
   const s1 = base * view.zoom;
   if (!Number.isFinite(s1) || s1 <= 0) return;
 
-  // pan ABSOLUUT instellen zodat cursor world-point locked blijft
   view.panX = mx - (cx0 + wx * s1);
   view.panY = my - (cy0 - wy * s1);
+
+  // ✅ safety: als er ooit iets NaN wordt → reset
+  if (!Number.isFinite(view.panX) || !Number.isFinite(view.panY) || !Number.isFinite(view.zoom)) {
+    view.panX = 0; view.panY = 0; view.zoom = 1.0;
+  }
 
   scheduleRenderAll();
 }, { passive: false });
