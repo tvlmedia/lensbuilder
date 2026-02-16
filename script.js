@@ -1905,5 +1905,39 @@ function init() {
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
   loadLens(lens);
   bindViewControls();
+
+  // -------------------- preview events --------------------
+  if (ui.tabRays) ui.tabRays.addEventListener("click", () => setRightTab("rays"));
+  if (ui.tabPreview) ui.tabPreview.addEventListener("click", () => setRightTab("preview"));
+
+  if (ui.prevImg) {
+    ui.prevImg.addEventListener("change", (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+
+      const url = URL.createObjectURL(f);
+      const im = new Image();
+      im.onload = () => {
+        preview.img = im;
+
+        // draw into offscreen canvas
+        preview.imgCanvas.width = im.naturalWidth;
+        preview.imgCanvas.height = im.naturalHeight;
+        preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+        preview.imgCtx.drawImage(im, 0, 0);
+
+        preview.ready = true;
+        URL.revokeObjectURL(url);
+      };
+      im.src = url;
+    });
+  }
+
+  if (ui.btnRenderPreview) {
+    ui.btnRenderPreview.addEventListener("click", () => {
+      setRightTab("preview");
+      renderPreview();
+    });
+  }
 }
 init();
