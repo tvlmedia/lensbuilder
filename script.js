@@ -531,14 +531,14 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
   }
 
-  // ✅ Lens focus: shift the whole lens block (everything except IMS) relative to sensor plane
-  // Convention: +lensShift moves lens TOWARD the sensor (to the right, +x).
-  if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
-    for (let i = 0; i < surfaces.length; i++) {
-      const t = String(surfaces[i]?.type || "").toUpperCase();
-      if (t !== "IMS") surfaces[i].vx += lensShift;
-    }
+  // ✅ Lens focus: shift the whole PHYSICAL lens block relative to sensor plane
+// Convention: +lensShift moves lens TOWARD the sensor (+x).
+if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
+  for (let i = 0; i < surfaces.length; i++) {
+    const t = String(surfaces[i]?.type || "").toUpperCase();
+    if (t !== "IMS" && t !== "OBJ") surfaces[i].vx += lensShift;
   }
+}
 
   return x;
 }
