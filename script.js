@@ -2497,394 +2497,298 @@ drawPreviewViewport();
     const target = num(prompt("Target focal length (mm)?", String(Math.round(cur))), cur);
     if (!Number.isFinite(target) || target <= 0) return;
 
-    const k = target / cur;
+     const k = target / cur;
 
-    // Scale geometry: radii + thicknesses (keep OBJ.t, IMS.t = 0)
-    for (let i = 0; i < lens.surfaces.length; i++) {
-      const s = lens.surfaces[i];
-      const t = String(s.type).toUpperCase();
-      if (t !== "OBJ" && t !== "IMS") s.t = Number(s.t || 0) * k;
-      if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
-      // ap: leave as-is (don’t auto scale aperture), user controls it
-    }
+    // Scale radii + thicknesses (except OBJ/IMS t=0 ok) so geometry scales with focal.
+    // Keep stop aperture as-is (because T changes), but you can optionally scale it too.
+    lens.surfaces.forEach((s) => {
+      const t0 = String(s.type || "").toUpperCase();
+      if (t0 === "OBJ" || t0 === "IMS") {
+        // OBJ/IMS thickness usually 0; if user put nonzero, scale it too
+        s.t = Number(s.t || 0) * k;
+        return;
+      }
+      // radii
+      s.R = Number(s.R || 0) * k;
+      // thickness to next
+      s.t = Number(s.t || 0) * k;
+      // aperture semi-diam: keep physical clear aperture (DON'T scale) by default
+      // If you want “everything scales”, uncomment:
+      // s.ap = Number(s.ap || 0) * k;
+    });
 
-    computeVertices(lens.surfaces);
     clampAllApertures(lens.surfaces);
-      buildTable();
+    buildTable();
     renderAll();
-    if (preview.ready) scheduleRenderPreview();
-
-    if (ui.footerWarn) ui.footerWarn.textContent = `Scale→FL: EFL ${cur.toFixed(2)} → target ${target.toFixed(2)} (k=${k.toFixed(4)}).`;
+    if (ui.footerWarn) ui.footerWarn.textContent = `Scaled lens by ×${k.toFixed(4)} to hit FL≈${target.toFixed(2)}mm`;
   }
 
   function setTargetTStop() {
     const wavePreset = ui.wavePreset?.value || "d";
+    computeVertices(lens.surfaces);
+
     const { efl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
     if (!Number.isFinite(efl) || efl <= 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: EFL unknown (try Scale→FL or fix geometry).";
+      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: EFL not solvable (check lens).";
       return;
     }
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     if (stopIdx < 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: no STOP surface marked.";
+      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: no STOP surface set.";
       return;
     }
 
-    const currentT = estimateTStopApprox(efl, lens.surfaces);
-    const targetT = num(prompt("Target T-stop? (approx)", currentT ? currentT.toFixed(2) : "2.00"), currentT || 2.0);
+    const curT = estimateTStopApprox(efl, lens.surfaces);
+    const targetT = num(prompt("Target T-stop?", curT ? curT.toFixed(2) : "2.00"), curT || 2.0);
     if (!Number.isFinite(targetT) || targetT <= 0) return;
 
-    // T ≈ EFL / (2 * stop_ap)  => stop_ap ≈ EFL / (2T)
-    const newAp = efl / (2 * targetT);
-
-    lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
-
-    clampAllApertures(lens.surfaces);
-        buildTable();
-    renderAll();
-    if (preview.ready) scheduleRenderPreview();
-
-    if (ui.footerWarn) ui.footerWarn.textContent = `Set T: stop ap → ${lens.surfaces[stopIdx].ap.toFixed(2)}mm (semi-diam) for T${targetT.toFixed(2)} @ EFL ${efl.toFixed(2)}mm.`;
-  }
-
-  // -------------------- New Lens modal --------------------
-  function openNewLensModal() {
-    if (!ui.newLensModal) return;
-    ui.newLensModal.classList.remove("hidden");
-  }
-  function closeNewLensModal() {
-    if (!ui.newLensModal) return;
-    ui.newLensModal.classList.add("hidden");
-  }
-
-  function makeTemplate(templateName) {
-    const t = String(templateName || "blank");
-    if (t === "doubleGauss") return omit50ConceptV1(); // good enough baseline for now
-    if (t === "tessar") {
-      return sanitizeLens({
-        name: "Tessar-ish (simple)",
-        surfaces: [
-          { type: "OBJ",  R: 0,    t: 0,    ap: 60,  glass: "AIR", stop: false },
-          { type: "1",    R: 70,   t: 4.5,  ap: 18,  glass: "BK7", stop: false },
-          { type: "2",    R: -35,  t: 1.2,  ap: 18,  glass: "AIR", stop: false },
-          { type: "STOP", R: 0,    t: 6.0,  ap: 8,   glass: "AIR", stop: true },
-          { type: "4",    R: -50,  t: 3.8,  ap: 16,  glass: "F2",  stop: false },
-          { type: "5",    R: 120,  t: 18,   ap: 16,  glass: "AIR", stop: false },
-          { type: "IMS",  R: 0,    t: 0,    ap: 12.77, glass: "AIR", stop: false },
-        ],
-      });
-    }
-    if (t === "omit50v1") return omit50ConceptV1();
-    return sanitizeLens({
-      name: "Blank",
-      surfaces: [
-        { type: "OBJ",  R: 0.0, t: 0.0,  ap: 60.0,  glass: "AIR", stop: false },
-        { type: "STOP", R: 0.0, t: 20.0, ap: 8.0,   glass: "AIR", stop: true  },
-        { type: "IMS",  R: 0.0, t: 0.0,  ap: 12.77, glass: "AIR", stop: false },
-      ],
-    });
-  }
-
-  function createNewLensFromModal() {
-    const template = ui.nlTemplate?.value || "blank";
-    const targetF = num(ui.nlFocal?.value, 50);
-    const targetT = num(ui.nlT?.value, 2.8);
-    const stopPos = ui.nlStopPos?.value || "keep";
-    const name = (ui.nlName?.value || "New lens").trim();
-
-    let L = sanitizeLens(makeTemplate(template));
-    L.name = name || L.name;
-
-    // optionally force STOP to middle
-    if (stopPos === "middle") {
-      const stopIdx = findStopSurfaceIndex(L.surfaces);
-      if (stopIdx >= 0) L.surfaces[stopIdx].stop = false;
-      const mid = Math.max(1, Math.min(L.surfaces.length - 2, Math.floor(L.surfaces.length / 2)));
-      L.surfaces[mid].stop = true;
-      L.surfaces[mid].type = "STOP";
-      // ensure only one stop
-      const f = findStopSurfaceIndex(L.surfaces);
-      L.surfaces.forEach((s, i) => { if (i !== f) s.stop = false; });
-    }
-
-    loadLens(L);
-
-    // scale to target focal
-    (function () {
-      const wavePreset = ui.wavePreset?.value || "d";
-      const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
-      if (Number.isFinite(cur) && cur > 0 && Number.isFinite(targetF) && targetF > 0) {
-        const k = targetF / cur;
-        for (let i = 0; i < lens.surfaces.length; i++) {
-          const s = lens.surfaces[i];
-          const tt = String(s.type).toUpperCase();
-          if (tt !== "OBJ" && tt !== "IMS") s.t = Number(s.t || 0) * k;
-          if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
-        }
-      }
-    })();
-
-    // set T
-    (function () {
-      const wavePreset = ui.wavePreset?.value || "d";
-      const { efl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-      const stopIdx = findStopSurfaceIndex(lens.surfaces);
-      if (stopIdx >= 0 && Number.isFinite(efl) && efl > 0 && Number.isFinite(targetT) && targetT > 0) {
-        const newAp = efl / (2 * targetT);
-        lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
-      }
-    })();
+    // T ≈ EFL / (2*stopAp)  => stopAp ≈ EFL / (2*T)
+    const newStopAp = Math.max(0.05, efl / (2 * targetT));
+    lens.surfaces[stopIdx].ap = newStopAp;
 
     clampAllApertures(lens.surfaces);
     buildTable();
     renderAll();
-    closeNewLensModal();
+    if (ui.footerWarn) ui.footerWarn.textContent = `STOP ap set to ${newStopAp.toFixed(2)}mm → T≈${targetT.toFixed(2)} (approx)`;
   }
 
-  // -------------------- preview fullscreen --------------------
-  async function togglePreviewFullscreen() {
-    const pane = ui.previewPane;
-    if (!pane) return;
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else {
-        await pane.requestFullscreen();
-      }
-    } catch (e) {
-      if (ui.footerWarn) ui.footerWarn.textContent = `Fullscreen failed: ${e.message}`;
-    }
+  // -------------------- toolbar actions (CRUD) --------------------
+  function newClear() {
+    // minimal blank: OBJ + IMS
+    const blank = {
+      name: "Blank lens",
+      notes: ["OBJ + IMS only"],
+      surfaces: [
+        { type: "OBJ", R: 0, t: 0, ap: 60, glass: "AIR", stop: false },
+        { type: "IMS", R: 0, t: 0, ap: 12.77, glass: "AIR", stop: false },
+      ],
+    };
+    loadLens(blank);
+    if (ui.footerWarn) ui.footerWarn.textContent = "Cleared. Add surfaces/elements.";
   }
 
-  // -------------------- buttons --------------------
-  on("#btnAdd", "click", () => {
-    insertAfterSelected({ type: "", R: 0, t: 5.0, ap: 12.0, glass: "AIR", stop: false });
-  });
+  function addSurface() {
+    const ap = 18;
+    insertAfterSelected({ type: "", R: 0, t: 5, ap, glass: "AIR", stop: false });
+  }
 
-  on("#btnAddElement", "click", () => {
-    if (openElementModal()) return;
-    if (ui.footerWarn) ui.footerWarn.textContent = "Add Element modal not found (#elementModal etc).";
-  });
-
-  on("#btnNew", "click", () => openNewLensModal());
-
-  on("#btnDuplicate", "click", () => {
+  function duplicateSurface() {
     clampSelected();
-    const s = lens.surfaces[selectedIndex];
-    if (!s) return;
-    const copy = clone(s);
-    lens.surfaces.splice(selectedIndex + 1, 0, copy);
-    selectedIndex += 1;
-    buildTable(); applySensorToIMS(); renderAll();
-  });
-
-  on("#btnMoveUp", "click", () => {
-    clampSelected();
-    if (selectedIndex <= 0) return;
-    const a = lens.surfaces[selectedIndex];
-    lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex - 1];
-    lens.surfaces[selectedIndex - 1] = a;
-    selectedIndex -= 1;
-    buildTable(); applySensorToIMS(); renderAll();
-  });
-
-  on("#btnMoveDown", "click", () => {
-    clampSelected();
-    if (selectedIndex >= lens.surfaces.length - 1) return;
-    const a = lens.surfaces[selectedIndex];
-    lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex + 1];
-    lens.surfaces[selectedIndex + 1] = a;
-    selectedIndex += 1;
-    buildTable(); applySensorToIMS(); renderAll();
-  });
-
-  on("#btnRemove", "click", () => {
-    clampSelected();
-    if (lens.surfaces.length <= 2) return;
     if (isProtectedIndex(selectedIndex)) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "OBJ/IMS kun je niet deleten.";
+      if (ui.footerWarn) ui.footerWarn.textContent = "Cannot duplicate OBJ/IMS.";
+      return;
+    }
+    const s = clone(lens.surfaces[selectedIndex]);
+    s.stop = false;
+    if (String(s.type).toUpperCase() === "STOP") s.type = "";
+    insertAfterSelected(s);
+  }
+
+  function moveSelected(dir) {
+    clampSelected();
+    const i = selectedIndex;
+    const j = i + dir;
+    if (j < 0 || j >= lens.surfaces.length) return;
+
+    // protect OBJ at 0 and IMS at end
+    if (i === 0 || i === lens.surfaces.length - 1) return;
+    if (j === 0 || j === lens.surfaces.length - 1) return;
+
+    const tmp = lens.surfaces[i];
+    lens.surfaces[i] = lens.surfaces[j];
+    lens.surfaces[j] = tmp;
+    selectedIndex = j;
+
+    // keep only one STOP
+    const stopIdx = lens.surfaces.findIndex((s) => s.stop);
+    if (stopIdx >= 0) enforceSingleStop(stopIdx);
+
+    buildTable();
+    renderAll();
+  }
+
+  function deleteSelected() {
+    clampSelected();
+    if (isProtectedIndex(selectedIndex)) {
+      if (ui.footerWarn) ui.footerWarn.textContent = "Cannot delete OBJ/IMS.";
       return;
     }
     lens.surfaces.splice(selectedIndex, 1);
     selectedIndex = Math.max(0, selectedIndex - 1);
-    buildTable(); applySensorToIMS(); renderAll();
-  });
 
-  on("#btnSave", "click", () => {
-    const payload = JSON.stringify(lens, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
+    // ensure OBJ/IMS still exist
+    if (!lens.surfaces.length || String(lens.surfaces[0].type).toUpperCase() !== "OBJ") {
+      lens.surfaces.unshift({ type: "OBJ", R: 0, t: 0, ap: 60, glass: "AIR", stop: false });
+      selectedIndex++;
+    }
+    if (String(lens.surfaces.at(-1)?.type).toUpperCase() !== "IMS") {
+      lens.surfaces.push({ type: "IMS", R: 0, t: 0, ap: 12.77, glass: "AIR", stop: false });
+    }
+
+    // enforce single stop
+    const stopIdx = lens.surfaces.findIndex((s) => s.stop);
+    if (stopIdx >= 0) enforceSingleStop(stopIdx);
+
+    buildTable();
+    applySensorToIMS();
+    renderAll();
+  }
+
+  // -------------------- save/load JSON --------------------
+  function saveJSON() {
+    const out = {
+      name: lens.name,
+      notes: lens.notes || [],
+      surfaces: lens.surfaces.map((s) => ({
+        type: s.type,
+        R: Number(s.R || 0),
+        t: Number(s.t || 0),
+        ap: Number(s.ap || 0),
+        glass: s.glass,
+        stop: !!s.stop,
+      })),
+    };
+
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
-    a.href = url;
-    a.download = (lens.name || "lens") + ".json";
+    const safeName = String(out.name || "lens").replace(/[^\w\-]+/g, "_").slice(0, 48);
+    a.href = URL.createObjectURL(blob);
+    a.download = `${safeName}.json`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  on("#btnAutoFocus", "click", () => autoFocusSensorOffset());
-  on("#btnLoadOmit", "click", () => { loadLens(omit50ConceptV1()); });
-  on("#btnLoadDemo", "click", () => { loadLens(demoLensSimple()); });
-
-  on("#btnScaleToFocal", "click", () => scaleToTargetFocal());
-  on("#btnSetTStop", "click", () => setTargetTStop());
-
-  // New Lens modal bindings
-  if (ui.newLensModal) {
-    on("#nlClose", "click", (e) => { e.preventDefault(); closeNewLensModal(); });
-    on("#nlCreate", "click", (e) => { e.preventDefault(); createNewLensFromModal(); });
-    ui.newLensModal.addEventListener("mousedown", (e) => { if (e.target === ui.newLensModal) closeNewLensModal(); });
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && ui.newLensModal && !ui.newLensModal.classList.contains("hidden")) closeNewLensModal();
-    });
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 500);
   }
 
-  // Preview bindings
-  if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
-  if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
- 
-
-    document.addEventListener("fullscreenchange", () => {
-  resizePreviewCanvasToCSS();
-
-  if (preview.worldReady) {
-    drawPreviewViewport();
-  } else if (preview.ready) {
-    scheduleRenderPreview();
-  } else {
-    drawPreviewViewport();
+  function loadJSONFile(file) {
+    if (!file) return;
+    const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const obj = JSON.parse(String(fr.result || "{}"));
+        loadLens(obj);
+        if (ui.footerWarn) ui.footerWarn.textContent = `Loaded: ${lens.name}`;
+      } catch (e) {
+        if (ui.footerWarn) ui.footerWarn.textContent = "JSON load failed (invalid JSON).";
+      }
+    };
+    fr.readAsText(file);
   }
-});
 
-  if (ui.prevImg) {
-    ui.prevImg.addEventListener("change", (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
+  // -------------------- preview: image upload cache --------------------
+  function handlePreviewImageUpload(file) {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => {
+      preview.img = im;
 
-      const url = URL.createObjectURL(f);
-      const im = new Image();
-      im.onload = () => {
-        preview.img = im;
-        preview.imgCanvas.width = im.naturalWidth;
-        preview.imgCanvas.height = im.naturalHeight;
-        preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+      preview.imgCanvas.width = im.naturalWidth;
+      preview.imgCanvas.height = im.naturalHeight;
+      preview.imgCtx.imageSmoothingEnabled = true;
+      preview.imgCtx.clearRect(0, 0, im.naturalWidth, im.naturalHeight);
       preview.imgCtx.drawImage(im, 0, 0);
 
-// CACHE imgData 1x (BELANGRIJK)
-preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
+      // ✅ cache pixels once
+      preview.imgData = preview.imgCtx.getImageData(0, 0, im.naturalWidth, im.naturalHeight).data;
 
-preview.ready = true;
-preview.worldReady = false;   // ✅ reset world cache
-scheduleRenderPreview();
-        URL.revokeObjectURL(url);
-      };
-      im.src = url;
-    });
+      preview.ready = true;
+      preview.worldReady = false;
+
+      if (ui.footerWarn) ui.footerWarn.textContent = `Preview image loaded: ${im.naturalWidth}×${im.naturalHeight}`;
+      scheduleRenderPreview();
+    };
+    im.onerror = () => {
+      if (ui.footerWarn) ui.footerWarn.textContent = "Preview image load failed.";
+    };
+    im.src = url;
   }
 
-  // -------------------- file load --------------------
-  on("#fileLoad", "change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const txt = await file.text();
-      const obj = JSON.parse(txt);
-      if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
-
-      if (obj.glass_note && typeof obj.glass_note === "object") {
-        for (const [k, v] of Object.entries(obj.glass_note)) {
-          const nd = Number(v?.nd);
-          if (Number.isFinite(nd)) {
-            GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
-            GLASS_DB[k].nd = nd;
-            if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
-          }
-        }
-      }
-
-      loadLens(obj);
-    } catch (err) {
-      if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err.message}`;
-    } finally {
-      e.target.value = "";
+  // -------------------- preview fullscreen toggle --------------------
+  function togglePreviewFullscreen() {
+    if (!ui.previewPane) return;
+    const el = ui.previewPane;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
     }
-  });
+  }
 
-  // -------------------- controls -> rerender --------------------
-["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
-  on("#" + id, "input", () => {
-    scheduleRenderAll();
-    if (preview.ready) scheduleRenderPreview();
-    else drawPreviewViewport();
-  });
-  on("#" + id, "change", () => {
-    scheduleRenderAll();
-    if (preview.ready) scheduleRenderPreview();
-    else drawPreviewViewport();
-  });
-});
+  // -------------------- bindings --------------------
+  function bindUI() {
+    populateSensorPresetsSelect();
 
-  // preview numeric controls => rerender preview (only if img loaded)
- ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
-  on("#" + id, "input", () => scheduleRenderPreview());
-  on("#" + id, "change", () => scheduleRenderPreview());
-});
+    on("#sensorPreset", "change", (e) => applyPreset(e.target.value));
+    on("#sensorW", "change", () => { applySensorToIMS(); renderAll(); });
+    on("#sensorH", "change", () => { applySensorToIMS(); renderAll(); });
 
-on("#sensorPreset", "change", (e) => {
-  applyPreset(e.target.value);
-  clampAllApertures(lens.surfaces);
-  scheduleRenderAll();
-  if (preview.ready) scheduleRenderPreview();
-  else drawPreviewViewport();
-});
+    on("#fieldAngle", "input", scheduleRenderAll);
+    on("#rayCount", "input", scheduleRenderAll);
+    on("#wavePreset", "change", scheduleRenderAll);
+    on("#sensorOffset", "input", scheduleRenderAll);
+    on("#renderScale", "input", scheduleRenderAll);
 
-// -------------------- window resize / init --------------------
-function onResize() {
-  // resize BOTH canvases to their CSS size
-  resizeCanvasToCSS();
-  resizePreviewCanvasToCSS();
+    on("#btnNew", "click", newClear);
+    on("#btnLoadOmit", "click", () => loadLens(omit50ConceptV1()));
+    on("#btnLoadDemo", "click", () => loadLens(demoLensSimple()));
 
-  // (optioneel) reset preview viewport on resize:
-  preview.view.panX = 0;
-  preview.view.panY = 0;
-  preview.view.zoom = 1.0;
+    on("#btnAdd", "click", addSurface);
+    on("#btnAddElement", "click", () => {
+      const ok = openElementModal?.();
+      if (!ok && ui.footerWarn) ui.footerWarn.textContent = "Element modal not found in DOM.";
+    });
+    on("#btnDuplicate", "click", duplicateSurface);
+    on("#btnMoveUp", "click", () => moveSelected(-1));
+    on("#btnMoveDown", "click", () => moveSelected(+1));
+    on("#btnRemove", "click", deleteSelected);
 
-  // redraw (throttled)
-  scheduleRenderAll();
-  if (preview.ready) scheduleRenderPreview();
-  else drawPreviewViewport();
-}
+    on("#btnScaleToFocal", "click", scaleToTargetFocal);
+    on("#btnSetTStop", "click", setTargetTStop);
+    on("#btnAutoFocus", "click", autoFocusSensorOffset);
 
-window.addEventListener("resize", onResize);
+    on("#btnSave", "click", saveJSON);
+    on("#fileLoad", "change", (e) => loadJSONFile(e.target.files?.[0]));
 
-// helps when layout changes without resize + first paint
-requestAnimationFrame(onResize);
-  
+    // preview
+    on("#prevImg", "change", (e) => handlePreviewImageUpload(e.target.files?.[0]));
+    on("#btnRenderPreview", "click", () => {
+      if (!preview.ready) {
+        preview.worldReady = false;
+        drawPreviewViewport();
+        if (ui.footerWarn) ui.footerWarn.textContent = "Upload an image first.";
+        return;
+      }
+      preview.worldReady = false;
+      renderPreview();
+    });
+    on("#btnPreviewFS", "click", togglePreviewFullscreen);
+
+    // keyboard shortcuts
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "p" || e.key === "P") togglePreviewFullscreen();
+      if (e.key === "c" || e.key === "C") toggleCameraCalibration();
+    });
+
+    // canvas controls
+    bindViewControls();
+    bindPreviewViewControls();
+  }
 
   // -------------------- init --------------------
-function init() {
-  populateSensorPresetsSelect();
-  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-  loadLens(lens);
-  bindViewControls();
-  bindPreviewViewControls();
-  onResize();
-}
+  function init() {
+    bindUI();
+    applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
+    buildTable();
+    applySensorToIMS();
+    renderAll();
+    drawPreviewViewport();
+  }
 
-// -------------------- global hotkeys (bind once) --------------------
-if (!window.__tvlKeysBound) {
-  window.__tvlKeysBound = true;
-
-  window.addEventListener("keydown", (e) => {
-    const tag = (e.target?.tagName || "").toUpperCase();
-    const typing =
-      tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
-    if (typing) return;
-
-    if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
-    if (e.key?.toLowerCase() === "c") toggleCameraCalibration();
-  });
-}
-
-init();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
