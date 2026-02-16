@@ -1,241 +1,409 @@
-/* TVL — Meridional Raytracer (2D) — Full CSS Rebuild (FIXED LAYOUT)
-   - no calc(100vh - 64px) clipping
-   - body = flex column, layout fills remaining height
-   - left panel: ONE scroll region for controls + table (so you can reach file inputs)
-   - status stays pinned
-   - right panel: canvasFrame fills
-*/
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Meridional Raytracer (2D) — TVL Lens Builder</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
 
-:root{
-  --bg:#0b0f16;
-  --panel:#0f1624;
-  --panel2:#0c1220;
+<header class="topbar">
+  <div class="brand">
+    <div class="dot"></div>
+    <div class="brandText">
+      <div class="title">Meridional Raytracer (2D)</div>
+      <div class="subtitle">OSLO-ish doorsnede • stop-aware • element builder • sanity check tool</div>
+    </div>
+  </div>
 
-  --stroke:rgba(255,255,255,.10);
-  --stroke2:rgba(255,255,255,.18);
+  <div class="toolbar">
+    <button id="btnNew" class="btn" type="button">New / Clear</button>
+    <button id="btnLoadOmit" class="btn" type="button">Load OMIT 50 preset</button>
+    <button id="btnLoadDemo" class="btn" type="button">Load demo lens</button>
 
-  --text:rgba(255,255,255,.92);
-  --muted:rgba(255,255,255,.62);
-  --muted2:rgba(255,255,255,.44);
+    <div class="sep"></div>
 
-  --accent:#2a6ef2;
-  --ok:#42d18f;
-  --danger:#d95b5b;
+    <button id="btnAdd" class="btn" type="button">+ Surface</button>
+    <button id="btnAddElement" class="btn" type="button">+ Element</button>
+    <button id="btnDuplicate" class="btn" type="button">Duplicate</button>
+    <button id="btnMoveUp" class="btn" type="button">↑</button>
+    <button id="btnMoveDown" class="btn" type="button">↓</button>
+    <button id="btnRemove" class="btn btnDanger" type="button">Delete</button>
 
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    <div class="sep"></div>
 
-  --r:16px;
-  --r2:22px;
+    <button id="btnScaleToFocal" class="btn" type="button">Scale → FL</button>
+    <button id="btnSetTStop" class="btn" type="button">Set T</button>
+    <button id="btnAutoFocus" class="btn" type="button">Auto focus</button>
 
-  /* canvas */
-  --canvasBg:#f7f9fe;
-  --canvasGrid:rgba(20,25,35,.08);
-  --canvasBorder:rgba(0,0,0,.10);
-}
+    <div class="sep"></div>
 
-/* -------------------- base -------------------- */
-*{ box-sizing:border-box; }
-html,body{ height:100%; }
+    <button id="btnSave" class="btn" type="button">Save JSON</button>
+    <label class="fileBtn btn" role="button" tabindex="0">
+      Load JSON
+      <input id="fileLoad" type="file" accept="application/json" />
+    </label>
+  </div>
+</header>
 
-body{
-  margin:0;
-  font-family:var(--sans);
-  color:var(--text);
-  background:
-    radial-gradient(1200px 600px at 20% -10%, rgba(42,110,242,.22), transparent 55%),
-    radial-gradient(900px 500px at 70% 0%, rgba(66,209,143,.14), transparent 55%),
-    var(--bg);
+<main class="layout">
+  <!-- LEFT -->
+  <aside class="panel left">
+    <section class="panelHeader">
+      <div class="h1">Surface Data</div>
+      <div class="hint">
+        Klik een rij om te selecteren. R=0 is plane. Glass = medium ná surface. Stop = 1 surface. IMS ap = sensor half-height.
+      </div>
+    </section>
 
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+    <!-- ✅ KEY FIX: controls + table in 1 scroll container -->
+    <div class="leftScroll">
+      <section class="controls">
+        <div class="controlGrid">
+          <div class="ctrl">
+            <label>Sensor preset</label>
+            <select id="sensorPreset"></select>
+          </div>
 
-  display:flex;
-  flex-direction:column;
-  min-height:100%;
-  overflow:hidden; /* page never scrolls; inner regions do */
-}
+          <div class="ctrl two">
+            <label>Sensor W (mm)</label>
+            <input id="sensorW" type="number" step="0.01" />
+          </div>
 
-button, input, select, textarea{
-  font-family:var(--sans);
-  font-size:14px;
-}
-a{ color:inherit; }
+          <div class="ctrl two">
+            <label>Sensor H (mm)</label>
+            <input id="sensorH" type="number" step="0.01" />
+          </div>
 
-/* -------------------- topbar -------------------- */
-.topbar{
-  position:sticky;
-  top:0;
-  z-index:50;
+          <div class="ctrl">
+            <label>Field angle (deg)</label>
+            <input id="fieldAngle" type="number" step="0.1" value="0" />
+          </div>
 
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:14px;
-  padding:12px 14px;
+          <div class="ctrl">
+            <label># Rays</label>
+            <input id="rayCount" type="number" step="1" value="31" min="3" max="101" />
+          </div>
 
-  background: linear-gradient(180deg, rgba(10,14,22,.92), rgba(10,14,22,.76));
-  border-bottom:1px solid var(--stroke);
-  backdrop-filter: blur(10px);
+          <div class="ctrl">
+            <label>Wavelength</label>
+            <select id="wavePreset">
+              <option value="d">d-line (587.6nm) — simple</option>
+              <option value="g">g-line (blue) — approx</option>
+              <option value="c">c-line (red) — approx</option>
+            </select>
+          </div>
 
-  flex:0 0 auto;
-}
+          <div class="ctrl">
+            <label>Sensor offset (mm)</label>
+            <input id="sensorOffset" type="number" step="0.05" value="0" />
+          </div>
 
-.brand{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  min-width:320px;
-}
+          <div class="ctrl">
+            <label>Render scale</label>
+            <input id="renderScale" type="range" min="0.6" max="2.6" step="0.05" value="1.25" />
+          </div>
 
-.dot{
-  width:10px;
-  height:10px;
-  border-radius:50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 6px rgba(42,110,242,.12);
-}
+          <!-- PREVIEW CONTROLS -->
+          <div class="ctrl two">
+            <label>Preview image</label>
+            <input id="prevImg" type="file" accept="image/*" />
+          </div>
 
-.brandText .title{
-  font-weight:900;
-  letter-spacing:.2px;
-  line-height:1.05;
-}
-.brandText .subtitle{
-  margin-top:2px;
-  font-size:12px;
-  color:var(--muted);
-}
+          <div class="ctrl">
+            <label>Object distance (mm)</label>
+            <input id="prevObjDist" type="number" step="1" value="2000" />
+          </div>
 
-/* -------------------- toolbar + buttons -------------------- */
-.toolbar{
-  display:flex;
-  flex-wrap:wrap;
-  gap:8px;
-  align-items:center;
-  justify-content:flex-end;
-}
+          <div class="ctrl">
+            <label>Object height (mm)</label>
+            <input id="prevObjH" type="number" step="1" value="500" />
+          </div>
 
-.sep{
-  width:1px;
-  height:28px;
-  background:var(--stroke);
-  margin:0 6px;
-}
+          <div class="ctrl">
+            <label>Preview res</label>
+            <select id="prevRes">
+              <option value="256">256 px (fast)</option>
+              <option value="384" selected>384 px</option>
+              <option value="512">512 px</option>
+              <option value="768">768 px (slow)</option>
+            </select>
+          </div>
 
-.btn{
-  border:1px solid var(--stroke);
-  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
-  color:var(--text);
-  padding:8px 10px;
-  border-radius:12px;
-  font-size:12px;
-  cursor:pointer;
-  user-select:none;
-  transition: transform .08s ease, border-color .12s ease, background .12s ease, filter .12s ease;
-}
-.btn:hover{
-  border-color:var(--stroke2);
-  transform: translateY(-1px);
-  filter: brightness(1.03);
-}
-.btn:active{ transform: translateY(0px); }
+          <div class="ctrl two">
+            <label>&nbsp;</label>
+            <button id="btnRenderPreview" class="btn btnPrimary" type="button">Render Preview</button>
+          </div>
+        </div>
+      </section>
 
-.btnPrimary{
-  border-color: rgba(42,110,242,.55);
-  background: linear-gradient(180deg, rgba(42,110,242,.36), rgba(42,110,242,.18));
-}
+      <section class="tableWrap">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th style="width:42px">#</th>
+              <th style="width:86px">Type</th>
+              <th style="width:110px">Radius R</th>
+              <th style="width:110px">Thickness</th>
+              <th style="width:110px">Aperture</th>
+              <th style="width:170px">Glass</th>
+              <th style="width:70px">Stop?</th>
+            </tr>
+          </thead>
+          <tbody id="surfTbody"></tbody>
+        </table>
+      </section>
+    </div>
 
-.btnDanger{
-  border-color: rgba(217,91,91,.55);
-  background: linear-gradient(180deg, rgba(217,91,91,.28), rgba(217,91,91,.14));
-}
+    <section class="status">
+      <div id="statusText" class="statusLine">—</div>
+      <div class="badges">
+        <div id="badgeEfl" class="badge">EFL: —</div>
+        <div id="badgeBfl" class="badge">BFL: —</div>
+        <div id="badgeT" class="badge">T≈ —</div>
+        <div id="badgeVig" class="badge">Vignette: —</div>
+      </div>
+      <div class="badges">
+        <div id="badgeFov" class="badge badgeWide">FOV: —</div>
+        <div id="badgeCov" class="badge">COV: —</div>
+      </div>
 
-.fileBtn{ position:relative; overflow:hidden; }
-.fileBtn input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
+      <div class="footerRow">
+        <div id="metaInfo" class="meta">sensor —</div>
+        <div id="footerWarn" class="warn"></div>
+      </div>
+    </section>
+  </aside>
 
-/* -------------------- layout / panels -------------------- */
-.layout{
-  flex:1 1 auto;
-  min-height:0;
+  <!-- RIGHT -->
+  <section class="panel right">
+    <div class="canvasHeader">
+      <div class="canvasTitle">
+        <div class="h1">Autodraw</div>
+        <div class="hint">drag = pan • wheel = zoom • dblclick = reset view</div>
+      </div>
 
-  display:grid;
-  grid-template-columns: 520px 1fr;
-  gap:14px;
-  padding:14px;
+      <div class="topBadges">
+        <div id="badgeEflTop" class="pill">EFL: —</div>
+        <div id="badgeBflTop" class="pill">BFL: —</div>
+        <div id="badgeTTop" class="pill">T≈ —</div>
+        <div id="badgeFovTop" class="pill">FOV: —</div>
+        <div id="badgeCovTop" class="pill">COV: —</div>
+      </div>
+    </div>
 
-  overflow:hidden; /* prevent main from scrolling */
-}
+    <div class="canvasFrame">
+      <div class="canvasSplit" id="tvlCanvasSplit">
+        <!-- LEFT: Rays -->
+        <div class="pane">
+          <div class="paneTag">Rays</div>
+          <canvas id="canvas"></canvas>
+        </div>
 
-.panel{
-  border:1px solid var(--stroke);
-  background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-  border-radius: var(--r2);
-  overflow:hidden;
-  box-shadow: 0 16px 50px rgba(0,0,0,.35);
+        <!-- RIGHT: Preview -->
+        <div class="pane" id="previewPane">
+          <div class="paneTag">Preview</div>
+          <button id="btnPreviewFS" class="fsBtn" type="button">Full Screen (P)</button>
+          <canvas id="previewCanvas"></canvas>
+        </div>
+      </div>
 
-  min-height:0;
-  display:flex;
-  flex-direction:column;
-}
+      <div class="canvasOverlay">
+        <div class="overlayHelp" id="overlayHelp">
+          Tips: zet stop op “STOP” surface • IMS ap = sensor half-height • “Scale → FL” fixeert focal drift
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
 
-.left{ min-width:420px; }
-.right{ overflow:hidden; }
+<!-- MODALS -->
+<div id="newLensModal" class="modal hidden" aria-hidden="true">
+  <div class="modalCard" role="dialog" aria-modal="true" aria-label="New Lens">
+    <div class="modalTop">
+      <div>
+        <div class="modalTitle">New Lens</div>
+        <div class="modalSub">Kies template → target focal → target T → generate.</div>
+      </div>
+      <button id="nlClose" class="modalX" type="button" aria-label="Close">✕</button>
+    </div>
 
-/* -------------------- headers -------------------- */
-.panelHeader{
-  padding:14px 14px 10px;
-  border-bottom:1px solid var(--stroke);
-  background: linear-gradient(180deg, rgba(255,255,255,.04), transparent);
-  flex:0 0 auto;
-}
+    <div class="modalScroll">
+      <div class="modalGrid">
+        <div class="field">
+          <label>Template</label>
+          <select id="nlTemplate" class="cellSelect">
+            <option value="blank">Blank (OBJ + IMS)</option>
+            <option value="doubleGauss">Double-Gauss (baseline)</option>
+            <option value="omit50v1">OMIT 50 concept v1</option>
+            <option value="tessar">Tessar-ish (simple)</option>
+          </select>
+        </div>
 
-.h1{
-  font-weight:900;
-  letter-spacing:.2px;
-}
+        <div class="field">
+          <label>Target focal (mm)</label>
+          <input id="nlFocal" class="cellInput" type="number" step="0.1" value="50" />
+        </div>
 
-.hint{
-  color:var(--muted);
-  font-size:12px;
-  margin-top:6px;
-  line-height:1.25;
-}
+        <div class="field">
+          <label>Target T-stop (approx)</label>
+          <input id="nlT" class="cellInput" type="number" step="0.01" value="2.67" />
+        </div>
 
-/* -------------------- LEFT scrolling strategy -------------------- */
-/* ✅ THIS is the fix: controls + table scroll together */
-.leftScroll{
-  flex:1 1 auto;
-  min-height:0;
-  overflow:auto;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-}
+        <div class="field">
+          <label>Stop position</label>
+          <select id="nlStopPos" class="cellSelect">
+            <option value="keep">Keep template</option>
+            <option value="middle">Force middle STOP</option>
+          </select>
+        </div>
 
-/* -------------------- controls -------------------- */
-.controls{
-  padding:12px 14px;
-  border-bottom:1px solid var(--stroke);
-  background: rgba(0,0,0,.12);
-}
+        <div class="field fieldFull">
+          <label>Notes / Name</label>
+          <input id="nlName" class="cellInput" type="text" value="New lens" />
+        </div>
 
-.controlGrid{
-  display:grid;
-  grid-template-columns: 1fr 1fr;
-  gap:10px;
-}
+        <div class="field fieldFull">
+          <div class="glassNote">
+            Dit is nog steeds een 2D meridional sanity tool (geen optimizer).
+            Maar focal/T kun je hiermee wél strak “terugtrekken”.
+          </div>
+        </div>
+      </div>
+    </div>
 
-.ctrl label{
-  display:block;
-  font-size:12px;
-  color:var(--muted);
-  margin-bottom:6px;
-}
-.ctrl.two{ grid-column: span 2; }
+    <div class="modalBottom">
+      <button id="nlCreate" class="btnPrimary" type="button">Create</button>
+    </div>
+  </div>
+</div>
 
-.ctrl input, .ctrl select, .ctrl textarea{
-  width:100%;
-  border-radius:12px;
-  border:1px solid var(--stroke);
-  background: rgba(0,0,0,.22);
- 
+<div id="elementModal" class="modal hidden" aria-hidden="true">
+  <div class="modalCard" role="dialog" aria-modal="true" aria-label="Add Element">
+    <div class="modalTop">
+      <div>
+        <div class="modalTitle">Add Element</div>
+        <div class="modalSub">Auto (singlet/achromat) of Custom surfaces. Stop = aparte insert.</div>
+      </div>
+      <button id="elClose" class="modalX" type="button" aria-label="Close">✕</button>
+    </div>
+
+    <div class="modalScroll">
+      <div class="modalGrid">
+        <div class="field">
+          <label>Type</label>
+          <select id="elType" class="cellSelect">
+            <option value="achromat">Achromat (4 surfaces)</option>
+            <option value="singlet">Singlet (2 surfaces)</option>
+            <option value="stop">STOP (1 surface)</option>
+            <option value="airgap">Air gap (1 surface)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Mode</label>
+          <select id="elMode" class="cellSelect">
+            <option value="auto">Auto</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Element f (mm)</label>
+          <input id="elF" class="cellInput" type="number" step="0.1" value="50" />
+        </div>
+
+        <div class="field">
+          <label>Clear ap (semi-diam, mm)</label>
+          <input id="elAp" class="cellInput" type="number" step="0.1" value="18" />
+        </div>
+
+        <div class="field">
+          <label>Center thickness (mm)</label>
+          <input id="elCt" class="cellInput" type="number" step="0.01" value="4" />
+        </div>
+
+        <div class="field">
+          <label>Internal gap (mm)</label>
+          <input id="elGap" class="cellInput" type="number" step="0.01" value="0" />
+        </div>
+
+        <div class="field">
+          <label>Rear air to next (mm)</label>
+          <input id="elAir" class="cellInput" type="number" step="0.01" value="4" />
+        </div>
+
+        <div class="field">
+          <label>Form</label>
+          <select id="elForm" class="cellSelect">
+            <option value="symmetric">Symmetric</option>
+            <option value="weakMeniscus">Weak meniscus</option>
+            <option value="plano">Plano-convex</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Glass 1</label>
+          <select id="elGlass1" class="cellSelect"></select>
+        </div>
+
+        <div class="field">
+          <label>Glass 2</label>
+          <select id="elGlass2" class="cellSelect"></select>
+        </div>
+
+        <div class="field fieldFull">
+          <label>Glass note</label>
+          <textarea id="elGlassNote" class="glassNote" readonly></textarea>
+        </div>
+      </div>
+
+      <div id="customBox" class="customBox hidden">
+        <div class="modalGrid" style="margin-top:14px;">
+          <div class="field">
+            <label># Custom surfaces</label>
+            <select id="elCustomCount" class="cellSelect">
+              <option value="2">2</option>
+              <option value="4" selected>4</option>
+              <option value="6">6</option>
+              <option value="8">8</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Custom preset</label>
+            <select id="elCustomPreset" class="cellSelect">
+              <option value="blank">Blank</option>
+              <option value="starter">Starter</option>
+            </select>
+          </div>
+
+          <div class="field fieldFull">
+            <table class="customTable">
+              <thead>
+                <tr>
+                  <th style="width:42px">#</th>
+                  <th style="width:90px">Type</th>
+                  <th style="width:120px">Radius</th>
+                  <th style="width:120px">Thick</th>
+                  <th style="width:120px">Ap</th>
+                  <th style="width:220px">Glass</th>
+                </tr>
+              </thead>
+              <tbody id="elCustomTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modalBottom">
+      <button id="elAdd" class="btnPrimary" type="button">Insert</button>
+    </div>
+  </div>
+</div>
+
+<script src="./script.js"></script>
+</body>
+</html>
