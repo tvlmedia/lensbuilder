@@ -1636,12 +1636,19 @@ const intrusion = rearX0 - plX;
   }
   if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
-  resizeCanvasToCSS();
-  const r = canvas.getBoundingClientRect();
-  ctx.clearRect(0, 0, r.width, r.height);
+ resizeCanvasToCSS();
+const r = canvas.getBoundingClientRect();
 
-  const world = makeWorldTransform();
-  drawAxes(world);
+// ✅ altijd een vaste achtergrond (papier)
+// (anders is je canvas transparant en verdwijnen zwarte lijnen op een donkere UI)
+ctx.clearRect(0, 0, r.width, r.height);
+ctx.save();
+ctx.fillStyle = "#ffffff";          // of "#f6f7fb" als je iets zachter wil
+ctx.fillRect(0, 0, r.width, r.height);
+ctx.restore();
+
+const world = makeWorldTransform();
+drawAxes(world);
   drawPLFlange(world, plX);
 drawPLMountSide(world, plX);// ✅ mount ring zichtbaar
 drawCameraOverlayImage(world);
