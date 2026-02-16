@@ -2048,18 +2048,19 @@ const rMaxSensor = Math.hypot(halfWv, halfHv);
     for (let k = 0; k < LUT_N; k++) {
       const a = k / (LUT_N - 1);
       const r = a * rMaxSensor;
-// sample 4 directions to stabilize radial mapping
+// 2-direction sample (±y) — because sensorHeightToObjectHeight_mm only accepts y
 const s1 = sensorHeightToObjectHeight_mm( r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
 const s2 = sensorHeightToObjectHeight_mm(-r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-const s3 = sensorHeightToObjectHeight_mm( r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-const s4 = sensorHeightToObjectHeight_mm(-r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
 
 let rObj = null;
-let acc = 0, n = 0;
-for (const v of [s1, s2, s3, s4]) {
-  if (v != null && Number.isFinite(v)) { acc += Math.abs(v); n++; }
+if (s1 != null && Number.isFinite(s1) && s2 != null && Number.isFinite(s2)) {
+  rObj = 0.5 * (Math.abs(s1) + Math.abs(s2));
+} else if (s1 != null && Number.isFinite(s1)) {
+  rObj = Math.abs(s1);
+} else if (s2 != null && Number.isFinite(s2)) {
+  rObj = Math.abs(s2);
 }
-if (n) rObj = acc / n;
+       
        if (rObj == null || !Number.isFinite(rObj)) {
   rObjLUT[k] = 0;
   validLUT[k] = 0;
