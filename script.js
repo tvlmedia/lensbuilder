@@ -1337,16 +1337,17 @@ function renderPreview() {
   const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
 
   const objDist = Math.max(1, Number(elUI.prevObjDist?.value || 2000)); // mm
-const objH = Math.max(1, Number(elUI.prevObjH?.value || 500));        // full height in mm
+const objH    = Math.max(1, Number(elUI.prevObjH?.value || 500));     // full height in mm
+const halfObjH = objH * 0.5;
+
 const base = Number(elUI.prevRes?.value || 384);
 
-  const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
-  // preview resolution
-  const base = Number(ui.prevRes?.value || 384);
-  const aspect = sensorW / sensorH;
-  const W = Math.max(64, Math.round(base * aspect));
-  const H = Math.max(64, base);
+// preview resolution
+const aspect = sensorW / sensorH;
+const W = Math.max(64, Math.round(base * aspect));
+const H = Math.max(64, base);
 
   previewCanvas.width = W;
   previewCanvas.height = H;
@@ -1907,37 +1908,36 @@ function init() {
   bindViewControls();
 
   // -------------------- preview events --------------------
-  if (ui.tabRays) ui.tabRays.addEventListener("click", () => setRightTab("rays"));
-  if (ui.tabPreview) ui.tabPreview.addEventListener("click", () => setRightTab("preview"));
+  if (elUI.tabRays) elUI.tabRays.addEventListener("click", () => setRightTab("rays"));
+if (elUI.tabPreview) elUI.tabPreview.addEventListener("click", () => setRightTab("preview"));
 
-  if (ui.prevImg) {
-    ui.prevImg.addEventListener("change", (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
+if (elUI.prevImg) {
+  elUI.prevImg.addEventListener("change", (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
 
-      const url = URL.createObjectURL(f);
-      const im = new Image();
-      im.onload = () => {
-        preview.img = im;
+    const url = URL.createObjectURL(f);
+    const im = new Image();
+    im.onload = () => {
+      preview.img = im;
 
-        // draw into offscreen canvas
-        preview.imgCanvas.width = im.naturalWidth;
-        preview.imgCanvas.height = im.naturalHeight;
-        preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-        preview.imgCtx.drawImage(im, 0, 0);
+      preview.imgCanvas.width = im.naturalWidth;
+      preview.imgCanvas.height = im.naturalHeight;
+      preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+      preview.imgCtx.drawImage(im, 0, 0);
 
-        preview.ready = true;
-        URL.revokeObjectURL(url);
-      };
-      im.src = url;
-    });
-  }
+      preview.ready = true;
+      URL.revokeObjectURL(url);
+    };
+    im.src = url;
+  });
+}
 
-  if (ui.btnRenderPreview) {
-    ui.btnRenderPreview.addEventListener("click", () => {
-      setRightTab("preview");
-      renderPreview();
-    });
-  }
+if (elUI.btnRenderPreview) {
+  elUI.btnRenderPreview.addEventListener("click", () => {
+    setRightTab("preview");
+    renderPreview();
+  });
+}
 }
 init();
