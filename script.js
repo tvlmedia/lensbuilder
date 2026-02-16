@@ -1245,8 +1245,7 @@ function drawPLFlange(world, xFlange) {
     ctx.restore();
   }
 
-   function drawRoundedRectOutline(world, x, y, w, h, r) {
-  if (!ctx) return;
+ function roundedRectPath(world, x, y, w, h, r) {
   r = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
 
   const p = (xx, yy) => worldToScreen({ x: xx, y: yy }, world);
@@ -1271,82 +1270,64 @@ function drawPLFlange(world, xFlange) {
   ctx.lineTo(h2.x, h2.y);
   ctx.quadraticCurveTo(p(x, y).x, p(x, y).y, a.x, a.y);
   ctx.closePath();
-  ctx.stroke();
+}
+
+function drawRoundedRect(world, x, y, w, h, r, { fill = null, stroke = null, lineWidth = 2 } = {}) {
+  if (!ctx) return;
+  ctx.save();
+  ctx.lineWidth = lineWidth;
+  roundedRectPath(world, x, y, w, h, r);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
+  ctx.restore();
 }
 
 function drawCameraOverlay(world, plX) {
   if (!ctx) return;
 
   const cam = getCurrentCameraPreset();
-  const baseX = plX; // flange is reference
+  if (!cam || !cam.body) return;
+
+  const baseX = plX;
   const body = cam.body;
 
-  ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(0,0,0,.55)";           // outline
-  ctx.fillStyle   = "rgba(255,255,255,.18)";     // subtle fill
+  // ✅ colors tuned for your dark UI
+  const stroke = "rgba(255,255,255,.22)";
+  const fill   = "rgba(255,255,255,.06)";
+  const bumpFill = "rgba(255,255,255,.04)";
+  const logo = "rgba(255,255,255,.55)";
 
-  // BODY (filled)
-  // fill by drawing path twice: once fill, once stroke
-  (function () {
-    // temporary draw rounded rect path in world coords by reusing outline helper
-    // easiest: manual path with same method but fill before stroke:
-    const x = baseX + body.x;
-    const y = body.y;
-    const w = body.w;
-    const h = body.h;
-    const r = body.r;
+  // BODY
+  drawRoundedRect(
+    world,
+    baseX + body.x, body.y,
+    body.w, body.h, body.r,
+    { fill, stroke, lineWidth: 2 }
+  );
 
-    // Build same rounded rect as a path
-    const p = (xx, yy) => worldToScreen({ x: xx, y: yy }, world);
-    const rr = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
-    const a = p(x + rr, y);
-    const b = p(x + w - rr, y);
-    const c = p(x + w, y + rr);
-    const d = p(x + w, y + h - rr);
-    const e = p(x + w - rr, y + h);
-    const f = p(x + rr, y + h);
-    const g = p(x, y + h - rr);
-    const h2 = p(x, y + rr);
-
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.quadraticCurveTo(p(x + w, y).x, p(x + w, y).y, c.x, c.y);
-    ctx.lineTo(d.x, d.y);
-    ctx.quadraticCurveTo(p(x + w, y + h).x, p(x + w, y + h).y, e.x, e.y);
-    ctx.lineTo(f.x, f.y);
-    ctx.quadraticCurveTo(p(x, y + h).x, p(x, y + h).y, g.x, g.y);
-    ctx.lineTo(h2.x, h2.y);
-    ctx.quadraticCurveTo(p(x, y).x, p(x, y).y, a.x, a.y);
-    ctx.closePath();
-
-    ctx.fill();
-    ctx.stroke();
-  })();
-
-  // BUMPS (outline only)
-  ctx.fillStyle = "rgba(255,255,255,.10)";
+  // BUMPS
   for (const b of (cam.bumps || [])) {
-    const x = baseX + b.x;
-    const y = b.y;
-    // fill + stroke
-    // quick: draw outline then fill by drawing same rounded rect path as outline-only (ok)
-    drawRoundedRectOutline(world, x, y, b.w, b.h, b.r);
+    drawRoundedRect(
+      world,
+      baseX + b.x, b.y,
+      b.w, b.h, b.r,
+      { fill: bumpFill, stroke, lineWidth: 2 }
+    );
   }
 
-  // “Logo” text inside
-  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
+  // LOGO text
+  ctx.save();
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
   ctx.font = `12px ${mono}`;
-  ctx.fillStyle = "rgba(0,0,0,.60)";
+  ctx.fillStyle = logo;
   ctx.textBaseline = "top";
 
   const lp = cam.logoPos || { x: body.x + 10, y: body.y + 10 };
-  const s1 = worldToScreen({ x: baseX + lp.x, y: lp.y }, world);
-  const s2 = worldToScreen({ x: baseX + lp.x, y: lp.y + 14 }, world);
-  ctx.fillText(cam.label || "CAM", s1.x, s1.y);
-  ctx.fillText(cam.model || "", s2.x, s2.y);
+  const p1 = worldToScreen({ x: baseX + lp.x, y: lp.y }, world);
+  const p2 = worldToScreen({ x: baseX + lp.x, y: lp.y + 14 }, world);
 
+  ctx.fillText(cam.label || "CAM", p1.x, p1.y);
+  ctx.fillText(cam.model || "", p2.x, p2.y);
   ctx.restore();
 }
 // -------------------- render scheduler (RAF throttle) --------------------
