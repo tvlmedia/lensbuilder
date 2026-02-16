@@ -184,6 +184,8 @@ const CAMERA_PRESETS = {
       { x:  40, y: -35, w: 30, h: 70, r: 8 },  // viewfinder-ish block
     ],
     logoPos: { x: -105, y: -55 },  // inside body, relative to flange
+         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
+
   },
 
   "ARRI Alexa Mini LF (LF)": {
@@ -195,6 +197,8 @@ const CAMERA_PRESETS = {
       { x:  50, y: -40,  w: 34, h: 78, r: 9 },
     ],
     logoPos: { x: -115, y: -60 },
+         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
+
   },
 
   "Sony VENICE (FF)": {
@@ -207,6 +211,8 @@ const CAMERA_PRESETS = {
       { x: -150, y: -25, w: 18,  h: 50, r: 6 }, // rear “plate”
     ],
     logoPos: { x: -140, y: -62 },
+         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
+
   },
 
   "Fuji GFX (MF)": {
@@ -218,6 +224,8 @@ const CAMERA_PRESETS = {
       { x:  58, y: -42,  w: 38, h: 84, r: 9 },
     ],
     logoPos: { x: -125, y: -62 },
+         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
+
   },
 };
 
