@@ -1017,15 +1017,18 @@ function resizePreviewCanvasToCSS() {
     const { cx, cy, s } = world;
     return { x: cx + p.x * s, y: cy - p.y * s };
   }
-  function makeWorldTransform() {
-    if (!canvas) return { cx: 0, cy: 0, s: 1 };
-    const r = canvas.getBoundingClientRect();
-    const cx = r.width / 2 + view.panX;
-    const cy = r.height / 2 + view.panY;
-    const base = Number(ui.renderScale?.value || 1.25) * 3.2;
-    const s = base * view.zoom;
-    return { cx, cy, s };
-  }
+ function makeWorldTransform() {
+  const r = canvas.getBoundingClientRect();
+  const base = Number(ui.renderScale?.value || 1.25) * 3.2;
+  const zoom = Number.isFinite(view.zoom) ? view.zoom : 1.0;
+  const s = base * zoom;
+
+  return {
+    cx: r.width / 2 + (Number.isFinite(view.panX) ? view.panX : 0),
+    cy: r.height / 2 + (Number.isFinite(view.panY) ? view.panY : 0),
+    s: Number.isFinite(s) && s > 0 ? s : 1
+  };
+}
 
   function drawAxes(world) {
     if (!ctx) return;
@@ -1688,38 +1691,38 @@ drawPreviewViewport();
     scheduleRenderAll();
   });
 
- canvas.addEventListener("wheel", (e) => {
+canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
 
-  // 1) world transform vóór zoom
-  const world0 = makeWorldTransform();
-
-  // cursor positie in canvas pixels (CSS px)
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
 
-  // cursor -> world coord vóór zoom
-  const wx0 = (mx - world0.cx) / world0.s;
-  const wy0 = (world0.cy - my) / world0.s;
+  // base scale (zonder pan/zoom)
+  const base = Number(ui.renderScale?.value || 1.25) * 3.2;
+  const cx0 = rect.width / 2;
+  const cy0 = rect.height / 2;
 
-  // 2) update zoom
+  // world transform vóór zoom (met huidige pan/zoom)
+  const s0 = base * view.zoom;
+  if (!Number.isFinite(s0) || s0 <= 0) return;
+
+  const wx = (mx - (cx0 + view.panX)) / s0;
+  const wy = ((cy0 + view.panY) - my) / s0;
+
+  // update zoom
   const delta = Math.sign(e.deltaY);
   const factor = delta > 0 ? 0.92 : 1.08;
   const zNew = Math.max(0.12, Math.min(12, view.zoom * factor));
-  if (zNew === view.zoom) return;
   view.zoom = zNew;
 
-  // 3) world transform ná zoom
-  const world1 = makeWorldTransform();
+  // world transform na zoom
+  const s1 = base * view.zoom;
+  if (!Number.isFinite(s1) || s1 <= 0) return;
 
-  // cursor -> screen coord ná zoom (zonder pan-correctie)
-  const mx1 = world1.cx + wx0 * world1.s;
-  const my1 = world1.cy - wy0 * world1.s;
-
-  // 4) pan corrigeren zodat cursor "locked" blijft
-  view.panX += (mx - mx1);
-  view.panY += (my - my1);
+  // pan ABSOLUUT instellen zodat cursor world-point locked blijft
+  view.panX = mx - (cx0 + wx * s1);
+  view.panY = my - (cy0 - wy * s1);
 
   scheduleRenderAll();
 }, { passive: false });
