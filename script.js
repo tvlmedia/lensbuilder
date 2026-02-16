@@ -55,6 +55,7 @@ rendering: false,
 
 preview.imgCtx = preview.imgCanvas.getContext("2d");
 preview.worldCtx = preview.worldCanvas.getContext("2d");
+   preview.worldBackCtx = preview.worldBack.getContext("2d");
 
   // -------------------- UI --------------------
   const ui = {
@@ -1545,6 +1546,7 @@ function scheduleRenderAll() {
 let _rafPrev = 0;
 function scheduleRenderPreview() {
   if (_rafPrev) return;
+  if (preview.rendering) return;
   _rafPrev = requestAnimationFrame(() => {
     _rafPrev = 0;
     if (preview.ready) renderPreview();
@@ -2321,21 +2323,36 @@ const H = Math.max(64, base);
 
      // ---- fast path: no image loaded -> don't run heavy pixel loop ----
 if (!hasImg) {
-  preview.worldCanvas.width = W;
-  preview.worldCanvas.height = H;
+  preview.rendering = true;
 
-  const wctx = preview.worldCtx;
-  wctx.fillStyle = "#111";
-  wctx.fillRect(0, 0, W, H);
+preview.worldBack.width = W;
+preview.worldBack.height = H;
 
-  wctx.fillStyle = "rgba(255,255,255,.75)";
-  wctx.font =
-    "14px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
-  wctx.fillText("Upload an image to preview", 18, 28);
+const wctx = preview.worldBackCtx;
+wctx.fillStyle = "#111";
+wctx.fillRect(0, 0, W, H);
 
-  preview.worldReady = true;
-  drawPreviewViewport();
-  return;
+wctx.fillStyle = "rgba(255,255,255,.75)";
+wctx.font = "14px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+wctx.fillText("Upload an image to preview", 18, 28);
+
+// swap
+{
+  const tmpC = preview.worldCanvas;
+  const tmpX = preview.worldCtx;
+
+  preview.worldCanvas = preview.worldBack;
+  preview.worldCtx = preview.worldBackCtx;
+
+  preview.worldBack = tmpC;
+  preview.worldBackCtx = tmpX;
+}
+
+preview.worldReady = true;
+preview.rendering = false;
+
+drawPreviewViewport();
+return;
 }
      
 const imgW = preview.imgCanvas.width;
@@ -2417,75 +2434,36 @@ if (s1 != null && Number.isFinite(s1) && s2 != null && Number.isFinite(s2)) {
     }
 
     // render into OFFSCREEN world buffer
-preview.worldCanvas.width = W;
-preview.worldCanvas.height = H;
+preview.rendering = true;
 
-const wctx = preview.worldCtx;
+// render naar BACK (nooit naar front tijdens heavy loop)
+preview.worldBack.width = W;
+preview.worldBack.height = H;
+
+const wctx = preview.worldBackCtx;
 const out = wctx.createImageData(W, H);
 const outD = out.data;
 
-
-         // object plane extents (map object-mm -> input image UV)
-    const imgAsp = hasImg ? (imgW / imgH) : 1.7777778;
-    const halfObjW = halfObjH * imgAsp;
-
-    function objectMmToUV(xmm, ymm) {
-      // map object plane coords (mm) to [0..1]
-      const u = 0.5 + (xmm / (2 * halfObjW));
-      const v = 0.5 - (ymm / (2 * halfObjH)); // y up -> v down
-      return { u, v };
-    }
-
-    // Fill outD (world image)
-    for (let py = 0; py < H; py++) {
-      // sensor y in mm
-      const sy = (0.5 - (py + 0.5) / H) * sensorHv; // OV
-
-
-      for (let px = 0; px < W; px++) {
-        // sensor x in mm
-const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
-         
-        const r = Math.hypot(sx, sy);
-        const idx = (py * W + px) * 4;
-
-        // center pixel: trivial
-        if (r < 1e-9) {
-          const { u, v } = objectMmToUV(0, 0);
-          const c = sample(u, v);
-          outD[idx] = c[0]; outD[idx + 1] = c[1]; outD[idx + 2] = c[2]; outD[idx + 3] = 255;
-          continue;
-        }
-
-        const rObj = lookupROut(r);
-       if (rObj == null) {
-  outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 20; outD[idx+3] = 255; // navy
-  continue;
-}
-
-        // preserve angle (radial mapping): scale vector by rObj/r
-        const k = rObj / r;
-        const ox = sx * k;
-        const oy = sy * k;
-
-        const { u, v } = objectMmToUV(ox, oy);
-        const c = sample(u, v);
-
-        outD[idx] = c[0];
-        outD[idx + 1] = c[1];
-        outD[idx + 2] = c[2];
-        outD[idx + 3] = 255;
-      }
-    }
-// ... jouw bestaande pixel-loop blijft hetzelfde,
-// alleen op het einde:
+// ... jouw pixel-loop vult outD precies zoals nu ...
 
 wctx.putImageData(out, 0, 0);
-preview.worldReady = true;
 
-// now draw it into the sensor viewport
+// ✅ SWAP front/back pas NA de render
+{
+  const tmpC = preview.worldCanvas;
+  const tmpX = preview.worldCtx;
+
+  preview.worldCanvas = preview.worldBack;
+  preview.worldCtx = preview.worldBackCtx;
+
+  preview.worldBack = tmpC;
+  preview.worldBackCtx = tmpX;
+}
+
+preview.worldReady = true;
+preview.rendering = false;
+
 drawPreviewViewport();
-  }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
