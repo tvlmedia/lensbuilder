@@ -473,8 +473,9 @@ scheduleRenderPreview(); // throttle heavy preview render
   const hit = add(ray.p, mul(ray.d, t));
   const vignetted = Math.abs(hit.y) > ap + 1e-9;
 
-  const nx = ray.d.x >= 0 ? -1 : 1;
-  return { hit, t, vignetted, normal: { x: nx, y: 0 } };
+  // plane surface normal is a property of the surface, not of the ray.
+// In our convention, normals point toward the OBJECT side (-x).
+return { hit, t, vignetted, normal: { x: -1, y: 0 } };
 }
 
     const cx = vx + R;
@@ -1377,52 +1378,35 @@ function drawPreviewViewport() {
   const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
   const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
 
-  // background (robust clear)
-pctx.save();
-pctx.setTransform(1, 0, 0, 1, 0, 0);
-pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
-pctx.restore();
-   pctx.fillRect(0, 0, Wc, Hc);
+  // clear in device pixels safely
+  pctx.save();
+  pctx.setTransform(1, 0, 0, 1, 0, 0);
+  pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
+  pctx.restore();
 
-pctx.fillStyle = "#000";
-pctx.fillRect(0, 0, Wc, Hc);
+  // bg
+  pctx.fillStyle = "#000";
+  pctx.fillRect(0, 0, Wc, Hc);
 
   if (!preview.worldReady) {
     pctx.fillStyle = "rgba(255,255,255,.65)";
-    pctx.font =
-      "12px " +
-      (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+    pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
     pctx.fillText("Preview: render first", 18, 24);
     return;
   }
 
-  // sensor-rect in pane (fit)
   const sr0 = getSensorRectBaseInPane();
-
-  // apply pan/zoom
   const sr = applyViewToSensorRect(sr0, preview.view);
 
-  // draw world into viewport
   pctx.imageSmoothingEnabled = true;
-  pctx.drawImage(
-    preview.worldCanvas,
-    0,
-    0,
-    preview.worldCanvas.width,
-    preview.worldCanvas.height,
-    sr.x,
-    sr.y,
-    sr.w,
-    sr.h
-  );
+  pctx.drawImage(preview.worldCanvas, 0, 0, preview.worldCanvas.width, preview.worldCanvas.height, sr.x, sr.y, sr.w, sr.h);
 
-  // guides
   pctx.save();
   pctx.strokeStyle = "rgba(255,255,255,.20)";
   pctx.lineWidth = 1;
-  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h); // basis sensor frame
+  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
   pctx.strokeStyle = "rgba(42,110,242,.55)";
-  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h); // huidige view frame
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
   pctx.restore();
 }
 
@@ -1835,8 +1819,9 @@ const sensorHv = sensorH * OV;
 const halfWv = halfW * OV;
 const halfHv = halfH * OV;
      
-    const ims = lens.surfaces[lens.surfaces.length - 1];
-    const sensorX = (ims?.vx ?? 0) + sensorOffset;
+  // Keep exactly the same convention as renderAll():
+const sensorX0 = 0.0;          // IMS is at 0 after computeVertices() shift
+const sensorX  = sensorX0 + sensorOffset;
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
