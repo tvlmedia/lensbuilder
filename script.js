@@ -1306,8 +1306,8 @@ const elUI = {
 function setRightTab(mode /* 'rays' | 'preview' */) {
   const isPreview = mode === "preview";
 
-  if (ui.tabRays) ui.tabRays.classList.toggle("active", !isPreview);
-  if (ui.tabPreview) ui.tabPreview.classList.toggle("active", isPreview);
+ if (elUI.tabRays) elUI.tabRays.classList.toggle("active", !isPreview);
+if (elUI.tabPreview) elUI.tabPreview.classList.toggle("active", isPreview);
 
   if (canvas) canvas.classList.toggle("hiddenCanvas", isPreview);
   if (previewCanvas) previewCanvas.classList.toggle("hiddenCanvas", !isPreview);
@@ -1336,9 +1336,9 @@ function renderPreview() {
   const stopIdx = findStopSurfaceIndex(lens.surfaces);
   const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
 
-  const objDist = Math.max(1, Number(ui.prevObjDist?.value || 2000)); // mm
-  const objH = Math.max(1, Number(ui.prevObjH?.value || 500));       // full height in mm
-  const halfObjH = objH * 0.5;
+  const objDist = Math.max(1, Number(elUI.prevObjDist?.value || 2000)); // mm
+const objH = Math.max(1, Number(elUI.prevObjH?.value || 500));        // full height in mm
+const base = Number(elUI.prevRes?.value || 384);
 
   const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
@@ -1506,7 +1506,7 @@ function openElementModal() {
   if (elUI.form && !elUI.form.querySelector("option")) {
     elUI.form.innerHTML = `
       <option value="symmetric">Symmetric</option>
-      <option value="weakMeniscus">Weak meniscus</option>
+      <option value="weakmeniscus">Weak meniscus</option>
       <option value="plano">Plano-convex</option>
     `;
     elUI.form.value = "symmetric";
