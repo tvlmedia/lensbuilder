@@ -1485,33 +1485,36 @@ function openElementModal() {
   }
 
   // Type options (patched)
-  if (elUI.type && !elUI.type.querySelector("option")) {
-    elUI.type.innerHTML = `
-      <option value="achromat">Achromat (air-spaced, 4 surfaces)</option>
-      <option value="achromat_cemented">Achromat (cemented, 3 surfaces)</option>
-      <option value="singlet">Singlet (2 surfaces)</option>
-      <option value="stop">STOP (1 surface)</option>
-      <option value="airgap">Air gap (1 surface)</option>
-    `;
-    elUI.type.value = "achromat";
-  }
+ if (elUI.type && !elUI.type.dataset._patched) {
+  elUI.type.innerHTML = `
+    <option value="achromat">Achromat (air-spaced, 4 surfaces)</option>
+    <option value="achromat_cemented">Achromat (cemented, 3 surfaces)</option>
+    <option value="singlet">Singlet (2 surfaces)</option>
+    <option value="stop">STOP (1 surface)</option>
+    <option value="airgap">Air gap (1 surface)</option>
+  `;
+  elUI.type.value = "achromat";
+  elUI.type.dataset._patched = "1";
+}
 
-  if (elUI.mode && !elUI.mode.querySelector("option")) {
-    elUI.mode.innerHTML = `
-      <option value="auto">Auto</option>
-      <option value="custom">Custom</option>
-    `;
-    elUI.mode.value = "auto";
-  }
+if (elUI.mode && !elUI.mode.dataset._patched) {
+  elUI.mode.innerHTML = `
+    <option value="auto">Auto</option>
+    <option value="custom">Custom</option>
+  `;
+  elUI.mode.value = "auto";
+  elUI.mode.dataset._patched = "1";
+}
 
-  if (elUI.form && !elUI.form.querySelector("option")) {
-    elUI.form.innerHTML = `
-      <option value="symmetric">Symmetric</option>
-      <option value="weakmeniscus">Weak meniscus</option>
-      <option value="plano">Plano-convex</option>
-    `;
-    elUI.form.value = "symmetric";
-  }
+if (elUI.form && !elUI.form.dataset._patched) {
+  elUI.form.innerHTML = `
+    <option value="symmetric">Symmetric</option>
+    <option value="weakmeniscus">Weak meniscus</option>
+    <option value="plano">Plano-convex</option>
+  `;
+  elUI.form.value = "symmetric";
+  elUI.form.dataset._patched = "1";
+}
 
   // Defaults
   if (elUI.f) elUI.f.value = Number(elUI.f.value || 50);
@@ -1522,7 +1525,7 @@ function openElementModal() {
   if (elUI.front) elUI.front.value = Number(elUI.front.value || 0);
 
   // Hook live note updates
-  [elUI.type, elUI.gap, elUI.front].forEach((x) => {
+  [elUI.type, elUI.gap, elUI.front, elUI.rear, elUI.ct].forEach((x) => {
     if (!x || x.dataset._noteBound) return;
     x.addEventListener("input", updateElementModalNote);
     x.addEventListener("change", updateElementModalNote);
@@ -1676,6 +1679,7 @@ function insertElementFromModal() {
     lens.surfaces.splice(insertAt, 0, { type: "STOP", R: 0.0, t: rearAir, ap, glass: "AIR", stop: true });
     selectedIndex = insertAt;
     enforceSingleStop(insertAt);
+     lens = sanitizeLens(lens);
     buildTable();
     applySensorToIMS();
     renderAll();
@@ -1687,6 +1691,7 @@ function insertElementFromModal() {
     insertAt = maybeInsertFrontAir(insertAt);
     lens.surfaces.splice(insertAt, 0, { type: "", R: 0.0, t: rearAir, ap, glass: "AIR", stop: false });
     selectedIndex = insertAt;
+     lens = sanitizeLens(lens);
     buildTable();
     applySensorToIMS();
     renderAll();
@@ -1736,6 +1741,9 @@ function insertElementFromModal() {
 
   lens.surfaces.splice(insertAt, 0, ...chunk);
   selectedIndex = insertAt;
+
+   lens = sanitizeLens(lens);
+selectedIndex = Math.max(0, Math.min(lens.surfaces.length - 1, selectedIndex));
 
   buildTable();
   applySensorToIMS();
