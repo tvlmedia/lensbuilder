@@ -398,8 +398,9 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
     else s[k] = num(el.value, s[k] ?? 0);
 
-    applySensorToIMS();
-    renderAll();
+   applySensorToIMS();
+scheduleRenderAll();
+if (preview.ready) renderPreview(); // alleen als je live preview wilt updaten
   }
 
   function onCellCommit(e) {
@@ -508,11 +509,11 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     x += Number(surfaces[i].t || 0);
   }
 
-  // --- NEW: align so IMS is exactly at X=0 ---
   const imsIdx = surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
   if (imsIdx >= 0) {
-    const dx = -(surfaces[imsIdx].vx || 0); // shift needed
-    for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += dx;
+    const shift = -(surfaces[imsIdx].vx || 0);
+    for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
+    x += shift; // ✅ total shift mee (optioneel)
   }
 
   return x;
@@ -531,12 +532,16 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
     return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
   }
-  function clampSurfaceAp(s) {
-    if (!s) return;
-    const lim = maxApForSurface(s);
-    const ap = Number(s.ap || 0);
-    s.ap = Math.max(AP_MIN, Math.min(ap, lim));
-  }
+ function clampSurfaceAp(s) {
+  if (!s) return;
+
+  const t = String(s.type || "").toUpperCase();
+  if (t === "IMS" || t === "OBJ") return; // ✅ niet clampen
+
+  const lim = maxApForSurface(s);
+  const ap = Number(s.ap || 0);
+  s.ap = Math.max(AP_MIN, Math.min(ap, lim));
+}
   function clampAllApertures(surfaces) {
     if (!Array.isArray(surfaces)) return;
     for (const s of surfaces) clampSurfaceAp(s);
@@ -1418,13 +1423,14 @@ function bindPreviewViewControls() {
     previewCanvasEl.setPointerCapture(e.pointerId);
   });
 
-  previewCanvasEl.addEventListener("pointerup", () => {
-    preview.view.dragging = false;
-  });
-
-  previewCanvasEl.addEventListener("pointercancel", () => {
-    preview.view.dragging = false;
-  });
+ previewCanvasEl.addEventListener("pointerup", (e) => {
+  preview.view.dragging = false;
+  try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch(_) {}
+});
+ previewCanvasEl.addEventListener("pointercancel", (e) => {
+  preview.view.dragging = false;
+  try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch(_) {}
+});
 
   previewCanvasEl.addEventListener("pointermove", (e) => {
     if (!preview.view.dragging) return;
@@ -1940,11 +1946,10 @@ const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
         }
 
         const rObj = lookupROut(r);
-        if (rObj == null) {
-          // vignette / invalid ray -> black
-          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-          continue;
-        }
+       if (rObj == null) {
+  outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 20; outD[idx+3] = 255; // navy
+  continue;
+}
 
         // preserve angle (radial mapping): scale vector by rObj/r
         const k = rObj / r;
@@ -2234,6 +2239,12 @@ drawPreviewViewport();
   if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
 });
 
+     document.addEventListener("fullscreenchange", () => {
+    // preview pane kan van size veranderen => redraw
+    if (preview.ready) renderPreview();
+    drawPreviewViewport();
+  });
+
   if (ui.prevImg) {
     ui.prevImg.addEventListener("change", (e) => {
       const f = e.target.files?.[0];
@@ -2307,14 +2318,14 @@ renderPreview();
   });
 
  window.addEventListener("resize", () => {
-  renderAll();
-  if (preview.ready) renderPreview();
-
-  // reset viewport omdat sr0 (basis frame) verandert bij resize/fullscreen
+  // reset viewport omdat sr0 verandert
   preview.view.panX = 0;
   preview.view.panY = 0;
   preview.view.zoom = 1.0;
-  drawPreviewViewport();
+
+  scheduleRenderAll();
+  if (preview.ready) renderPreview();
+  else drawPreviewViewport();
 });
 
   
