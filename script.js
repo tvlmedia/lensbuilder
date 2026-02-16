@@ -484,8 +484,8 @@ if (k === "stop") {
 
   // plane surface normal is a property of the surface, not of the ray.
 // In our convention, normals point toward the OBJECT side (-x).
-const N = (ray.d.x >= 0) ? { x: -1, y: 0 } : { x: 1, y: 0 };
-  return { hit, t, vignetted, normal: N };
+const N = { x: -1, y: 0 };
+     return { hit, t, vignetted, normal: N };
   }
 
     const cx = vx + R;
@@ -2211,8 +2211,31 @@ function renderPreview() {
   const base = Math.max(64, Number(ui.prevRes?.value || 720));
    
   const { w: sensorW, h: sensorH } = getSensorWH();
-  const sensorWv = sensorW * OV;
-  const sensorHv = sensorH * OV;
+
+   // ✅ dirty-key: only rerender world if optics/settings changed
+const { w: sW, h: sH } = getSensorWH(); // pak alleen wat je echt nodig hebt
+
+const key = JSON.stringify({
+  lensShift: Number(ui.lensFocus?.value || 0),
+  wave: wavePreset,
+  sensor: [Number(sW.toFixed(4)), Number(sH.toFixed(4))], // ✅ stabiel
+  objDist,
+  objH,
+  base,
+  lensHash: lens.surfaces
+    .map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(","))
+    .join("|"),
+});
+    if (preview.worldReady && preview.dirtyKey === key) {
+      drawPreviewViewport();
+      return;
+    }
+    preview.dirtyKey = key;
+    preview.worldReady = false;
+
+   
+     const { w: sensorW, h: sensorH } = getSensorWH();
+const asp = (sensorW * OV) / (sensorH * OV);
   const halfWv = sensorWv * 0.5;
   const halfHv = sensorHv * 0.5;
 
@@ -2355,26 +2378,7 @@ function lookupROutTransCos4(r) {
 
   return { rObj, trans, cos4 };
 }
-    // ✅ dirty-key: only rerender world if optics/settings changed
-const { w: sW, h: sH } = getSensorWH(); // pak alleen wat je echt nodig hebt
-
-const key = JSON.stringify({
-  lensShift: Number(ui.lensFocus?.value || 0),
-  wave: wavePreset,
-  sensor: [Number(sW.toFixed(4)), Number(sH.toFixed(4))], // ✅ stabiel
-  objDist,
-  objH,
-  base,
-  lensHash: lens.surfaces
-    .map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(","))
-    .join("|"),
-});
-    if (preview.worldReady && preview.dirtyKey === key) {
-      drawPreviewViewport();
-      return;
-    }
-    preview.dirtyKey = key;
-    preview.worldReady = false;
+    
    
     // render into OFFSCREEN world buffer
 preview.worldCanvas.width = W;
