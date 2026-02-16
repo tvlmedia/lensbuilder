@@ -1437,30 +1437,37 @@ ctx.restore();
 }
 
 
-function drawTitleOverlay(text) {
+function drawTitleOverlay(partsOrText) {
   if (!ctx || !canvas) return;
 
   const mono =
     (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
 
   const r = canvas.getBoundingClientRect();
-  const maxW = r.width - 28;   // padding
-  const x = 14;
-  const y = 18;
-  const lineH = 16;
-  const maxLines = 2;
 
+  // UI
+  const padX = 14;
+  const padY = 10;
+  const maxW = r.width - padX * 2;
+
+  const fontSize = 13;
+  const lineH = 17;
+  const maxLines = 3;
+
+  // Accept either string OR array of parts
+  let parts = [];
+  if (Array.isArray(partsOrText)) {
+    parts = partsOrText.map(s => String(s || "").trim()).filter(Boolean);
+  } else {
+    parts = String(partsOrText || "")
+      .split(" • ")
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  // Build wrapped lines from parts (join with bullet)
   ctx.save();
-  ctx.font = `13px ${mono}`;
-  ctx.fillStyle = "rgba(0,0,0,.62)";
-
-  // subtle background bar
-  ctx.fillRect(8, 6, r.width - 16, 34);
-
-  ctx.fillStyle = "rgba(255,255,255,.92)";
-
-  // Prefer wrapping on your bullet separator
-  const parts = String(text).split(" • ").map(s => s.trim()).filter(Boolean);
+  ctx.font = `${fontSize}px ${mono}`;
 
   const lines = [];
   let cur = "";
@@ -1477,7 +1484,7 @@ function drawTitleOverlay(text) {
   }
   if (lines.length < maxLines && cur) lines.push(cur);
 
-  // Ellipsis if overflow
+  // Ellipsis on last line if overflow
   if (lines.length === maxLines && parts.length) {
     let last = lines[maxLines - 1];
     while (ctx.measureText(last + " …").width > maxW && last.length > 0) {
@@ -1486,8 +1493,20 @@ function drawTitleOverlay(text) {
     lines[maxLines - 1] = last + " …";
   }
 
+  // Background height based on number of lines
+  const barH = padY * 2 + lines.length * lineH;
+
+  // Background
+  ctx.fillStyle = "rgba(0,0,0,.62)";
+  ctx.fillRect(8, 6, r.width - 16, barH);
+
+  // Text
+  ctx.fillStyle = "rgba(255,255,255,.92)";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+
   for (let i = 0; i < lines.length; i++) {
-    ctx.fillText(lines[i], x, y + i * lineH);
+    ctx.fillText(lines[i], padX, 6 + padY + i * lineH);
   }
 
   ctx.restore();
@@ -1602,7 +1621,7 @@ const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
 const xMinPL = Math.min(frontVx - 20, plX - 20);
 
 // PL ruler 12mm hoger zodat labels niet overlappen
-drawRulerFrom(world, plX, xMinPL, null, "PL", +12);
+drawRulerFrom(world, plX, xMinPL, null, "", +12); // ✅ geen "PL 0" label
   drawPLFlange(world, plX);          // ✅ PL line
   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
@@ -1619,10 +1638,16 @@ drawRulerFrom(world, plX, xMinPL, null, "PL", +12);
  const camOff = Number(ui.sensorOffset?.value || 0);
 const lensOff = Number(ui.lensFocus?.value || 0);
 
-const title1 = `${lens.name} • ${lenTxt} • EFL ${eflTxt} • T≈ ${tTxt}`;
-const title2 = `${rearTxt} • LENSFOCUS ${lensOff.toFixed(2)}mm • PL@-52 • SENSOR@0`;
+const titleParts = [
+  lens.name,
+  lenTxt,                 // "LEN≈ 19.4mm (front→PL + mount)" (geen rays)
+  `EFL ${eflTxt}`,
+  `T≈ ${tTxt}`,
+  rearTxt,
+  `Focus ${lensOff.toFixed(2)}mm`,
+];
 
-drawTitleOverlay(`${title1} • ${title2}`);
+drawTitleOverlay(titleParts);
 }
 
   // -------------------- view controls --------------------
