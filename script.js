@@ -1619,9 +1619,11 @@ drawRulerFrom(world, plX, xMinPL, null, "PL", +12);
  const camOff = Number(ui.sensorOffset?.value || 0);
 const lensOff = Number(ui.lensFocus?.value || 0);
 
-drawTitleOverlay(
-  `${lens.name} • ${lenTxt} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • CAMFOCUS ${camOff.toFixed(2)}mm • LENSFOCUS ${lensOff.toFixed(2)}mm • ${rearTxt}`
-);
+const title1 = `${lens.name} • ${lenTxt} • EFL ${eflTxt} • T≈ ${tTxt}`;
+const title2 = `${rearTxt} • LENSFOCUS ${lensOff.toFixed(2)}mm • PL@-52 • SENSOR@0`;
+
+drawTitleOverlay(`${title1} • ${title2}`);
+   );
 }
 
   // -------------------- view controls --------------------
