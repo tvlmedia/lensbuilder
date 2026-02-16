@@ -2164,8 +2164,12 @@ drawPreviewViewport();
   if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
   // Keyboard shortcut: P => fullscreen preview
   window.addEventListener("keydown", (e) => {
-    if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
-  });
+  const tag = (e.target?.tagName || "").toUpperCase();
+  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
+  if (typing) return;
+
+  if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
+});
 
   if (ui.prevImg) {
     ui.prevImg.addEventListener("change", (e) => {
