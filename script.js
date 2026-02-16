@@ -64,6 +64,7 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     vig: $("#badgeVig"),
     fov: $("#badgeFov"),
     cov: $("#badgeCov"),
+     
 
     footerWarn: $("#footerWarn"),
     metaInfo: $("#metaInfo"),
@@ -82,6 +83,8 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     rayCount: $("#rayCount"),
     wavePreset: $("#wavePreset"),
     sensorOffset: $("#sensorOffset"),
+     focusMode: $("#focusMode"),
+lensFocus: $("#lensFocus"),
     renderScale: $("#renderScale"),
 
     // preview controls (exist in your HTML)
@@ -514,18 +517,27 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     return { hit, t, vignetted, normal: Nout };
   }
 
- function computeVertices(surfaces) {
+ function computeVertices(surfaces, lensShift = 0) {
   let x = 0;
   for (let i = 0; i < surfaces.length; i++) {
     surfaces[i].vx = x;
     x += Number(surfaces[i].t || 0);
   }
 
+  // Pin IMS at x=0
   const imsIdx = surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
   if (imsIdx >= 0) {
     const shift = -(surfaces[imsIdx].vx || 0);
     for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
-   
+  }
+
+  // ✅ Lens focus: shift the whole lens block (everything except IMS) relative to sensor plane
+  // Convention: +lensShift moves lens TOWARD the sensor (to the right, +x).
+  if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
+    for (let i = 0; i < surfaces.length; i++) {
+      const t = String(surfaces[i]?.type || "").toUpperCase();
+      if (t !== "IMS") surfaces[i].vx += lensShift;
+    }
   }
 
   return x;
@@ -848,25 +860,30 @@ const dir = normalize({ x: dx, y: -sensorYmm });
     return { rms, n: ys.length };
   }
 
-  function autoFocusSensorOffset() {
-    computeVertices(lens.surfaces);
+function autoFocus() {
+  const mode = (ui.focusMode?.value || "cam").toLowerCase();
 
-    const fieldAngle = Number(ui.fieldAngle?.value || 0);
-    const rayCount = Number(ui.rayCount?.value || 31);
-    const wavePreset = ui.wavePreset?.value || "d";
+  const fieldAngle = Number(ui.fieldAngle?.value || 0);
+  const rayCount = Number(ui.rayCount?.value || 31);
+  const wavePreset = ui.wavePreset?.value || "d";
+
+  const currentSensorOff = Number(ui.sensorOffset?.value || 0);
+  const currentLensShift = Number(ui.lensFocus?.value || 0);
+
+  // --- CAM FOCUS (move sensor plane) ---
+  if (mode === "cam") {
+    const lensShift = currentLensShift;
+    computeVertices(lens.surfaces, lensShift);
 
     const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
     const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
-    const ims = lens.surfaces[lens.surfaces.length - 1];
-    const baseX = ims?.vx ?? 0;
-
-    const current = Number(ui.sensorOffset?.value || 0);
+    const baseX = 0.0; // IMS pinned at 0
     const range = 80;
     const coarseStep = 0.5;
     const fineStep = 0.05;
 
-    let best = { off: current, rms: Infinity, n: 0 };
+    let best = { off: currentSensorOff, rms: Infinity, n: 0 };
 
     function scan(center, halfRange, step) {
       const start = center - halfRange;
@@ -879,18 +896,61 @@ const dir = normalize({ x: dx, y: -sensorYmm });
       }
     }
 
-    scan(current, range, coarseStep);
+    scan(currentSensorOff, range, coarseStep);
     if (Number.isFinite(best.rms)) scan(best.off, 3.0, fineStep);
 
     if (!Number.isFinite(best.rms) || best.n < 5) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus failed (too few valid rays). Try more rays / larger apertures.";
+      if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus (cam) failed (too few valid rays). Try more rays / larger apertures.";
       return;
     }
 
     if (ui.sensorOffset) ui.sensorOffset.value = best.off.toFixed(2);
-    if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus: sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+    if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus (cam): sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
     renderAll();
+    return;
   }
+
+  // --- LENS FOCUS (move lens block) ---
+  // Here we must retrace per candidate because surfaces move.
+  const range = 20;      // lens focus typically doesn't need 80mm
+  const coarseStep = 0.25;
+  const fineStep = 0.05;
+
+  const sensorX = 0.0 + currentSensorOff; // cam offset stays as-is
+  let best = { shift: currentLensShift, rms: Infinity, n: 0 };
+
+  function evalShift(shift) {
+    computeVertices(lens.surfaces, shift);
+    const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
+    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+    return spotRmsAtSensorX(traces, sensorX);
+  }
+
+  function scan(center, halfRange, step) {
+    const start = center - halfRange;
+    const end = center + halfRange;
+    for (let sh = start; sh <= end + 1e-9; sh += step) {
+      const { rms, n } = evalShift(sh);
+      if (rms == null) continue;
+      if (rms < best.rms) best = { shift: sh, rms, n };
+    }
+  }
+
+  scan(currentLensShift, range, coarseStep);
+  if (Number.isFinite(best.rms)) scan(best.shift, 2.0, fineStep);
+
+  if (!Number.isFinite(best.rms) || best.n < 5) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus (lens) failed (too few valid rays). Try more rays / larger apertures.";
+    // restore original
+    computeVertices(lens.surfaces, currentLensShift);
+    renderAll();
+    return;
+  }
+
+  if (ui.lensFocus) ui.lensFocus.value = best.shift.toFixed(2);
+  if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus (lens): lensFocus=${best.shift.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+  renderAll();
+}
 
   // -------------------- drawing --------------------
   let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
@@ -1369,7 +1429,8 @@ function renderAll() {
   if (!canvas || !ctx) return;
   if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-  computeVertices(lens.surfaces);
+  const lensShift = Number(ui.lensFocus?.value || 0);
+computeVertices(lens.surfaces, lensShift);
   clampSelected();
 
   const { w: sensorW, h: sensorH, halfH } = getSensorWH();
@@ -1460,9 +1521,12 @@ function renderAll() {
   const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
   const tTxt = T == null ? "—" : "T" + T.toFixed(2);
 
-  drawTitleOverlay(
-    `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • ${rearTxt}`
-  );
+ const camOff = Number(ui.sensorOffset?.value || 0);
+const lensOff = Number(ui.lensFocus?.value || 0);
+
+drawTitleOverlay(
+  `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • CAMFOCUS ${camOff.toFixed(2)}mm • LENSFOCUS ${lensOff.toFixed(2)}mm • ${rearTxt}`
+);
 }
 
   // -------------------- view controls --------------------
@@ -2384,7 +2448,7 @@ drawPreviewViewport();
     URL.revokeObjectURL(url);
   });
 
-  on("#btnAutoFocus", "click", () => autoFocusSensorOffset());
+  on("#btnAutoFocus", "click", () => autoFocus());
   on("#btnLoadOmit", "click", () => { loadLens(omit50ConceptV1()); });
   on("#btnLoadDemo", "click", () => { loadLens(demoLensSimple()); });
 
@@ -2483,13 +2547,14 @@ scheduleRenderPreview();
   });
 
   // -------------------- controls -> rerender --------------------
- ["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
-  on("#" + id, "input", scheduleRenderAll);
-  on("#" + id, "change", scheduleRenderAll);
-});
+["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"]
+  .forEach((id) => {
+    on("#" + id, "input", scheduleRenderAll);
+    on("#" + id, "change", scheduleRenderAll);
+  });
 
   // preview numeric controls => rerender preview (only if img loaded)
- ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
+ ["sensorOffset", "lensFocus", "focusMode"].forEach((id) => {
   on("#" + id, "input", () => scheduleRenderPreview());
   on("#" + id, "change", () => scheduleRenderPreview());
 });
