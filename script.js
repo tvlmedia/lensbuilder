@@ -531,12 +531,12 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
   }
 
-  // ✅ Lens focus: shift the whole PHYSICAL lens block relative to sensor plane
-// Convention: +lensShift moves lens TOWARD the sensor (+x).
+  // Convention: +lensShift moves lens TOWARD the sensor (+x).
+// ✅ Shift everything EXCEPT IMS. (OBJ is a reference plane and must follow the lens block)
 if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
   for (let i = 0; i < surfaces.length; i++) {
     const t = String(surfaces[i]?.type || "").toUpperCase();
-    if (t !== "IMS" && t !== "OBJ") surfaces[i].vx += lensShift;
+    if (t !== "IMS") surfaces[i].vx += lensShift;
   }
 }
 
@@ -2723,15 +2723,17 @@ function init() {
   drawPreviewViewport();
 }
 
-   function hideRaysChip() {
-  // zoek een klein overlay element met precies "Rays"
-  const candidates = Array.from(document.querySelectorAll("button, span, div, label, a"));
-  for (const el of candidates) {
+  function hideRaysChip() {
+  const nodes = Array.from(document.querySelectorAll("button, span, div, label, a"));
+  for (const el of nodes) {
     const t = (el.textContent || "").trim();
-    if (t === "Rays") {
-      // alleen verbergen als het echt zo'n kleine chip is (geen hele panel)
+    if (!t) continue;
+
+    // ✅ match "Rays" and "Rays 50mm ..." etc
+    if (/^rays\b/i.test(t)) {
       const r = el.getBoundingClientRect();
-      if (r.width > 10 && r.width < 140 && r.height > 10 && r.height < 60) {
+      // avoid nuking big panels
+      if (r.width > 10 && r.width < 420 && r.height > 10 && r.height < 90) {
         el.style.display = "none";
         return true;
       }
@@ -2739,7 +2741,14 @@ function init() {
   }
   return false;
 }
+
+// try a few times (some UI mounts late)
 hideRaysChip();
+let _tries = 0;
+const _iv = setInterval(() => {
+  _tries++;
+  if (hideRaysChip() || _tries > 30) clearInterval(_iv);
+}, 200);
    
    function lockSensor() {
   if (ui.sensorOffset) {
