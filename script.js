@@ -1217,12 +1217,13 @@ function drawPLFlange(world, xFlange) {
 
   ctx.save();
   ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(255,255,255,.35)";
+
+  // ✅ donker i.p.v. wit
+  ctx.strokeStyle = "rgba(0,0,0,.25)";
   ctx.setLineDash([10, 8]);
 
-  // teken door de hele view (ipv hardcoded -60..60)
   const r = canvas.getBoundingClientRect();
-  const yWorld = (r.height / (world.s || 1)) * 0.6; // lekker lang
+  const yWorld = (r.height / (world.s || 1)) * 0.6;
 
   const a = worldToScreen({ x: xFlange, y: -yWorld }, world);
   const b = worldToScreen({ x: xFlange, y:  yWorld }, world);
@@ -1233,6 +1234,46 @@ function drawPLFlange(world, xFlange) {
   ctx.stroke();
 
   ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawCameraOverlay(world, plX) {
+  if (!ctx) return;
+
+  const cam = getCurrentCameraPreset();
+  if (!cam || !cam.body) return;
+
+  const baseX = plX;
+  const body = cam.body;
+
+  // ✅ donker op witte achtergrond
+  const stroke   = "rgba(0,0,0,.22)";
+  const fill     = "rgba(0,0,0,.05)";
+  const bumpFill = "rgba(0,0,0,.035)";
+  const logo     = "rgba(0,0,0,.55)";
+
+  drawRoundedRect(world, baseX + body.x, body.y, body.w, body.h, body.r,
+    { fill, stroke, lineWidth: 2 }
+  );
+
+  for (const b of (cam.bumps || [])) {
+    drawRoundedRect(world, baseX + b.x, b.y, b.w, b.h, b.r,
+      { fill: bumpFill, stroke, lineWidth: 2 }
+    );
+  }
+
+  ctx.save();
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+  ctx.font = `12px ${mono}`;
+  ctx.fillStyle = logo;
+  ctx.textBaseline = "top";
+
+  const lp = cam.logoPos || { x: body.x + 10, y: body.y + 10 };
+  const p1 = worldToScreen({ x: baseX + lp.x, y: lp.y }, world);
+  const p2 = worldToScreen({ x: baseX + lp.x, y: lp.y + 14 }, world);
+
+  ctx.fillText(cam.label || "CAM", p1.x, p1.y);
+  ctx.fillText(cam.model || "", p2.x, p2.y);
   ctx.restore();
 }
   function drawTitleOverlay(text) {
