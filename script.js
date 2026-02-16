@@ -691,19 +691,29 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
   }
 
   function sensorHeightToObjectHeight_mm(sensorYmm, sensorX, xStop, xObjPlane, surfaces, wavePreset) {
-    const dx = xStop - sensorX;
-if (Math.abs(dx) < 1e-6) return null;
-const dir = normalize({ x: dx, y: -sensorYmm });
-    const eps = 0.01;
-    const r0 = { p: { x: sensorX + dir.x * eps, y: sensorYmm + dir.y * eps }, d: dir };
-    const tr = traceRayReverse(r0, surfaces, wavePreset);
-    if (tr.vignetted || tr.tir) return null;
+  // ✅ start ALWAYS just to the sensor side of IMS (x > sensorX), never "along dir"
+  const epsX = 0.05; // 0.05mm is genoeg; 0.01 kan ook
 
-    const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
-    if (!hitObj) return null;
-    return hitObj.y;
-  }
+  const startX = sensorX + epsX;    // always to the RIGHT of IMS plane at x=sensorX
+  const startY = sensorYmm;
 
+  const dx = xStop - startX;
+  const dy = 0 - startY;
+
+  if (Math.abs(dx) < 1e-9) return null;
+
+  const dir = normalize({ x: dx, y: dy });
+
+  const r0 = { p: { x: startX, y: startY }, d: dir };
+
+  const tr = traceRayReverse(r0, surfaces, wavePreset);
+  if (tr.vignetted || tr.tir) return null;
+
+  const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
+  if (!hitObj) return null;
+
+  return hitObj.y;
+}
   // -------------------- ray bundles --------------------
   function getRayReferencePlane(surfaces) {
     let refIdx = 1;
