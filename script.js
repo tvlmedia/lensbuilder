@@ -20,6 +20,19 @@ const clone = (obj) =>
 const canvas = $("#canvas");
 const ctx = canvas.getContext("2d");
 
+// -------------------- Preview canvas --------------------
+const previewCanvas = $("#previewCanvas");
+const pctx = previewCanvas?.getContext("2d");
+
+const preview = {
+  img: null,
+  imgCanvas: document.createElement("canvas"),
+  imgCtx: null,
+  ready: false,
+};
+
+preview.imgCtx = preview.imgCanvas.getContext("2d");
+
 // -------------------- UI --------------------
 const ui = {
   tbody: $("#surfTbody"),
@@ -591,6 +604,59 @@ function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
     nBefore = nAfter;
   }
   return { pts, vignetted, tir, endRay: ray };
+}
+
+// -------------------- reverse tracing (sensor -> object) --------------------
+function traceRayReverse(ray, surfaces, wavePreset) {
+  const pts = [{ x: ray.p.x, y: ray.p.y }];
+  let vignetted = false;
+  let tir = false;
+
+  // medium on the RIGHT side of a surface while traveling left
+  let nRight = 1.0; // sensor side is AIR
+
+  for (let i = surfaces.length - 1; i >= 0; i--) {
+    const s = surfaces[i];
+    const hitInfo = intersectSurface(ray, s);
+    if (!hitInfo) { vignetted = true; break; }
+    pts.push(hitInfo.hit);
+    if (hitInfo.vignetted) { vignetted = true; break; }
+
+    // medium on the LEFT side of this surface (in forward direction: nBefore)
+    const nLeft = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
+
+    if (Math.abs(nLeft - nRight) < 1e-9) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      nRight = nLeft;
+      continue;
+    }
+
+    const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
+    if (!newDir) { tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
+    nRight = nLeft;
+  }
+
+  return { pts, vignetted, tir, endRay: ray };
+}
+
+function intersectPlaneX(ray, xPlane) {
+  const t = (xPlane - ray.p.x) / ray.d.x;
+  if (!Number.isFinite(t) || t <= 1e-9) return null;
+  return add(ray.p, mul(ray.d, t));
+}
+
+// Map ONE sensor coordinate (mm) -> object-plane y (mm) using chief-ray through stop center
+function sensorToObjectY_mm(sensorYmm, sensorX, xStop, xObjPlane, surfaces, wavePreset) {
+  const dir = normalize({ x: xStop - sensorX, y: -sensorYmm });
+  const r0 = { p: { x: sensorX, y: sensorYmm }, d: dir };
+  const tr = traceRayReverse(r0, surfaces, wavePreset);
+  if (tr.vignetted || tr.tir) return null;
+
+  const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
+  if (!hitObj) return null;
+  return hitObj.y;
 }
 
 // -------------------- ray bundles --------------------
@@ -1225,7 +1291,138 @@ const elUI = {
 
   // injected
   front: null,
+
+     // preview UI
+  tabRays: $("#tabRays"),
+  tabPreview: $("#tabPreview"),
+  previewCanvas: $("#previewCanvas"),
+  prevImg: $("#prevImg"),
+  prevObjDist: $("#prevObjDist"),
+  prevObjH: $("#prevObjH"),
+  prevRes: $("#prevRes"),
+  btnRenderPreview: $("#btnRenderPreview"),
 };
+
+function setRightTab(mode /* 'rays' | 'preview' */) {
+  const isPreview = mode === "preview";
+
+  if (ui.tabRays) ui.tabRays.classList.toggle("active", !isPreview);
+  if (ui.tabPreview) ui.tabPreview.classList.toggle("active", isPreview);
+
+  if (canvas) canvas.classList.toggle("hiddenCanvas", isPreview);
+  if (previewCanvas) previewCanvas.classList.toggle("hiddenCanvas", !isPreview);
+
+  // overlay tekst aanpassen
+  const oh = $("#overlayHelp");
+  if (oh) {
+    oh.textContent = isPreview
+      ? "Preview: upload image → set object distance/height → Render Preview • (stap 2 = DOF blur)"
+      : "Tips: zet stop op “STOP” surface • IMS ap = sensor half-height • “Scale → FL” fixeert focal drift";
+  }
+}
+
+function renderPreview() {
+  if (!pctx || !previewCanvas) return;
+
+  computeVertices(lens.surfaces);
+
+  const wavePreset = ui.wavePreset?.value || "d";
+  const sensorOffset = Number(ui.sensorOffset?.value || 0);
+
+  const { w: sensorW, h: sensorH } = getSensorWH();
+  const ims = lens.surfaces[lens.surfaces.length - 1];
+  const sensorX = (ims?.vx ?? 0) + sensorOffset;
+
+  const stopIdx = findStopSurfaceIndex(lens.surfaces);
+  const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
+
+  const objDist = Math.max(1, Number(ui.prevObjDist?.value || 2000)); // mm
+  const objH = Math.max(1, Number(ui.prevObjH?.value || 500));       // full height in mm
+  const halfObjH = objH * 0.5;
+
+  const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+
+  // preview resolution
+  const base = Number(ui.prevRes?.value || 384);
+  const aspect = sensorW / sensorH;
+  const W = Math.max(64, Math.round(base * aspect));
+  const H = Math.max(64, base);
+
+  previewCanvas.width = W;
+  previewCanvas.height = H;
+
+  // need an uploaded image
+  const hasImg = preview.ready && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0;
+
+  const imgW = preview.imgCanvas.width;
+  const imgH = preview.imgCanvas.height;
+  const imgData = hasImg ? preview.imgCtx.getImageData(0, 0, imgW, imgH).data : null;
+
+  // helper: sample uploaded image at normalized coords
+  function sample(u, v) {
+    if (!hasImg) return [20, 20, 20, 255];
+    if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
+
+    const x = u * (imgW - 1);
+    const y = v * (imgH - 1);
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = Math.min(imgW - 1, x0 + 1);
+    const y1 = Math.min(imgH - 1, y0 + 1);
+    const tx = x - x0, ty = y - y0;
+
+    function px(ix, iy) {
+      const o = (iy * imgW + ix) * 4;
+      return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
+    }
+
+    const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
+    const lerp = (a, b, t) => a + (b - a) * t;
+
+    const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
+    const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
+    return c0.map((v0, i) => lerp(v0, c1[i], ty));
+  }
+
+  const out = pctx.createImageData(W, H);
+  const outD = out.data;
+
+  // render: for each pixel, map sensor(x,y) -> object(x,y) via 2 symmetric meridional traces
+  for (let j = 0; j < H; j++) {
+    const ny = (j / (H - 1)) * 2 - 1;        // -1..1
+    const sensorYmm = ny * (sensorH * 0.5);  // mm
+
+    for (let i = 0; i < W; i++) {
+      const nx = (i / (W - 1)) * 2 - 1;
+      const sensorXmm_local = nx * (sensorW * 0.5);
+
+      // vertical mapping
+      const yObj = sensorToObjectY_mm(sensorYmm, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+      // horizontal mapping (symmetry trick: reuse meridional with "y = sensorXmm_local")
+      const xObj = sensorToObjectY_mm(sensorXmm_local, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+
+      let r = 0, g = 0, b = 0, a = 255;
+
+      if (yObj == null || xObj == null) {
+        // vignetted / no hit -> black
+        r = g = b = 0;
+      } else {
+        // map object coords to uploaded image UV
+        const u = 0.5 + (xObj / (2 * halfObjH));
+        const v = 0.5 - (yObj / (2 * halfObjH));
+        const c = sample(u, v);
+        r = c[0]; g = c[1]; b = c[2]; a = c[3];
+      }
+
+      const o = (j * W + i) * 4;
+      outD[o] = r;
+      outD[o + 1] = g;
+      outD[o + 2] = b;
+      outD[o + 3] = a;
+    }
+  }
+
+  pctx.putImageData(out, 0, 0);
+}
 
 function modalExists() {
   return !!(elUI.modal && elUI.insert && elUI.cancel && elUI.type && elUI.mode && elUI.f && elUI.ap && elUI.ct);
