@@ -1487,14 +1487,18 @@ function renderAll() {
       renderAll();
     });
 
-    canvas.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      const delta = Math.sign(e.deltaY);
-      const factor = delta > 0 ? 0.92 : 1.08;
-      view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-      renderAll();
-    }, { passive: false });
+   canvas.addEventListener("wheel", (e) => {
+  // ✅ Normaal scrollen toestaan (sidebar/page)
+  // ✅ Alleen zoomen als user een modifier indrukt
+  const wantZoom = e.ctrlKey || e.metaKey || e.altKey;
+  if (!wantZoom) return;
 
+  e.preventDefault();
+  const delta = Math.sign(e.deltaY);
+  const factor = delta > 0 ? 0.92 : 1.08;
+  view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+  renderAll();
+}, { passive: false });
     canvas.addEventListener("dblclick", () => {
       view.panX = 0; view.panY = 0; view.zoom = 1.0;
       renderAll();
@@ -1611,17 +1615,18 @@ function bindPreviewViewControls() {
     drawPreviewViewport();
   });
 
-  previewCanvasEl.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      const delta = Math.sign(e.deltaY);
-      const factor = delta > 0 ? 0.92 : 1.08;
-      preview.view.zoom = Math.max(0.12, Math.min(20, preview.view.zoom * factor));
-      drawPreviewViewport();
-    },
-    { passive: false }
-  );
+ previewCanvasEl.addEventListener("wheel", (e) => {
+  // ✅ laat normaal scrollen door de page/sidebar toe
+  // ✅ zoom alleen met modifier (trackpad pinch => vaak ctrlKey=true)
+  const wantZoom = e.ctrlKey || e.metaKey || e.altKey;
+  if (!wantZoom) return;
+
+  e.preventDefault();
+  const delta = Math.sign(e.deltaY);
+  const factor = delta > 0 ? 0.92 : 1.08;
+  preview.view.zoom = Math.max(0.12, Math.min(20, preview.view.zoom * factor));
+  drawPreviewViewport();
+}, { passive: false });
 
   previewCanvasEl.addEventListener("dblclick", () => {
     preview.view.panX = 0;
