@@ -32,14 +32,24 @@
   const previewCanvasEl = $("#previewCanvas");
   const pctx = previewCanvasEl?.getContext("2d");
 
-  // -------------------- preview state --------------------
-  const preview = {
-    img: null,
-    imgCanvas: document.createElement("canvas"),
-    imgCtx: null,
-    ready: false,
-  };
-  preview.imgCtx = preview.imgCanvas.getContext("2d");
+// -------------------- preview state --------------------
+const preview = {
+  img: null,
+  imgCanvas: document.createElement("canvas"),     // source image uploaded
+  imgCtx: null,
+  ready: false,
+
+  // NEW: offscreen rendered "world" (lens output)
+  worldCanvas: document.createElement("canvas"),
+  worldCtx: null,
+  worldReady: false,
+
+  // NEW: view controls for the SENSOR viewport
+  view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
+};
+
+preview.imgCtx = preview.imgCanvas.getContext("2d");
+preview.worldCtx = preview.worldCanvas.getContext("2d");
 
   // -------------------- UI --------------------
   const ui = {
@@ -851,6 +861,22 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+function resizePreviewCanvasToCSS() {
+  if (!previewCanvasEl || !pctx) return;
+  const r = previewCanvasEl.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  previewCanvasEl.width  = Math.max(2, Math.floor(r.width  * dpr));
+  previewCanvasEl.height = Math.max(2, Math.floor(r.height * dpr));
+
+  // draw in CSS pixels
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // store CSS size for convenience
+  previewCanvasEl._cssW = r.width;
+  previewCanvasEl._cssH = r.height;
+}
+   
   function worldToScreen(p, world) {
     const { cx, cy, s } = world;
     return { x: cx + p.x * s, y: cy - p.y * s };
@@ -1207,7 +1233,149 @@
       renderAll();
     });
   }
+function getSensorRectInPane() {
+  if (!previewCanvasEl) return { x: 0, y: 0, w: 0, h: 0 };
 
+  // Sensor rect is FIXED in the preview pane, based on sensor aspect.
+  const r = previewCanvasEl.getBoundingClientRect();
+  const pad = 22; // CSS px padding
+  const paneW = r.width, paneH = r.height;
+
+  const { w: sensorW, h: sensorH } = getSensorWH();
+  const asp = sensorW / sensorH;
+
+  let rw = paneW - pad * 2;
+  let rh = rw / asp;
+
+  if (rh > paneH - pad * 2) {
+    rh = paneH - pad * 2;
+    rw = rh * asp;
+  }
+
+  const x = (paneW - rw) * 0.5;
+  const y = (paneH - rh) * 0.5;
+  return { x, y, w: rw, h: rh };
+}
+
+function drawPreviewViewport() {
+  if (!pctx || !previewCanvasEl) return;
+
+  resizePreviewCanvasToCSS();
+
+  const r = previewCanvasEl.getBoundingClientRect();
+  const Wc = r.width, Hc = r.height;
+
+  // IMPORTANT: we draw in CSS pixels (because we setTransform(dpr,..))
+  pctx.clearRect(0, 0, Wc, Hc);
+
+  // background
+  pctx.save();
+  pctx.fillStyle = "rgba(0,0,0,.04)";
+  pctx.fillRect(0, 0, Wc, Hc);
+  pctx.restore();
+
+  const sr = getSensorRectInPane();
+
+  // draw the world image with pan/zoom, centered inside sensor rect
+  if (preview.worldReady && preview.worldCanvas && preview.worldCanvas.width > 0) {
+    const v = preview.view;
+
+    const iw = preview.worldCanvas.width;
+    const ih = preview.worldCanvas.height;
+
+    // contain-fit into sensor rect at zoom=1
+    const sFit = Math.min(sr.w / iw, sr.h / ih);
+    const s = sFit * v.zoom;
+
+    // center of sensor rect
+    const cx = sr.x + sr.w * 0.5 + v.panX;
+    const cy = sr.y + sr.h * 0.5 + v.panY;
+
+    // top-left where we draw the image
+    const dw = iw * s;
+    const dh = ih * s;
+    const dx = cx - dw * 0.5;
+    const dy = cy - dh * 0.5;
+
+    // clip to sensor rect
+    pctx.save();
+    pctx.beginPath();
+    pctx.rect(sr.x, sr.y, sr.w, sr.h);
+    pctx.clip();
+
+    pctx.imageSmoothingEnabled = true;
+    pctx.drawImage(preview.worldCanvas, dx, dy, dw, dh);
+    pctx.restore();
+  }
+
+  // dim outside sensor
+  pctx.save();
+  pctx.fillStyle = "rgba(0,0,0,.25)";
+  pctx.beginPath();
+  pctx.rect(0, 0, Wc, Hc);
+  pctx.rect(sr.x, sr.y, sr.w, sr.h);
+  pctx.fill("evenodd");
+  pctx.restore();
+
+  // sensor border + label
+  pctx.save();
+  pctx.lineWidth = 2;
+  pctx.strokeStyle = "rgba(255,255,255,.85)";
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+
+  pctx.fillStyle = "rgba(255,255,255,.85)";
+  pctx.font =
+    "12px " +
+    (getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "ui-monospace");
+  const { w: sw, h: sh } = getSensorWH();
+  pctx.fillText(`${sw.toFixed(2)}×${sh.toFixed(2)}mm`, sr.x + 10, sr.y + 18);
+  pctx.restore();
+}
+
+function bindPreviewViewControls() {
+  if (!previewCanvasEl) return;
+
+  previewCanvasEl.addEventListener("mousedown", (e) => {
+    preview.view.dragging = true;
+    preview.view.lastX = e.clientX;
+    preview.view.lastY = e.clientY;
+  });
+
+  window.addEventListener("mouseup", () => {
+    preview.view.dragging = false;
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!preview.view.dragging) return;
+    const dx = e.clientX - preview.view.lastX;
+    const dy = e.clientY - preview.view.lastY;
+    preview.view.lastX = e.clientX;
+    preview.view.lastY = e.clientY;
+    preview.view.panX += dx;
+    preview.view.panY += dy;
+    drawPreviewViewport();
+  });
+
+  previewCanvasEl.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const delta = Math.sign(e.deltaY);
+      const factor = delta > 0 ? 0.92 : 1.08;
+      preview.view.zoom = Math.max(0.12, Math.min(20, preview.view.zoom * factor));
+      drawPreviewViewport();
+    },
+    { passive: false }
+  );
+
+  previewCanvasEl.addEventListener("dblclick", () => {
+    preview.view.panX = 0;
+    preview.view.panY = 0;
+    preview.view.zoom = 1.0;
+    drawPreviewViewport();
+  });
+}
+   
   // -------------------- edit helpers --------------------
   function isProtectedIndex(i) {
     const t = String(lens.surfaces[i]?.type || "").toUpperCase();
@@ -1575,8 +1743,7 @@
     const W = Math.max(64, Math.round(base * aspect));
     const H = Math.max(64, base);
 
-    previewCanvasEl.width = W;
-    previewCanvasEl.height = H;
+   
 
     const hasImg = preview.ready && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0;
     const imgW = preview.imgCanvas.width;
@@ -1607,6 +1774,9 @@
       return c0.map((v0, i) => lerp(v0, c1[i], ty));
     }
 
+
+
+     
     // LUT: r_sensor -> r_object
     const rMaxSensor = Math.hypot(halfW, halfH);
     const LUT_N = 512;
@@ -1640,45 +1810,75 @@
       return rObjLUT[i0] * (1 - u) + rObjLUT[i1] * u;
     }
 
-    const out = pctx.createImageData(W, H);
-    const outD = out.data;
+    // render into OFFSCREEN world buffer
+preview.worldCanvas.width = W;
+preview.worldCanvas.height = H;
 
-    for (let j = 0; j < H; j++) {
-      const ny = (j / (H - 1)) * 2 - 1;
-      const yS = ny * halfH;
+const wctx = preview.worldCtx;
+const out = wctx.createImageData(W, H);
+const outD = out.data;
 
-      for (let i = 0; i < W; i++) {
-        const nx = (i / (W - 1)) * 2 - 1;
-        const xS = nx * halfW;
 
-        const rS = Math.hypot(xS, yS);
-        const rO = lookupROut(rS);
+         // object plane extents (map object-mm -> input image UV)
+    const imgAsp = hasImg ? (imgW / imgH) : 1.7777778;
+    const halfObjW = halfObjH * imgAsp;
 
-        let rr = 0, gg = 0, bb = 0, aa = 255;
-
-        if (rO == null) {
-          rr = 0; gg = 120; bb = 255; aa = 255; // blue mapping fail
-        } else {
-          const inv = rS > 1e-9 ? (1 / rS) : 0;
-          const xO = xS * inv * rO;
-          const yO = yS * inv * rO;
-
-        let u = 0.5 + (xO / (2 * halfObjH));
-let v = 0.5 - (yO / (2 * halfObjH));
-u = 1 - u; // only if left/right is flipped
-          const c = sample(u, v);
-          rr = c[0]; gg = c[1]; bb = c[2]; aa = c[3];
-        }
-
-        const o = (j * W + i) * 4;
-        outD[o] = rr;
-        outD[o + 1] = gg;
-        outD[o + 2] = bb;
-        outD[o + 3] = aa;
-      }
+    function objectMmToUV(xmm, ymm) {
+      // map object plane coords (mm) to [0..1]
+      const u = 0.5 + (xmm / (2 * halfObjW));
+      const v = 0.5 - (ymm / (2 * halfObjH)); // y up -> v down
+      return { u, v };
     }
 
-    pctx.putImageData(out, 0, 0);
+    // Fill outD (world image)
+    for (let py = 0; py < H; py++) {
+      // sensor y in mm
+      const sy = (0.5 - (py + 0.5) / H) * sensorH;
+
+      for (let px = 0; px < W; px++) {
+        // sensor x in mm
+        const sx = ((px + 0.5) / W - 0.5) * sensorW;
+
+        const r = Math.hypot(sx, sy);
+        const idx = (py * W + px) * 4;
+
+        // center pixel: trivial
+        if (r < 1e-9) {
+          const { u, v } = objectMmToUV(0, 0);
+          const c = sample(u, v);
+          outD[idx] = c[0]; outD[idx + 1] = c[1]; outD[idx + 2] = c[2]; outD[idx + 3] = 255;
+          continue;
+        }
+
+        const rObj = lookupROut(r);
+        if (rObj == null) {
+          // vignette / invalid ray -> black
+          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+          continue;
+        }
+
+        // preserve angle (radial mapping): scale vector by rObj/r
+        const k = rObj / r;
+        const ox = sx * k;
+        const oy = sy * k;
+
+        const { u, v } = objectMmToUV(ox, oy);
+        const c = sample(u, v);
+
+        outD[idx] = c[0];
+        outD[idx + 1] = c[1];
+        outD[idx + 2] = c[2];
+        outD[idx + 3] = 255;
+      }
+    }
+// ... jouw bestaande pixel-loop blijft hetzelfde,
+// alleen op het einde:
+
+wctx.putImageData(out, 0, 0);
+preview.worldReady = true;
+
+// now draw it into the sensor viewport
+drawPreviewViewport();
   }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
@@ -2014,13 +2214,16 @@ u = 1 - u; // only if left/right is flipped
     if (preview.ready) renderPreview();
   });
 
-  // -------------------- init --------------------
-  function init() {
-    populateSensorPresetsSelect();
-    applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-    loadLens(lens);
-    bindViewControls();
-  }
+  
 
+  // -------------------- init --------------------
+function init() {
+  populateSensorPresetsSelect();
+  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
+  loadLens(lens);
+  bindViewControls();
+  bindPreviewViewControls();
+  drawPreviewViewport(); // <= hier
+}
   init();
 })();
