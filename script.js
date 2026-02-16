@@ -41,13 +41,10 @@ const preview = {
 
   imgData: null, // ✅ CACHE pixels 1x
 
- worldCanvas: document.createElement("canvas"),      // front (wat je tekent)
-worldCtx: null,
-worldReady: false,
-
-worldBack: document.createElement("canvas"),        // back (waar je in rendert)
-worldBackCtx: null,
-rendering: false,
+  // NEW: offscreen rendered "world" (lens output)
+  worldCanvas: document.createElement("canvas"),
+  worldCtx: null,
+  worldReady: false,
 
   // NEW: view controls for the SENSOR viewport
   view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
@@ -55,7 +52,6 @@ rendering: false,
 
 preview.imgCtx = preview.imgCanvas.getContext("2d");
 preview.worldCtx = preview.worldCanvas.getContext("2d");
-   preview.worldBackCtx = preview.worldBack.getContext("2d");
 
   // -------------------- UI --------------------
   const ui = {
@@ -147,8 +143,8 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     return { w, h, halfH: Math.max(0.1, h * 0.5), halfW: Math.max(0.1, w * 0.5) };
   }
 
-const OV = 1.0;
-   
+   const OV = 1.6; // overscan factor
+
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
     const i = lens.surfaces.length - 1;
@@ -174,59 +170,6 @@ const OV = 1.0;
     applySensorToIMS();
   }
 
-// -------------------- camera overlay (PNG, calibrated) --------------------
-// We will draw a real camera silhouette image and pin it to:
-//   sensor plane = world x = 0
-//   PL flange plane = world x = -PL_FFD
-//
-// Calibration needs two clicks on the overlay image:
-//   1) click sensor plane marker
-//   2) click flange plane marker (mount face)
-//
-// pxPerMm = |flangePxX - sensorPxX| / PL_FFD
-
-const CAMERA_IMG = {
-  "Sony VENICE (FF)": {
-    src: "assets/venice.png",
-
-    // These will be set by calibration:
-    sensorPx: { x: null, y: null },
-    flangePxX: null,
-    pxPerMm: null,
-
-    // Optional fine vertical tweak in world mm (usually 0)
-    yMmOffset: 0,
-  },
-
-  // If you later add more PNGs:
-  // "ARRI Alexa Mini (S35)": { src:"assets/alexa_mini.png", sensorPx:{x:null,y:null}, flangePxX:null, pxPerMm:null, yMmOffset:0 },
-};
-
-const camImgCache = new Map();
-
-function getCamImgPresetKey() {
-  // tie it to your sensorPreset dropdown:
-  const key = ui.sensorPreset?.value || "Sony VENICE (FF)";
-  // fallback to Venice
-  return CAMERA_IMG[key] ? key : "Sony VENICE (FF)";
-}
-
-function getCamPreset() {
-  return CAMERA_IMG[getCamImgPresetKey()];
-}
-
-function getCamImg() {
-  const key = getCamImgPresetKey();
-  const p = CAMERA_IMG[key];
-  if (!p) return null;
-
-  if (!camImgCache.has(key)) {
-    const im = new Image();
-    im.src = p.src;
-    camImgCache.set(key, im);
-  }
-  return camImgCache.get(key);
-}
   // -------------------- glass db --------------------
   const GLASS_DB = {
     AIR: { nd: 1.0, Vd: 999.0 },
@@ -490,22 +433,7 @@ if (k === "stop") {
   if (want) s.R = 0.0;
 }
     else if (k === "glass") s.glass = el.value;
-   else if (k === "type") {
-  const v = String(el.value || "");
-  s.type = v;
-
-  // ✅ als iemand letterlijk "STOP" typt: maak het ook echt de stop
-  if (v.trim().toUpperCase() === "STOP") {
-    if (String(s.type).toUpperCase() === "OBJ" || String(s.type).toUpperCase() === "IMS") {
-      s.type = String(i);
-      if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ/IMS.";
-    } else {
-      lens.surfaces.forEach((ss, j) => { ss.stop = false; if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j); });
-      s.stop = true;
-      s.R = 0.0;
-    }
-  }
-}
+    else if (k === "type") s.type = el.value;
     else s[k] = num(el.value, s[k] ?? 0);
 
     applySensorToIMS();
@@ -552,7 +480,6 @@ if (k === "stop") {
 
   // plane surface normal is a property of the surface, not of the ray.
 // In our convention, normals point toward the OBJECT side (-x).
-// plane surface normal is fixed: points to OBJECT side (-x)
 return { hit, t, vignetted, normal: { x: -1, y: 0 } };
 }
 
@@ -617,19 +544,11 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
     return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
   }
-function clampSurfaceAp(s) {
+ function clampSurfaceAp(s) {
   if (!s) return;
 
   const t = String(s.type || "").toUpperCase();
-
-  // ✅ niet clampen
-  if (t === "IMS" || t === "OBJ") return;
-
-  // ✅ STOP apart (plane)
-  if (t === "STOP") {
-    s.ap = Math.max(AP_MIN, Math.min(Number(s.ap || 0), AP_MAX_PLANE));
-    return;
-  }
+  if (t === "IMS" || t === "OBJ") return; // ✅ niet clampen
 
   const lim = maxApForSurface(s);
   const ap = Number(s.ap || 0);
@@ -710,41 +629,41 @@ function clampSurfaceAp(s) {
     return { pts, vignetted, tir, endRay: ray };
   }
 
- function traceRayReverse(ray, surfaces, wavePreset) {
-  const pts = [{ x: ray.p.x, y: ray.p.y }];
-  let vignetted = false;
-  let tir = false;
+  function traceRayReverse(ray, surfaces, wavePreset) {
+    const pts = [{ x: ray.p.x, y: ray.p.y }];
+    let vignetted = false;
+    let tir = false;
 
-  for (let i = surfaces.length - 1; i >= 0; i--) {
-    const s = surfaces[i];
-    const isIMS = String(s?.type || "").toUpperCase() === "IMS";
+    let nRight = 1.0; // sensor side is AIR
 
-    const hitInfo = intersectSurface(ray, s);
-    if (!hitInfo) { vignetted = true; break; }
+    for (let i = surfaces.length - 1; i >= 0; i--) {
+      const s = surfaces[i];
+      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
 
-    pts.push(hitInfo.hit);
+      const hitInfo = intersectSurface(ray, s);
+      if (!hitInfo) { vignetted = true; break; }
 
-    // IMS must not clip rays
-    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+      pts.push(hitInfo.hit);
 
-    // OSLO-ish: glass = medium AFTER surface
-    // reverse: right side is AFTER surface i, left side is BEFORE surface i
-    const nRight = glassN(s.glass, wavePreset);
-    const nLeft  = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
+      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-    if (Math.abs(nLeft - nRight) < 1e-9) {
-      ray = { p: hitInfo.hit, d: ray.d };
-      continue;
+      const nLeft = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
+
+      if (Math.abs(nLeft - nRight) < 1e-9) {
+        ray = { p: hitInfo.hit, d: ray.d };
+        nRight = nLeft;
+        continue;
+      }
+
+      const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
+      if (!newDir) { tir = true; break; }
+
+      ray = { p: hitInfo.hit, d: newDir };
+      nRight = nLeft;
     }
 
-    const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
-    if (!newDir) { tir = true; break; }
-
-    ray = { p: hitInfo.hit, d: newDir };
+    return { pts, vignetted, tir, endRay: ray };
   }
-
-  return { pts, vignetted, tir, endRay: ray };
-}
 
   function intersectPlaneX(ray, xPlane) {
   if (Math.abs(ray.d.x) < 1e-12) return null;
@@ -976,18 +895,6 @@ const dir = normalize({ x: dx, y: -sensorYmm });
   // -------------------- drawing --------------------
   let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
 
-// -------------------- camera calibration state --------------------
-let camCal = {
-  active: false,
-  stage: 0, // 0 = waiting sensor click, 1 = waiting flange click
-};
-
-function camIsCalibrated(p) {
-  return !!(p && p.pxPerMm && Number.isFinite(p.pxPerMm) && p.pxPerMm > 0 &&
-            p.sensorPx && Number.isFinite(p.sensorPx.x) && Number.isFinite(p.sensorPx.y) &&
-            Number.isFinite(p.flangePxX));
-}
-   
   function resizeCanvasToCSS() {
     if (!canvas || !ctx) return;
     const r = canvas.getBoundingClientRect();
@@ -1017,22 +924,15 @@ function resizePreviewCanvasToCSS() {
     const { cx, cy, s } = world;
     return { x: cx + p.x * s, y: cy - p.y * s };
   }
- function makeWorldTransform() {
-  const r = canvas.getBoundingClientRect();
-  // IMPORTANT: don't use Number(input.value) directly here.
-  // If the user temporarily clears the field (""), Number("") becomes 0,
-  // collapsing the world scale and making everything look like it vanished.
-  // Use num() with a fallback so the base scale stays stable.
-  const base = num(ui.renderScale?.value, 1.25) * 3.2;
-  const zoom = Number.isFinite(view.zoom) ? view.zoom : 1.0;
-  const s = base * zoom;
-
-  return {
-    cx: r.width / 2 + (Number.isFinite(view.panX) ? view.panX : 0),
-    cy: r.height / 2 + (Number.isFinite(view.panY) ? view.panY : 0),
-    s: Number.isFinite(s) && s > 0 ? s : 1
-  };
-}
+  function makeWorldTransform() {
+    if (!canvas) return { cx: 0, cy: 0, s: 1 };
+    const r = canvas.getBoundingClientRect();
+    const cx = r.width / 2 + view.panX;
+    const cy = r.height / 2 + view.panY;
+    const base = Number(ui.renderScale?.value || 1.25) * 3.2;
+    const s = base * view.zoom;
+    return { cx, cy, s };
+  }
 
   function drawAxes(world) {
     if (!ctx) return;
@@ -1254,93 +1154,19 @@ function resizePreviewCanvasToCSS() {
 
  
 
-   // -------------------- PL flange + ruler + camera overlay --------------------
-const PL_FFD = 52.0; // mm
-
-function getLensTopY(surfaces) {
-  let m = 0;
-  for (const s of (surfaces || [])) {
-    const ap = Math.max(0, Number(s.ap || 0));
-    m = Math.max(m, ap);
-  }
-  return m;
-}
-
-function drawRulerFromSensor(world, sensorX0, yWorld, lenMm = 200, stepMm = 10) {
-  if (!ctx) return;
-
-  const xStart = sensorX0;           // 0 = sensor plane
-  const xEnd = sensorX0 - lenMm;     // to the left
-
-  ctx.save();
-
-  // line
-  ctx.strokeStyle = "rgba(0,0,0,.35)";
-  ctx.lineWidth = 2;
-
-  const a = worldToScreen({ x: xStart, y: yWorld }, world);
-  const b = worldToScreen({ x: xEnd,   y: yWorld }, world);
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-
-  // ticks + labels
-  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-  ctx.font = `12px ${mono}`;
-  ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-
-  for (let mm = 0; mm <= lenMm; mm += stepMm) {
-    const x = sensorX0 - mm;
-
-    // tick sizes: 1cm small, 5cm medium, 10cm large
-    let tick = 6;
-    if (mm % 100 === 0) tick = 16;     // 10 cm
-    else if (mm % 50 === 0) tick = 12; // 5 cm
-
-    const p0 = worldToScreen({ x, y: yWorld }, world);
-    const p1 = worldToScreen({ x, y: yWorld + (tick / (world.s || 1)) }, world);
-
-    ctx.strokeStyle = "rgba(0,0,0,.35)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(p0.x, p0.y);
-    ctx.lineTo(p1.x, p1.y);
-    ctx.stroke();
-
-    // label every 10mm = 1cm (in cm)
-    if (mm % 10 === 0) {
-      const cm = (mm / 10) | 0;
-      const tp = worldToScreen(
-        { x, y: yWorld + ((tick + 6) / (world.s || 1)) },
-        world
-      );
-      ctx.fillText(String(cm), tp.x, tp.y);
-    }
-  }
-
-  // "0" marker at sensor
-  ctx.fillStyle = "rgba(0,0,0,.75)";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "bottom";
-  const z = worldToScreen({ x: sensorX0, y: yWorld + (28 / (world.s || 1)) }, world);
-  ctx.fillText("SENSOR 0", z.x - 28, z.y);
-
-  ctx.restore();
-}
+   const PL_FFD = 52.0; // mm
 
 function drawPLFlange(world, xFlange) {
   if (!ctx || !canvas) return;
 
   ctx.save();
   ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(0,0,0,.25)";
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
   ctx.setLineDash([10, 8]);
 
+  // teken door de hele view (ipv hardcoded -60..60)
   const r = canvas.getBoundingClientRect();
-  const yWorld = (r.height / (world.s || 1)) * 0.6;
+  const yWorld = (r.height / (world.s || 1)) * 0.6; // lekker lang
 
   const a = worldToScreen({ x: xFlange, y: -yWorld }, world);
   const b = worldToScreen({ x: xFlange, y:  yWorld }, world);
@@ -1354,192 +1180,112 @@ function drawPLFlange(world, xFlange) {
   ctx.restore();
 }
 
-  function drawPLMountSide(world, xFlange) {
+// Visual-only PL mount cutout (side cross-section) so you can see rear clearance.
+// Convention in this tool: sensor plane = x=0, lens is to the LEFT (negative x).
+// Therefore PL flange plane is at x = -52mm, and the camera body is to the RIGHT.
+function drawPLMountCutout(world, xFlange, opts = {}) {
   if (!ctx) return;
 
-  // Visual-only rough PL throat/profile (SIDE VIEW)
-  const outerR = 30;     // outer “mount body” half-height (mm-ish)
-  const throatR = 22;    // throat half-height
-  const camDepth = 18;   // how far mount body goes into camera (+x)
-  const lensLip  = 4;    // small lip to lens side (-x)
+  // Rough but useful dimensions (mm). This is *visual* guidance, not a CAD drawing.
+  // PL throat diameter is ~54mm, so throat radius ≈ 27mm.
+  const outerR   = Number.isFinite(opts.outerR)   ? opts.outerR   : 32;   // outer body half-height
+  const throatR  = Number.isFinite(opts.throatR)  ? opts.throatR  : 27;   // inner opening half-height
+  const camDepth = Number.isFinite(opts.camDepth) ? opts.camDepth : 18;   // how far the mount tube goes to camera side (+x)
+  const lensLip  = Number.isFinite(opts.lensLip)  ? opts.lensLip  : 4;    // small lip to lens side (-x)
+  const flangeT  = Number.isFinite(opts.flangeT)  ? opts.flangeT  : 2.5;  // flange plate thickness into camera (+x)
 
   const P = (x, y) => worldToScreen({ x, y }, world);
 
   ctx.save();
   ctx.lineWidth = 2;
   ctx.strokeStyle = "rgba(0,0,0,.30)";
-  ctx.fillStyle = "rgba(0,0,0,.03)";
+  ctx.fillStyle = "rgba(0,0,0,.035)";
 
-  // Outer mount block (camera side)
+  // ---- outer mount block (camera side) ----
   {
-    const a = P(xFlange,        -outerR);
-    const b = P(xFlange+camDepth, -outerR);
-    const c = P(xFlange+camDepth,  outerR);
-    const d = P(xFlange,         outerR);
-
+    const a = P(xFlange,            -outerR);
+    const b = P(xFlange + camDepth, -outerR);
+    const c = P(xFlange + camDepth,  outerR);
+    const d = P(xFlange,             outerR);
     ctx.beginPath();
-    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
   }
 
-  // Small lens-side lip (just to show flange lip)
+  // ---- lens-side lip (tiny extension to the left) ----
   {
-    const a = P(xFlange - lensLip, -outerR*0.55);
-    const b = P(xFlange,          -outerR*0.55);
-    const c = P(xFlange,           outerR*0.55);
-    const d = P(xFlange - lensLip, outerR*0.55);
-
-    ctx.fillStyle = "rgba(0,0,0,.02)";
+    const a = P(xFlange - lensLip, -outerR);
+    const b = P(xFlange,          -outerR);
+    const c = P(xFlange,           outerR);
+    const d = P(xFlange - lensLip,  outerR);
     ctx.beginPath();
-    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
   }
 
-  // Throat "hole" (cut-out)
+  // ---- cut the throat opening (draw inner "tube" guide lines) ----
   ctx.save();
-  ctx.globalCompositeOperation = "destination-out";
-  {
-    const a = P(xFlange,          -throatR);
-    const b = P(xFlange+camDepth, -throatR);
-    const c = P(xFlange+camDepth,  throatR);
-    const d = P(xFlange,           throatR);
-
-    ctx.beginPath();
-    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
-    ctx.closePath();
-    ctx.fill();
-  }
-  ctx.restore();
-
-  // Throat outline
-  {
-    const a = P(xFlange,          -throatR);
-    const b = P(xFlange+camDepth, -throatR);
-    const c = P(xFlange+camDepth,  throatR);
-    const d = P(xFlange,           throatR);
-
-    ctx.beginPath();
-    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
-    ctx.closePath();
-    ctx.stroke();
-  }
-
-  // Label
-  ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
-  const t = P(xFlange + 6, outerR + 6);
-  ctx.fillText("PL MOUNT (side)", t.x, t.y);
-
-  ctx.restore();
-}
-
-  
-
-function drawTitleOverlay(text) {
-  if (!ctx) return;
-  ctx.save();
-  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
-  ctx.font = "14px " + mono;
-  ctx.fillStyle = "#333";
-  ctx.fillText(text, 14, 20);
-  ctx.restore();
-}
-
-  
-function drawRoundedRect(ctx, x, y, w, h, r) {
-  const rr = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
+  ctx.strokeStyle = "rgba(0,0,0,.22)";
+  ctx.lineWidth = 1.5;
+  const t1 = P(xFlange - lensLip, -throatR);
+  const t2 = P(xFlange + camDepth, -throatR);
+  const b1 = P(xFlange - lensLip,  throatR);
+  const b2 = P(xFlange + camDepth,  throatR);
   ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
-}
-
-// Draw overlay, ALSO during calibration (even if not calibrated yet)
-function drawCameraOverlayImage(world) {
-  if (!ctx) return;
-
-  const key = getCamImgPresetKey();
-  const p = getCamPreset();
-  const im = getCamImg();
-  if (!p || !im || !im.complete) return;
-
-  const calibrated = camIsCalibrated(p);
-
-  // If not calibrated, still draw it with a TEMP scale so you can click it.
-  const tempPxPerMm = 10;
-  const pxPerMm = calibrated ? p.pxPerMm : tempPxPerMm;
-
-  const scale = world.s / pxPerMm;
-  const drawW = im.naturalWidth * scale;
-  const drawH = im.naturalHeight * scale;
-
-  // Place image so that sensorPx lands on world x=0,y=0.
-  // If sensorPx unknown yet, start centered (so first click can define it).
-  const sensorScreen = worldToScreen({ x: 0, y: 0 }, world);
-  const anchorX = Number.isFinite(p.sensorPx?.x) ? p.sensorPx.x : im.naturalWidth * 0.5;
-  const anchorY = Number.isFinite(p.sensorPx?.y) ? p.sensorPx.y : im.naturalHeight * 0.5;
-
-  const sx = sensorScreen.x - anchorX * scale;
-  const sy = sensorScreen.y - anchorY * scale - (p.yMmOffset || 0) * world.s;
-
-  ctx.save();
-  ctx.globalAlpha = calibrated ? 0.22 : 0.12;
-  ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(im, sx, sy, drawW, drawH);
-
-  // UI hint text
-  ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
-  if (!calibrated) {
-    ctx.fillText(`Camera overlay not calibrated • Press C to calibrate • preset: ${key}`, 14, 40);
-  } else {
-    ctx.fillText(`Camera overlay calibrated • preset: ${key}`, 14, 40);
-  }
-
-  // If calibrating, draw stage hint + markers if known
-  if (camCal.active) {
-    ctx.fillStyle = "rgba(0,0,0,.75)";
-    const msg = camCal.stage === 0
-      ? "CALIBRATION: click SENSOR center on overlay"
-      : "CALIBRATION: click FLANGE plane (mount face) on overlay";
-    ctx.fillText(msg, 14, 58);
-
-    // draw marker cross for sensorPx if already set
-    if (Number.isFinite(p.sensorPx?.x) && Number.isFinite(p.sensorPx?.y)) {
-      const mx = sx + p.sensorPx.x * scale;
-      const my = sy + p.sensorPx.y * scale;
-      ctx.strokeStyle = "rgba(42,110,242,.9)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(mx - 10, my); ctx.lineTo(mx + 10, my);
-      ctx.moveTo(mx, my - 10); ctx.lineTo(mx, my + 10);
-      ctx.stroke();
-    }
-
-    // draw flange vertical marker if already set
-    if (Number.isFinite(p.flangePxX)) {
-      const fx = sx + p.flangePxX * scale;
-      ctx.strokeStyle = "rgba(178,59,59,.85)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(fx, sy); ctx.lineTo(fx, sy + drawH);
-      ctx.stroke();
-    }
-  }
-
+  ctx.moveTo(t1.x, t1.y); ctx.lineTo(t2.x, t2.y);
+  ctx.moveTo(b1.x, b1.y); ctx.lineTo(b2.x, b2.y);
+  ctx.stroke();
   ctx.restore();
 
-  // store the last draw mapping so click->image mapping is exact
-  drawCameraOverlayImage._last = { sx, sy, scale, drawW, drawH, key };
+  // ---- flange plate (on camera side) ----
+  {
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,.05)";
+    const a = P(xFlange,          -outerR);
+    const b = P(xFlange + flangeT, -outerR);
+    const c = P(xFlange + flangeT,  outerR);
+    const d = P(xFlange,           outerR);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // label
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+  ctx.font = `12px ${mono}`;
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  const lab = P(xFlange - lensLip + 1.5, -outerR - 7);
+  ctx.fillText("PL MOUNT (side)", lab.x, lab.y);
+
+  ctx.restore();
 }
- 
+  function drawTitleOverlay(text) {
+    if (!ctx) return;
+    ctx.save();
+    const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
+    ctx.font = "14px " + mono;
+    ctx.fillStyle = "#333";
+    ctx.fillText(text, 14, 20);
+    ctx.restore();
+  }
 // -------------------- render scheduler (RAF throttle) --------------------
 let _rafAll = 0;
 function scheduleRenderAll() {
@@ -1553,7 +1299,6 @@ function scheduleRenderAll() {
 let _rafPrev = 0;
 function scheduleRenderPreview() {
   if (_rafPrev) return;
-  if (preview.rendering) return;
   _rafPrev = requestAnimationFrame(() => {
     _rafPrev = 0;
     if (preview.ready) renderPreview();
@@ -1609,13 +1354,8 @@ function renderAll() {
     : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
   // ---- NEW: rear intrusion / clearance relative to PL flange ----
- const lastIdx = (String(lens.surfaces.at(-1)?.type).toUpperCase() === "IMS")
-  ? lens.surfaces.length - 2
-  : lens.surfaces.length - 1;
-
-const rearSurf = lens.surfaces[Math.max(0, lastIdx)];
-const rearX0 = surfaceXatY(rearSurf, 0) ?? rearSurf.vx; // y=0 silhouette
-const intrusion = rearX0 - plX;
+  const rearVx = lastPhysicalVertexX(lens.surfaces); // last non-IMS vertex X
+  const intrusion = rearVx - plX; // >0 = rear group passes flange toward sensor
   const rearTxt = (intrusion > 0)
     ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
     : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
@@ -1640,25 +1380,19 @@ const intrusion = rearX0 - plX;
   }
   if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
- resizeCanvasToCSS();
-const r = canvas.getBoundingClientRect();
+  resizeCanvasToCSS();
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
 
-// ✅ altijd een vaste achtergrond (papier)
-// (anders is je canvas transparant en verdwijnen zwarte lijnen op een donkere UI)
-ctx.clearRect(0, 0, r.width, r.height);
-ctx.save();
-ctx.fillStyle = "#ffffff";          // of "#f6f7fb" als je iets zachter wil
-ctx.fillRect(0, 0, r.width, r.height);
-ctx.restore();
-
-const world = makeWorldTransform();
-drawAxes(world);
-  drawPLFlange(world, plX);
-drawPLMountSide(world, plX);// ✅ mount ring zichtbaar
-drawCameraOverlayImage(world);
-   drawLens(world, lens.surfaces);
+  const world = makeWorldTransform();
+  drawAxes(world);
+  drawPLFlange(world, plX);          // ✅ PL line
+  drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
   drawRays(world, traces, sensorX);
+  // PL mount cutout overlay (side profile) for rear clearance checks
+  // Draw AFTER rays so it's always visible on top.
+  drawPLMountCutout(world, plX);
   drawSensor(world, sensorX, halfH); // sensor line
 
   const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
@@ -1668,148 +1402,43 @@ drawCameraOverlayImage(world);
   drawTitleOverlay(
     `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • ${rearTxt}`
   );
-
-     const topY = getLensTopY(lens.surfaces) + 8; // 8mm boven het hoogste glas
-  drawRulerFromSensor(world, 0.0, topY, 300, 10); // 300mm lang, per 1cm tick
-
- // ✅ preview NIET rerenderen vanuit renderAll (anders flikkert hij leeg tijdens heavy render)
-drawPreviewViewport();
 }
 
   // -------------------- view controls --------------------
- function bindViewControls() {
-  if (!canvas) return;
-  if (canvas.dataset._boundView === "1") return;
-  canvas.dataset._boundView = "1";
+  function bindViewControls() {
+    if (!canvas) return;
 
-  canvas.addEventListener("mousedown", (e) => {
-    if (camCal.active) { handleCameraCalibrationClick(e); return; }
-    view.dragging = true;
-    view.lastX = e.clientX;
-    view.lastY = e.clientY;
-  });
+    canvas.addEventListener("mousedown", (e) => {
+      view.dragging = true;
+      view.lastX = e.clientX;
+      view.lastY = e.clientY;
+    });
+    window.addEventListener("mouseup", () => { view.dragging = false; });
 
-  window.addEventListener("mouseup", () => { view.dragging = false; });
+    window.addEventListener("mousemove", (e) => {
+      if (!view.dragging) return;
+      const dx = e.clientX - view.lastX;
+      const dy = e.clientY - view.lastY;
+      view.lastX = e.clientX;
+      view.lastY = e.clientY;
+      view.panX += dx;
+      view.panY += dy;
+      renderAll();
+    });
 
-  window.addEventListener("mousemove", (e) => {
-    if (!view.dragging) return;
-    const dx = e.clientX - view.lastX;
-    const dy = e.clientY - view.lastY;
-    view.lastX = e.clientX;
-    view.lastY = e.clientY;
-    view.panX += dx;
-    view.panY += dy;
-    scheduleRenderAll();
-  });
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const delta = Math.sign(e.deltaY);
+      const factor = delta > 0 ? 0.92 : 1.08;
+      view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+      renderAll();
+    }, { passive: false });
 
-canvas.addEventListener("wheel", (e) => {
-  e.preventDefault();
-
-  // Center-based zoom (stable, like the old script)
-  const delta = Math.sign(e.deltaY);
-  if (!delta) return;
-
-  const factor = delta > 0 ? 0.92 : 1.08;
-  view.zoom = Math.max(0.12, Math.min(12, (Number.isFinite(view.zoom) ? view.zoom : 1.0) * factor));
-
-  // Safety: if pan ever blows up, reset so nothing "vanishes" off-screen
-  const r = canvas.getBoundingClientRect();
-  const limX = r.width * 8;
-  const limY = r.height * 8;
-  if (!Number.isFinite(view.panX) || !Number.isFinite(view.panY) || Math.abs(view.panX) > limX || Math.abs(view.panY) > limY) {
-    view.panX = 0; view.panY = 0;
+    canvas.addEventListener("dblclick", () => {
+      view.panX = 0; view.panY = 0; view.zoom = 1.0;
+      renderAll();
+    });
   }
-
-  scheduleRenderAll();
-}, { passive: false });
-
-  canvas.addEventListener("dblclick", () => {
-    view.panX = 0; view.panY = 0; view.zoom = 1.0;
-    scheduleRenderAll();
-  });
-
- 
-}
-   // -------------------- camera calibration (click 2 points) --------------------
-function screenToWorld(xScr, yScr, world) {
-  // inverse of worldToScreen:
-  // xScr = cx + x* s  => x = (xScr - cx)/s
-  // yScr = cy - y* s  => y = (cy - yScr)/s
-  return {
-    x: (xScr - world.cx) / world.s,
-    y: (world.cy - yScr) / world.s,
-  };
-}
-
-// Click handler: map canvas click -> image pixel coords using LAST draw mapping
-function handleCameraCalibrationClick(e) {
-  if (!camCal.active) return;
-
-  const p = getCamPreset();
-  const im = getCamImg();
-  const last = drawCameraOverlayImage._last;
-  if (!p || !im || !im.complete || !last || !Number.isFinite(last.scale) || last.scale <= 0) return;
-
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  const ix = (mx - last.sx) / last.scale;
-  const iy = (my - last.sy) / last.scale;
-
-  if (ix < 0 || iy < 0 || ix > im.naturalWidth || iy > im.naturalHeight) {
-    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration click must be on the camera image.";
-    return;
-  }
-
-  if (camCal.stage === 0) {
-    p.sensorPx = { x: ix, y: iy };
-    camCal.stage = 1;
-    if (ui.footerWarn) ui.footerWarn.textContent =
-      "Calibration: now click the PL flange plane (mount face) on the overlay.";
-    scheduleRenderAll();
-    return;
-  }
-
-  // stage 1
-  p.flangePxX = ix;
-
-  const dx = Math.abs(p.flangePxX - p.sensorPx.x);
-  if (dx < 1) {
-    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration failed: sensor and flange X too close.";
-    return;
-  }
-
-  p.pxPerMm = dx / PL_FFD;
-
-  camCal.active = false;
-  camCal.stage = 0;
-
-  if (ui.footerWarn) ui.footerWarn.textContent =
-    `Camera calibrated ✅ pxPerMm=${p.pxPerMm.toFixed(4)} (sensor↔flange = ${dx.toFixed(1)}px / ${PL_FFD}mm)`;
-
-  scheduleRenderAll();
-}
-
-function toggleCameraCalibration() {
-  const p = getCamPreset();
-  const im = getCamImg();
-  if (!p || !im) {
-    if (ui.footerWarn) ui.footerWarn.textContent = "No camera image preset available.";
-    return;
-  }
-
-  camCal.active = !camCal.active;
-  camCal.stage = 0;
-
-  if (camCal.active) {
-    if (ui.footerWarn) ui.footerWarn.textContent =
-      "Calibration ON: click SENSOR center on overlay, then click PL FLANGE plane.";
-  } else {
-    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration OFF.";
-  }
-  scheduleRenderAll();
-}
 function getSensorRectBaseInPane() {
   if (!previewCanvasEl) return { x: 0, y: 0, w: 0, h: 0 };
 
@@ -2281,8 +1910,6 @@ function bindPreviewViewControls() {
     });
   }
 
-
-   
   // -------------------- preview rendering (split-view) --------------------
   function renderPreview() {
     if (!pctx || !previewCanvasEl) return;
@@ -2319,41 +1946,6 @@ const H = Math.max(64, base);
    
 
    const hasImg = preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0;
-
-     // ---- fast path: no image loaded -> don't run heavy pixel loop ----
-if (!hasImg) {
-  preview.rendering = true;
-
-preview.worldBack.width = W;
-preview.worldBack.height = H;
-
-const wctx = preview.worldBackCtx;
-wctx.fillStyle = "#111";
-wctx.fillRect(0, 0, W, H);
-
-wctx.fillStyle = "rgba(255,255,255,.75)";
-wctx.font = "14px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
-wctx.fillText("Upload an image to preview", 18, 28);
-
-// swap
-{
-  const tmpC = preview.worldCanvas;
-  const tmpX = preview.worldCtx;
-
-  preview.worldCanvas = preview.worldBack;
-  preview.worldCtx = preview.worldBackCtx;
-
-  preview.worldBack = tmpC;
-  preview.worldBackCtx = tmpX;
-}
-
-preview.worldReady = true;
-preview.rendering = false;
-
-drawPreviewViewport();
-return;
-}
-     
 const imgW = preview.imgCanvas.width;
 const imgH = preview.imgCanvas.height;
 const imgData = hasImg ? preview.imgData : null;
@@ -2394,20 +1986,8 @@ const rMaxSensor = Math.hypot(halfWv, halfHv);
     for (let k = 0; k < LUT_N; k++) {
       const a = k / (LUT_N - 1);
       const r = a * rMaxSensor;
-// 2-direction sample (±y) — because sensorHeightToObjectHeight_mm only accepts y
-const s1 = sensorHeightToObjectHeight_mm( r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-const s2 = sensorHeightToObjectHeight_mm(-r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-
-let rObj = null;
-if (s1 != null && Number.isFinite(s1) && s2 != null && Number.isFinite(s2)) {
-  rObj = 0.5 * (Math.abs(s1) + Math.abs(s2));
-} else if (s1 != null && Number.isFinite(s1)) {
-  rObj = Math.abs(s1);
-} else if (s2 != null && Number.isFinite(s2)) {
-  rObj = Math.abs(s2);
-}
-       
-       if (rObj == null || !Number.isFinite(rObj)) {
+     let rObj = sensorHeightToObjectHeight_mm(r, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+if (rObj == null || !Number.isFinite(rObj)) {
   rObjLUT[k] = 0;
   validLUT[k] = 0;
 } else {
@@ -2433,79 +2013,75 @@ if (s1 != null && Number.isFinite(s1) && s2 != null && Number.isFinite(s2)) {
     }
 
     // render into OFFSCREEN world buffer
-preview.rendering = true;
+preview.worldCanvas.width = W;
+preview.worldCanvas.height = H;
 
-// render naar BACK (nooit naar front tijdens heavy loop)
-preview.worldBack.width = W;
-preview.worldBack.height = H;
-
-const wctx = preview.worldBackCtx;
+const wctx = preview.worldCtx;
 const out = wctx.createImageData(W, H);
 const outD = out.data;
 
-// Render sensor pixels -> object plane via radial LUT
-for (let j = 0; j < H; j++) {
-  // sensor y in mm (top->bottom)
-  const sy = ((j + 0.5) / H) * sensorHv - halfHv;
 
-  for (let i = 0; i < W; i++) {
-    const sx = ((i + 0.5) / W) * sensorWv - halfWv;
+         // object plane extents (map object-mm -> input image UV)
+    const imgAsp = hasImg ? (imgW / imgH) : 1.7777778;
+    const halfObjW = halfObjH * imgAsp;
 
-    // radius on sensor
-    const rs = Math.hypot(sx, sy);
-    const ro = lookupROut(rs);
-
-    const o = (j * W + i) * 4;
-
-    // if outside LUT / ray invalid -> black
-    if (ro == null || !Number.isFinite(ro)) {
-      outD[o] = 0; outD[o + 1] = 0; outD[o + 2] = 0; outD[o + 3] = 255;
-      continue;
+    function objectMmToUV(xmm, ymm) {
+      // map object plane coords (mm) to [0..1]
+      const u = 0.5 + (xmm / (2 * halfObjW));
+      const v = 0.5 - (ymm / (2 * halfObjH)); // y up -> v down
+      return { u, v };
     }
 
-    // map direction (keep angle) + scale radius
-    const ang = Math.atan2(sy, sx);
-    const ox = Math.cos(ang) * ro;
-    const oy = Math.sin(ang) * ro;
+    // Fill outD (world image)
+    for (let py = 0; py < H; py++) {
+      // sensor y in mm
+      const sy = (0.5 - (py + 0.5) / H) * sensorHv; // OV
 
-    const imgAspect = imgW / imgH;
 
-// jij gebruikt objH als "full height in mm"
-const halfObjH = objH * 0.5;
-const halfObjW = halfObjH * imgAspect;
+      for (let px = 0; px < W; px++) {
+        // sensor x in mm
+const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
+         
+        const r = Math.hypot(sx, sy);
+        const idx = (py * W + px) * 4;
 
-// ...
-const u = (ox / halfObjW) * 0.5 + 0.5;
-const v = 0.5 - (oy / halfObjH) * 0.5;
+        // center pixel: trivial
+        if (r < 1e-9) {
+          const { u, v } = objectMmToUV(0, 0);
+          const c = sample(u, v);
+          outD[idx] = c[0]; outD[idx + 1] = c[1]; outD[idx + 2] = c[2]; outD[idx + 3] = 255;
+          continue;
+        }
 
-    const c = sample(u, v);
-    outD[o] = c[0] | 0;
-    outD[o + 1] = c[1] | 0;
-    outD[o + 2] = c[2] | 0;
-    outD[o + 3] = c[3] | 0;
-  }
+        const rObj = lookupROut(r);
+       if (rObj == null) {
+  outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 20; outD[idx+3] = 255; // navy
+  continue;
 }
+
+        // preserve angle (radial mapping): scale vector by rObj/r
+        const k = rObj / r;
+        const ox = sx * k;
+        const oy = sy * k;
+
+        const { u, v } = objectMmToUV(ox, oy);
+        const c = sample(u, v);
+
+        outD[idx] = c[0];
+        outD[idx + 1] = c[1];
+        outD[idx + 2] = c[2];
+        outD[idx + 3] = 255;
+      }
+    }
+// ... jouw bestaande pixel-loop blijft hetzelfde,
+// alleen op het einde:
 
 wctx.putImageData(out, 0, 0);
-
-// ✅ SWAP front/back pas NA de render
-{
-  const tmpC = preview.worldCanvas;
-  const tmpX = preview.worldCtx;
-
-  preview.worldCanvas = preview.worldBack;
-  preview.worldCtx = preview.worldBackCtx;
-
-  preview.worldBack = tmpC;
-  preview.worldBackCtx = tmpX;
-}
-
 preview.worldReady = true;
-preview.rendering = false;
 
+// now draw it into the sensor viewport
 drawPreviewViewport();
-return;
-}
+  }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
@@ -2519,298 +2095,367 @@ return;
     const target = num(prompt("Target focal length (mm)?", String(Math.round(cur))), cur);
     if (!Number.isFinite(target) || target <= 0) return;
 
-     const k = target / cur;
+    const k = target / cur;
 
-    // Scale radii + thicknesses (except OBJ/IMS t=0 ok) so geometry scales with focal.
-    // Keep stop aperture as-is (because T changes), but you can optionally scale it too.
-    lens.surfaces.forEach((s) => {
-      const t0 = String(s.type || "").toUpperCase();
-      if (t0 === "OBJ" || t0 === "IMS") {
-        // OBJ/IMS thickness usually 0; if user put nonzero, scale it too
-        s.t = Number(s.t || 0) * k;
-        return;
-      }
-      // radii
-      s.R = Number(s.R || 0) * k;
-      // thickness to next
-      s.t = Number(s.t || 0) * k;
-      // aperture semi-diam: keep physical clear aperture (DON'T scale) by default
-      // If you want “everything scales”, uncomment:
-      // s.ap = Number(s.ap || 0) * k;
-    });
+    // Scale geometry: radii + thicknesses (keep OBJ.t, IMS.t = 0)
+    for (let i = 0; i < lens.surfaces.length; i++) {
+      const s = lens.surfaces[i];
+      const t = String(s.type).toUpperCase();
+      if (t !== "OBJ" && t !== "IMS") s.t = Number(s.t || 0) * k;
+      if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
+      // ap: leave as-is (don’t auto scale aperture), user controls it
+    }
 
+    computeVertices(lens.surfaces);
     clampAllApertures(lens.surfaces);
     buildTable();
     renderAll();
-    if (ui.footerWarn) ui.footerWarn.textContent = `Scaled lens by ×${k.toFixed(4)} to hit FL≈${target.toFixed(2)}mm`;
+
+    if (ui.footerWarn) ui.footerWarn.textContent = `Scale→FL: EFL ${cur.toFixed(2)} → target ${target.toFixed(2)} (k=${k.toFixed(4)}).`;
   }
 
   function setTargetTStop() {
     const wavePreset = ui.wavePreset?.value || "d";
-    computeVertices(lens.surfaces);
-
     const { efl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
     if (!Number.isFinite(efl) || efl <= 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: EFL not solvable (check lens).";
+      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: EFL unknown (try Scale→FL or fix geometry).";
       return;
     }
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     if (stopIdx < 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: no STOP surface set.";
+      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: no STOP surface marked.";
       return;
     }
 
-    const curT = estimateTStopApprox(efl, lens.surfaces);
-    const targetT = num(prompt("Target T-stop?", curT ? curT.toFixed(2) : "2.00"), curT || 2.0);
+    const currentT = estimateTStopApprox(efl, lens.surfaces);
+    const targetT = num(prompt("Target T-stop? (approx)", currentT ? currentT.toFixed(2) : "2.00"), currentT || 2.0);
     if (!Number.isFinite(targetT) || targetT <= 0) return;
 
-    // T ≈ EFL / (2*stopAp)  => stopAp ≈ EFL / (2*T)
-    const newStopAp = Math.max(0.05, efl / (2 * targetT));
-    lens.surfaces[stopIdx].ap = newStopAp;
+    // T ≈ EFL / (2 * stop_ap)  => stop_ap ≈ EFL / (2T)
+    const newAp = efl / (2 * targetT);
+
+    lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
 
     clampAllApertures(lens.surfaces);
     buildTable();
     renderAll();
-    if (ui.footerWarn) ui.footerWarn.textContent = `STOP ap set to ${newStopAp.toFixed(2)}mm → T≈${targetT.toFixed(2)} (approx)`;
+
+    if (ui.footerWarn) ui.footerWarn.textContent = `Set T: stop ap → ${lens.surfaces[stopIdx].ap.toFixed(2)}mm (semi-diam) for T${targetT.toFixed(2)} @ EFL ${efl.toFixed(2)}mm.`;
   }
 
-  // -------------------- toolbar actions (CRUD) --------------------
-  function newClear() {
-    // minimal blank: OBJ + IMS
-    const blank = {
-      name: "Blank lens",
-      notes: ["OBJ + IMS only"],
-      surfaces: [
-        { type: "OBJ", R: 0, t: 0, ap: 60, glass: "AIR", stop: false },
-        { type: "IMS", R: 0, t: 0, ap: 12.77, glass: "AIR", stop: false },
-      ],
-    };
-    loadLens(blank);
-    if (ui.footerWarn) ui.footerWarn.textContent = "Cleared. Add surfaces/elements.";
+  // -------------------- New Lens modal --------------------
+  function openNewLensModal() {
+    if (!ui.newLensModal) return;
+    ui.newLensModal.classList.remove("hidden");
+  }
+  function closeNewLensModal() {
+    if (!ui.newLensModal) return;
+    ui.newLensModal.classList.add("hidden");
   }
 
-  function addSurface() {
-    const ap = 18;
-    insertAfterSelected({ type: "", R: 0, t: 5, ap, glass: "AIR", stop: false });
-  }
-
-  function duplicateSurface() {
-    clampSelected();
-    if (isProtectedIndex(selectedIndex)) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Cannot duplicate OBJ/IMS.";
-      return;
+  function makeTemplate(templateName) {
+    const t = String(templateName || "blank");
+    if (t === "doubleGauss") return omit50ConceptV1(); // good enough baseline for now
+    if (t === "tessar") {
+      return sanitizeLens({
+        name: "Tessar-ish (simple)",
+        surfaces: [
+          { type: "OBJ",  R: 0,    t: 0,    ap: 60,  glass: "AIR", stop: false },
+          { type: "1",    R: 70,   t: 4.5,  ap: 18,  glass: "BK7", stop: false },
+          { type: "2",    R: -35,  t: 1.2,  ap: 18,  glass: "AIR", stop: false },
+          { type: "STOP", R: 0,    t: 6.0,  ap: 8,   glass: "AIR", stop: true },
+          { type: "4",    R: -50,  t: 3.8,  ap: 16,  glass: "F2",  stop: false },
+          { type: "5",    R: 120,  t: 18,   ap: 16,  glass: "AIR", stop: false },
+          { type: "IMS",  R: 0,    t: 0,    ap: 12.77, glass: "AIR", stop: false },
+        ],
+      });
     }
-    const s = clone(lens.surfaces[selectedIndex]);
-    s.stop = false;
-    if (String(s.type).toUpperCase() === "STOP") s.type = "";
-    insertAfterSelected(s);
+    if (t === "omit50v1") return omit50ConceptV1();
+    return sanitizeLens({
+      name: "Blank",
+      surfaces: [
+        { type: "OBJ",  R: 0.0, t: 0.0,  ap: 60.0,  glass: "AIR", stop: false },
+        { type: "STOP", R: 0.0, t: 20.0, ap: 8.0,   glass: "AIR", stop: true  },
+        { type: "IMS",  R: 0.0, t: 0.0,  ap: 12.77, glass: "AIR", stop: false },
+      ],
+    });
   }
 
-  function moveSelected(dir) {
-    clampSelected();
-    const i = selectedIndex;
-    const j = i + dir;
-    if (j < 0 || j >= lens.surfaces.length) return;
+  function createNewLensFromModal() {
+    const template = ui.nlTemplate?.value || "blank";
+    const targetF = num(ui.nlFocal?.value, 50);
+    const targetT = num(ui.nlT?.value, 2.8);
+    const stopPos = ui.nlStopPos?.value || "keep";
+    const name = (ui.nlName?.value || "New lens").trim();
 
-    // protect OBJ at 0 and IMS at end
-    if (i === 0 || i === lens.surfaces.length - 1) return;
-    if (j === 0 || j === lens.surfaces.length - 1) return;
+    let L = sanitizeLens(makeTemplate(template));
+    L.name = name || L.name;
 
-    const tmp = lens.surfaces[i];
-    lens.surfaces[i] = lens.surfaces[j];
-    lens.surfaces[j] = tmp;
-    selectedIndex = j;
+    // optionally force STOP to middle
+    if (stopPos === "middle") {
+      const stopIdx = findStopSurfaceIndex(L.surfaces);
+      if (stopIdx >= 0) L.surfaces[stopIdx].stop = false;
+      const mid = Math.max(1, Math.min(L.surfaces.length - 2, Math.floor(L.surfaces.length / 2)));
+      L.surfaces[mid].stop = true;
+      L.surfaces[mid].type = "STOP";
+      // ensure only one stop
+      const f = findStopSurfaceIndex(L.surfaces);
+      L.surfaces.forEach((s, i) => { if (i !== f) s.stop = false; });
+    }
 
-    // keep only one STOP
-    const stopIdx = lens.surfaces.findIndex((s) => s.stop);
-    if (stopIdx >= 0) enforceSingleStop(stopIdx);
+    loadLens(L);
 
+    // scale to target focal
+    (function () {
+      const wavePreset = ui.wavePreset?.value || "d";
+      const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
+      if (Number.isFinite(cur) && cur > 0 && Number.isFinite(targetF) && targetF > 0) {
+        const k = targetF / cur;
+        for (let i = 0; i < lens.surfaces.length; i++) {
+          const s = lens.surfaces[i];
+          const tt = String(s.type).toUpperCase();
+          if (tt !== "OBJ" && tt !== "IMS") s.t = Number(s.t || 0) * k;
+          if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
+        }
+      }
+    })();
+
+    // set T
+    (function () {
+      const wavePreset = ui.wavePreset?.value || "d";
+      const { efl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
+      const stopIdx = findStopSurfaceIndex(lens.surfaces);
+      if (stopIdx >= 0 && Number.isFinite(efl) && efl > 0 && Number.isFinite(targetT) && targetT > 0) {
+        const newAp = efl / (2 * targetT);
+        lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
+      }
+    })();
+
+    clampAllApertures(lens.surfaces);
     buildTable();
     renderAll();
+    closeNewLensModal();
   }
 
-  function deleteSelected() {
+  // -------------------- preview fullscreen --------------------
+  async function togglePreviewFullscreen() {
+    const pane = ui.previewPane;
+    if (!pane) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await pane.requestFullscreen();
+      }
+    } catch (e) {
+      if (ui.footerWarn) ui.footerWarn.textContent = `Fullscreen failed: ${e.message}`;
+    }
+  }
+
+  // -------------------- buttons --------------------
+  on("#btnAdd", "click", () => {
+    insertAfterSelected({ type: "", R: 0, t: 5.0, ap: 12.0, glass: "AIR", stop: false });
+  });
+
+  on("#btnAddElement", "click", () => {
+    if (openElementModal()) return;
+    if (ui.footerWarn) ui.footerWarn.textContent = "Add Element modal not found (#elementModal etc).";
+  });
+
+  on("#btnNew", "click", () => openNewLensModal());
+
+  on("#btnDuplicate", "click", () => {
     clampSelected();
+    const s = lens.surfaces[selectedIndex];
+    if (!s) return;
+    const copy = clone(s);
+    lens.surfaces.splice(selectedIndex + 1, 0, copy);
+    selectedIndex += 1;
+    buildTable(); applySensorToIMS(); renderAll();
+  });
+
+  on("#btnMoveUp", "click", () => {
+    clampSelected();
+    if (selectedIndex <= 0) return;
+    const a = lens.surfaces[selectedIndex];
+    lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex - 1];
+    lens.surfaces[selectedIndex - 1] = a;
+    selectedIndex -= 1;
+    buildTable(); applySensorToIMS(); renderAll();
+  });
+
+  on("#btnMoveDown", "click", () => {
+    clampSelected();
+    if (selectedIndex >= lens.surfaces.length - 1) return;
+    const a = lens.surfaces[selectedIndex];
+    lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex + 1];
+    lens.surfaces[selectedIndex + 1] = a;
+    selectedIndex += 1;
+    buildTable(); applySensorToIMS(); renderAll();
+  });
+
+  on("#btnRemove", "click", () => {
+    clampSelected();
+    if (lens.surfaces.length <= 2) return;
     if (isProtectedIndex(selectedIndex)) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Cannot delete OBJ/IMS.";
+      if (ui.footerWarn) ui.footerWarn.textContent = "OBJ/IMS kun je niet deleten.";
       return;
     }
     lens.surfaces.splice(selectedIndex, 1);
     selectedIndex = Math.max(0, selectedIndex - 1);
+    buildTable(); applySensorToIMS(); renderAll();
+  });
 
-    // ensure OBJ/IMS still exist
-    if (!lens.surfaces.length || String(lens.surfaces[0].type).toUpperCase() !== "OBJ") {
-      lens.surfaces.unshift({ type: "OBJ", R: 0, t: 0, ap: 60, glass: "AIR", stop: false });
-      selectedIndex++;
-    }
-    if (String(lens.surfaces.at(-1)?.type).toUpperCase() !== "IMS") {
-      lens.surfaces.push({ type: "IMS", R: 0, t: 0, ap: 12.77, glass: "AIR", stop: false });
-    }
-
-    // enforce single stop
-    const stopIdx = lens.surfaces.findIndex((s) => s.stop);
-    if (stopIdx >= 0) enforceSingleStop(stopIdx);
-
-    buildTable();
-    applySensorToIMS();
-    renderAll();
-  }
-
-  // -------------------- save/load JSON --------------------
-  function saveJSON() {
-    const out = {
-      name: lens.name,
-      notes: lens.notes || [],
-      surfaces: lens.surfaces.map((s) => ({
-        type: s.type,
-        R: Number(s.R || 0),
-        t: Number(s.t || 0),
-        ap: Number(s.ap || 0),
-        glass: s.glass,
-        stop: !!s.stop,
-      })),
-    };
-
-    const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+  on("#btnSave", "click", () => {
+    const payload = JSON.stringify(lens, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const safeName = String(out.name || "lens").replace(/[^\w\-]+/g, "_").slice(0, 48);
-    a.href = URL.createObjectURL(blob);
-    a.download = `${safeName}.json`;
-    document.body.appendChild(a);
+    a.href = url;
+    a.download = (lens.name || "lens") + ".json";
     a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 500);
+    URL.revokeObjectURL(url);
+  });
+
+  on("#btnAutoFocus", "click", () => autoFocusSensorOffset());
+  on("#btnLoadOmit", "click", () => { loadLens(omit50ConceptV1()); });
+  on("#btnLoadDemo", "click", () => { loadLens(demoLensSimple()); });
+
+  on("#btnScaleToFocal", "click", () => scaleToTargetFocal());
+  on("#btnSetTStop", "click", () => setTargetTStop());
+
+  // New Lens modal bindings
+  if (ui.newLensModal) {
+    on("#nlClose", "click", (e) => { e.preventDefault(); closeNewLensModal(); });
+    on("#nlCreate", "click", (e) => { e.preventDefault(); createNewLensFromModal(); });
+    ui.newLensModal.addEventListener("mousedown", (e) => { if (e.target === ui.newLensModal) closeNewLensModal(); });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && ui.newLensModal && !ui.newLensModal.classList.contains("hidden")) closeNewLensModal();
+    });
   }
 
-  function loadJSONFile(file) {
-    if (!file) return;
-    const fr = new FileReader();
-    fr.onload = () => {
-      try {
-        const obj = JSON.parse(String(fr.result || "{}"));
-        loadLens(obj);
-        if (ui.footerWarn) ui.footerWarn.textContent = `Loaded: ${lens.name}`;
-      } catch (e) {
-        if (ui.footerWarn) ui.footerWarn.textContent = "JSON load failed (invalid JSON).";
-      }
-    };
-    fr.readAsText(file);
+  // Preview bindings
+  if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
+  if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
+  // Keyboard shortcut: P => fullscreen preview
+  window.addEventListener("keydown", (e) => {
+  const tag = (e.target?.tagName || "").toUpperCase();
+  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
+  if (typing) return;
+
+  if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
+});
+
+    document.addEventListener("fullscreenchange", () => {
+  // ✅ canvas size verandert in fullscreen
+  resizePreviewCanvasToCSS();
+
+  // ✅ als world al gerenderd is: alleen viewport redraw (geen heavy render)
+  if (preview.worldReady) {
+    drawPreviewViewport();
+    return;
   }
 
-  // -------------------- preview: image upload cache --------------------
-  function handlePreviewImageUpload(file) {
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const im = new Image();
-    im.onload = () => {
-      preview.img = im;
+  // ✅ anders: render 1x als er een image is
+  if (preview.ready) renderPreview();
+  else drawPreviewViewport();
+});
 
-      preview.imgCanvas.width = im.naturalWidth;
-      preview.imgCanvas.height = im.naturalHeight;
-      preview.imgCtx.imageSmoothingEnabled = true;
-      preview.imgCtx.clearRect(0, 0, im.naturalWidth, im.naturalHeight);
+  if (ui.prevImg) {
+    ui.prevImg.addEventListener("change", (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+
+      const url = URL.createObjectURL(f);
+      const im = new Image();
+      im.onload = () => {
+        preview.img = im;
+        preview.imgCanvas.width = im.naturalWidth;
+        preview.imgCanvas.height = im.naturalHeight;
+        preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
       preview.imgCtx.drawImage(im, 0, 0);
 
-      // ✅ cache pixels once
-      preview.imgData = preview.imgCtx.getImageData(0, 0, im.naturalWidth, im.naturalHeight).data;
+// CACHE imgData 1x (BELANGRIJK)
+preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
 
-      preview.ready = true;
-      preview.worldReady = false;
-
-      if (ui.footerWarn) ui.footerWarn.textContent = `Preview image loaded: ${im.naturalWidth}×${im.naturalHeight}`;
-      scheduleRenderPreview();
-    };
-    im.onerror = () => {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Preview image load failed.";
-    };
-    im.src = url;
-  }
-
-  // -------------------- preview fullscreen toggle --------------------
-  function togglePreviewFullscreen() {
-    if (!ui.previewPane) return;
-    const el = ui.previewPane;
-    if (!document.fullscreenElement) {
-      el.requestFullscreen?.().catch(() => {});
-    } else {
-      document.exitFullscreen?.().catch(() => {});
-    }
-  }
-
-  // -------------------- bindings --------------------
-  function bindUI() {
-    populateSensorPresetsSelect();
-
-    on("#sensorPreset", "change", (e) => applyPreset(e.target.value));
-    on("#sensorW", "change", () => { applySensorToIMS(); renderAll(); });
-    on("#sensorH", "change", () => { applySensorToIMS(); renderAll(); });
-
-    on("#fieldAngle", "input", scheduleRenderAll);
-    on("#rayCount", "input", scheduleRenderAll);
-    on("#wavePreset", "change", scheduleRenderAll);
-    on("#sensorOffset", "input", scheduleRenderAll);
-    on("#renderScale", "input", scheduleRenderAll);
-
-    on("#btnNew", "click", newClear);
-    on("#btnLoadOmit", "click", () => loadLens(omit50ConceptV1()));
-    on("#btnLoadDemo", "click", () => loadLens(demoLensSimple()));
-
-    on("#btnAdd", "click", addSurface);
-    on("#btnAddElement", "click", () => {
-      const ok = openElementModal?.();
-      if (!ok && ui.footerWarn) ui.footerWarn.textContent = "Element modal not found in DOM.";
+preview.ready = true;
+preview.worldReady = false;   // ✅ reset world cache
+scheduleRenderPreview();
+        URL.revokeObjectURL(url);
+      };
+      im.src = url;
     });
-    on("#btnDuplicate", "click", duplicateSurface);
-    on("#btnMoveUp", "click", () => moveSelected(-1));
-    on("#btnMoveDown", "click", () => moveSelected(+1));
-    on("#btnRemove", "click", deleteSelected);
+  }
 
-    on("#btnScaleToFocal", "click", scaleToTargetFocal);
-    on("#btnSetTStop", "click", setTargetTStop);
-    on("#btnAutoFocus", "click", autoFocusSensorOffset);
+  // -------------------- file load --------------------
+  on("#fileLoad", "change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const txt = await file.text();
+      const obj = JSON.parse(txt);
+      if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
-    on("#btnSave", "click", saveJSON);
-    on("#fileLoad", "change", (e) => loadJSONFile(e.target.files?.[0]));
-
-    // preview
-    on("#prevImg", "change", (e) => handlePreviewImageUpload(e.target.files?.[0]));
-    on("#btnRenderPreview", "click", () => {
-      if (!preview.ready) {
-        preview.worldReady = false;
-        drawPreviewViewport();
-        if (ui.footerWarn) ui.footerWarn.textContent = "Upload an image first.";
-        return;
+      if (obj.glass_note && typeof obj.glass_note === "object") {
+        for (const [k, v] of Object.entries(obj.glass_note)) {
+          const nd = Number(v?.nd);
+          if (Number.isFinite(nd)) {
+            GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
+            GLASS_DB[k].nd = nd;
+            if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
+          }
+        }
       }
-      preview.worldReady = false;
-      renderPreview();
-    });
-    on("#btnPreviewFS", "click", togglePreviewFullscreen);
 
-    // keyboard shortcuts
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "p" || e.key === "P") togglePreviewFullscreen();
-      if (e.key === "c" || e.key === "C") toggleCameraCalibration();
-    });
+      loadLens(obj);
+    } catch (err) {
+      if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err.message}`;
+    } finally {
+      e.target.value = "";
+    }
+  });
 
-    // canvas controls
-    bindViewControls();
-    bindPreviewViewControls();
-  }
+  // -------------------- controls -> rerender --------------------
+ ["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
+  on("#" + id, "input", scheduleRenderAll);
+  on("#" + id, "change", scheduleRenderAll);
+});
+
+  // preview numeric controls => rerender preview (only if img loaded)
+ ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
+  on("#" + id, "input", () => scheduleRenderPreview());
+  on("#" + id, "change", () => scheduleRenderPreview());
+});
+
+  on("#sensorPreset", "change", (e) => {
+    applyPreset(e.target.value);
+    clampAllApertures(lens.surfaces);
+    renderAll();
+    if (preview.ready) renderPreview();
+  });
+
+ window.addEventListener("resize", () => {
+  // reset viewport omdat sr0 verandert
+  preview.view.panX = 0;
+  preview.view.panY = 0;
+  preview.view.zoom = 1.0;
+
+  scheduleRenderAll();
+  if (preview.ready) renderPreview();
+  else drawPreviewViewport();
+});
+
+  
 
   // -------------------- init --------------------
-  function init() {
-    bindUI();
-    applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-    buildTable();
-    applySensorToIMS();
-    renderAll();
-    drawPreviewViewport();
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
-  }
+function init() {
+  populateSensorPresetsSelect();
+  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
+  loadLens(lens);
+  bindViewControls();
+  bindPreviewViewControls();
+  drawPreviewViewport(); // <= hier
+}
+  init();
 })();
