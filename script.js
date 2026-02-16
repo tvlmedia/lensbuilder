@@ -398,9 +398,8 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
     else s[k] = num(el.value, s[k] ?? 0);
 
-   applySensorToIMS();
-scheduleRenderAll();
-scheduleRenderPreview(); // throttle heavy preview render
+    applySensorToIMS();
+    renderAll();
   }
 
   function onCellCommit(e) {
@@ -412,25 +411,19 @@ scheduleRenderPreview(); // throttle heavy preview render
     selectedIndex = i;
     const s = lens.surfaces[i];
     if (!s) return;
-if (k === "stop") {
+
+   if (k === "stop") {
   const want = !!el.checked;
 
-  // ✅ STOP mag niet op OBJ of IMS
-  const t0 = String(s.type || "").toUpperCase();
-  if (t0 === "OBJ" || t0 === "IMS") {
-    el.checked = false;
-    if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
-    return;
-  }
-
+  // 1) clear alle stops + STOP types
   lens.surfaces.forEach((ss, j) => {
     ss.stop = false;
     if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
   });
 
+  // 2) zet deze aan/uit
   s.stop = want;
   if (want) s.type = "STOP";
-  if (want) s.R = 0.0;
 }
     else if (k === "glass") s.glass = el.value;
     else if (k === "type") s.type = el.value;
@@ -469,19 +462,13 @@ if (k === "stop") {
     const R = surf.R;
     const ap = Math.max(0, surf.ap);
 
-  if (Math.abs(R) < 1e-9) {
-  if (Math.abs(ray.d.x) < 1e-12) return null;
-
-  const t = (vx - ray.p.x) / ray.d.x;
-  if (!Number.isFinite(t) || t <= 1e-9) return null;
-
-  const hit = add(ray.p, mul(ray.d, t));
-  const vignetted = Math.abs(hit.y) > ap + 1e-9;
-
-  // plane surface normal is a property of the surface, not of the ray.
-// In our convention, normals point toward the OBJECT side (-x).
-return { hit, t, vignetted, normal: { x: -1, y: 0 } };
-}
+    if (Math.abs(R) < 1e-9) {
+      const t = (vx - ray.p.x) / ray.d.x;
+      if (!Number.isFinite(t) || t <= 1e-9) return null;
+      const hit = add(ray.p, mul(ray.d, t));
+      const vignetted = Math.abs(hit.y) > ap + 1e-9;
+      return { hit, t, vignetted, normal: { x: -1, y: 0 } };
+    }
 
     const cx = vx + R;
     const rad = Math.abs(R);
@@ -514,22 +501,15 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     return { hit, t, vignetted, normal: Nout };
   }
 
- function computeVertices(surfaces) {
-  let x = 0;
-  for (let i = 0; i < surfaces.length; i++) {
-    surfaces[i].vx = x;
-    x += Number(surfaces[i].t || 0);
+  function computeVertices(surfaces) {
+    let x = 0;
+    for (let i = 0; i < surfaces.length; i++) {
+      surfaces[i].vx = x;
+      x += Number(surfaces[i].t || 0);
+    }
+    return x;
   }
 
-  const imsIdx = surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
-  if (imsIdx >= 0) {
-    const shift = -(surfaces[imsIdx].vx || 0);
-    for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
-   
-  }
-
-  return x;
-}
   function findStopSurfaceIndex(surfaces) {
     return surfaces.findIndex((s) => !!s.stop);
   }
@@ -544,16 +524,12 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
     return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
   }
- function clampSurfaceAp(s) {
-  if (!s) return;
-
-  const t = String(s.type || "").toUpperCase();
-  if (t === "IMS" || t === "OBJ") return; // ✅ niet clampen
-
-  const lim = maxApForSurface(s);
-  const ap = Number(s.ap || 0);
-  s.ap = Math.max(AP_MIN, Math.min(ap, lim));
-}
+  function clampSurfaceAp(s) {
+    if (!s) return;
+    const lim = maxApForSurface(s);
+    const ap = Number(s.ap || 0);
+    s.ap = Math.max(AP_MIN, Math.min(ap, lim));
+  }
   function clampAllApertures(surfaces) {
     if (!Array.isArray(surfaces)) return;
     for (const s of surfaces) clampSurfaceAp(s);
@@ -666,8 +642,7 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
   }
 
   function intersectPlaneX(ray, xPlane) {
-  if (Math.abs(ray.d.x) < 1e-12) return null;
-  const t = (xPlane - ray.p.x) / ray.d.x;
+    const t = (xPlane - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     return add(ray.p, mul(ray.d, t));
   }
@@ -1152,33 +1127,6 @@ function resizePreviewCanvasToCSS() {
     ctx.restore();
   }
 
- 
-
-   const PL_FFD = 52.0; // mm
-
-function drawPLFlange(world, xFlange) {
-  if (!ctx || !canvas) return;
-
-  ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(255,255,255,.35)";
-  ctx.setLineDash([10, 8]);
-
-  // teken door de hele view (ipv hardcoded -60..60)
-  const r = canvas.getBoundingClientRect();
-  const yWorld = (r.height / (world.s || 1)) * 0.6; // lekker lang
-
-  const a = worldToScreen({ x: xFlange, y: -yWorld }, world);
-  const b = worldToScreen({ x: xFlange, y:  yWorld }, world);
-
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-
-  ctx.setLineDash([]);
-  ctx.restore();
-}
   function drawTitleOverlay(text) {
     if (!ctx) return;
     ctx.save();
@@ -1198,110 +1146,86 @@ function scheduleRenderAll() {
   });
 }
 
-let _rafPrev = 0;
-function scheduleRenderPreview() {
-  if (_rafPrev) return;
-  _rafPrev = requestAnimationFrame(() => {
-    _rafPrev = 0;
-    if (preview.ready) renderPreview();
-  });
-}
+// -------------------- render --------------------
+  // -------------------- render --------------------
+  function renderAll() {
+    if (!canvas || !ctx) return;
+    if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-function renderAll() {
-  if (!canvas || !ctx) return;
-  if (ui.footerWarn) ui.footerWarn.textContent = "";
+    computeVertices(lens.surfaces);
+    clampSelected();
 
-  computeVertices(lens.surfaces);
-  clampSelected();
+    const { w: sensorW, h: sensorH, halfH } = getSensorWH();
+    const fieldAngle = Number(ui.fieldAngle?.value || 0);
+    const rayCount = Number(ui.rayCount?.value || 31);
+    const wavePreset = ui.wavePreset?.value || "d";
+    const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
-  const { w: sensorW, h: sensorH, halfH } = getSensorWH();
-  const fieldAngle = Number(ui.fieldAngle?.value || 0);
-  const rayCount = Number(ui.rayCount?.value || 31);
-  const wavePreset = ui.wavePreset?.value || "d";
-  const sensorOffset = Number(ui.sensorOffset?.value || 0);
+    applySensorToIMS();
+    clampAllApertures(lens.surfaces);
 
-  applySensorToIMS();
-  clampAllApertures(lens.surfaces);
+    const ims = lens.surfaces[lens.surfaces.length - 1];
+    const sensorX = (ims?.vx ?? 0) + sensorOffset;
 
-  // IMS is always X=0 because computeVertices() shifts all vx
-  const sensorX0 = 0.0;
+    const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
+    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
-  // keep sensorOffset as diagnostic shim for now
-  const sensorX = sensorX0 + sensorOffset;
+    const vCount = traces.filter((t) => t.vignetted).length;
+    const tirCount = traces.filter((t) => t.tir).length;
+    const vigPct = Math.round((vCount / traces.length) * 100);
 
-  // PL flange plane is always -52mm from sensor
-  const plX = -PL_FFD;
+    const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
+    const T = estimateTStopApprox(efl, lens.surfaces);
 
-  const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-  const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+    const fov = computeFovDeg(efl, sensorW, sensorH);
+    const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-  const vCount = traces.filter((t) => t.vignetted).length;
-  const tirCount = traces.filter((t) => t.tir).length;
-  const vigPct = Math.round((vCount / traces.length) * 100);
+    const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
+    const covMode = "v";
+    const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
 
-  const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-  const T = estimateTStopApprox(efl, lens.surfaces);
+    const covTxt = !fov
+      ? "COV(V): —"
+      : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
-  const fov = computeFovDeg(efl, sensorW, sensorH);
-  const fovTxt = !fov
-    ? "FOV: —"
-    : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+    if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+    if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+    if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+    if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
+    if (ui.fov) ui.fov.textContent = fovTxt;
+    if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
 
-  const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
-  const covMode = "v";
-  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+    if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+    if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+    if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+    if (ui.fovTop) ui.fovTop.textContent = fovTxt;
+    if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-  const covTxt = !fov
-    ? "COV(V): —"
-    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+    if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
-  // ---- NEW: rear intrusion / clearance relative to PL flange ----
-  const rearVx = lastPhysicalVertexX(lens.surfaces); // last non-IMS vertex X
-  const intrusion = rearVx - plX; // >0 = rear group passes flange toward sensor
-  const rearTxt = (intrusion > 0)
-    ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
-    : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
+    if (ui.status) {
+      ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
+    }
+    if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
-  if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-  if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-  if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
-  if (ui.fov) ui.fov.textContent = fovTxt;
-  if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
+    resizeCanvasToCSS();
+   const r = canvas.getBoundingClientRect();
+ctx.clearRect(0, 0, r.width, r.height);
 
-  if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-  if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-  if (ui.fovTop) ui.fovTop.textContent = fovTxt;
-  if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
+    const world = makeWorldTransform();
+    drawAxes(world);
+    drawLens(world, lens.surfaces);
+    drawStop(world, lens.surfaces);
+    drawRays(world, traces, sensorX);
+    drawSensor(world, sensorX, halfH);
 
-  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
-
-  if (ui.status) {
-    ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
+    const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
+    const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
+    const tTxt = T == null ? "—" : "T" + T.toFixed(2);
+    drawTitleOverlay(
+      `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`
+    );
   }
-  if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
-
-  resizeCanvasToCSS();
-  const r = canvas.getBoundingClientRect();
-  ctx.clearRect(0, 0, r.width, r.height);
-
-  const world = makeWorldTransform();
-  drawAxes(world);
-  drawPLFlange(world, plX);          // ✅ PL line
-  drawLens(world, lens.surfaces);
-  drawStop(world, lens.surfaces);
-  drawRays(world, traces, sensorX);
-  drawSensor(world, sensorX, halfH); // sensor line
-
-  const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
-  const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
-  const tTxt = T == null ? "—" : "T" + T.toFixed(2);
-
-  drawTitleOverlay(
-    `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • ${rearTxt}`
-  );
-}
 
   // -------------------- view controls --------------------
   function bindViewControls() {
@@ -1383,35 +1307,51 @@ function drawPreviewViewport() {
   const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
   const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
 
-  // clear in device pixels safely
-  pctx.save();
-  pctx.setTransform(1, 0, 0, 1, 0, 0);
-  pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
-  pctx.restore();
+  // background (robust clear)
+pctx.save();
+pctx.setTransform(1, 0, 0, 1, 0, 0);
+pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
+pctx.restore();
 
-  // bg
-  pctx.fillStyle = "#000";
-  pctx.fillRect(0, 0, Wc, Hc);
+pctx.fillStyle = "#000";
+pctx.fillRect(0, 0, Wc, Hc);
 
   if (!preview.worldReady) {
     pctx.fillStyle = "rgba(255,255,255,.65)";
-    pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+    pctx.font =
+      "12px " +
+      (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
     pctx.fillText("Preview: render first", 18, 24);
     return;
   }
 
+  // sensor-rect in pane (fit)
   const sr0 = getSensorRectBaseInPane();
+
+  // apply pan/zoom
   const sr = applyViewToSensorRect(sr0, preview.view);
 
+  // draw world into viewport
   pctx.imageSmoothingEnabled = true;
-  pctx.drawImage(preview.worldCanvas, 0, 0, preview.worldCanvas.width, preview.worldCanvas.height, sr.x, sr.y, sr.w, sr.h);
+  pctx.drawImage(
+    preview.worldCanvas,
+    0,
+    0,
+    preview.worldCanvas.width,
+    preview.worldCanvas.height,
+    sr.x,
+    sr.y,
+    sr.w,
+    sr.h
+  );
 
+  // guides
   pctx.save();
   pctx.strokeStyle = "rgba(255,255,255,.20)";
   pctx.lineWidth = 1;
-  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
+  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h); // basis sensor frame
   pctx.strokeStyle = "rgba(42,110,242,.55)";
-  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h); // huidige view frame
   pctx.restore();
 }
 
@@ -1429,14 +1369,13 @@ function bindPreviewViewControls() {
     previewCanvasEl.setPointerCapture(e.pointerId);
   });
 
- previewCanvasEl.addEventListener("pointerup", (e) => {
-  preview.view.dragging = false;
-  try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch(_) {}
-});
- previewCanvasEl.addEventListener("pointercancel", (e) => {
-  preview.view.dragging = false;
-  try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch(_) {}
-});
+  previewCanvasEl.addEventListener("pointerup", () => {
+    preview.view.dragging = false;
+  });
+
+  previewCanvasEl.addEventListener("pointercancel", () => {
+    preview.view.dragging = false;
+  });
 
   previewCanvasEl.addEventListener("pointermove", (e) => {
     if (!preview.view.dragging) return;
@@ -1824,9 +1763,8 @@ const sensorHv = sensorH * OV;
 const halfWv = halfW * OV;
 const halfHv = halfH * OV;
      
-  // Keep exactly the same convention as renderAll():
-const sensorX0 = 0.0;          // IMS is at 0 after computeVertices() shift
-const sensorX  = sensorX0 + sensorOffset;
+    const ims = lens.surfaces[lens.surfaces.length - 1];
+    const sensorX = (ims?.vx ?? 0) + sensorOffset;
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
@@ -1953,10 +1891,11 @@ const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
         }
 
         const rObj = lookupROut(r);
-       if (rObj == null) {
-  outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 20; outD[idx+3] = 255; // navy
-  continue;
-}
+        if (rObj == null) {
+          // vignette / invalid ray -> black
+          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+          continue;
+        }
 
         // preserve angle (radial mapping): scale vector by rObj/r
         const k = rObj / r;
@@ -2246,21 +2185,6 @@ drawPreviewViewport();
   if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
 });
 
-    document.addEventListener("fullscreenchange", () => {
-  // ✅ canvas size verandert in fullscreen
-  resizePreviewCanvasToCSS();
-
-  // ✅ als world al gerenderd is: alleen viewport redraw (geen heavy render)
-  if (preview.worldReady) {
-    drawPreviewViewport();
-    return;
-  }
-
-  // ✅ anders: render 1x als er een image is
-  if (preview.ready) renderPreview();
-  else drawPreviewViewport();
-});
-
   if (ui.prevImg) {
     ui.prevImg.addEventListener("change", (e) => {
       const f = e.target.files?.[0];
@@ -2279,8 +2203,7 @@ drawPreviewViewport();
 preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
 
 preview.ready = true;
-preview.worldReady = false;   // ✅ reset world cache
-scheduleRenderPreview();
+renderPreview();
         URL.revokeObjectURL(url);
       };
       im.src = url;
@@ -2322,10 +2245,10 @@ scheduleRenderPreview();
 });
 
   // preview numeric controls => rerender preview (only if img loaded)
- ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
-  on("#" + id, "input", () => scheduleRenderPreview());
-  on("#" + id, "change", () => scheduleRenderPreview());
-});
+  ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
+    on("#" + id, "input", () => { if (preview.ready) renderPreview(); });
+    on("#" + id, "change", () => { if (preview.ready) renderPreview(); });
+  });
 
   on("#sensorPreset", "change", (e) => {
     applyPreset(e.target.value);
@@ -2335,14 +2258,14 @@ scheduleRenderPreview();
   });
 
  window.addEventListener("resize", () => {
-  // reset viewport omdat sr0 verandert
+  renderAll();
+  if (preview.ready) renderPreview();
+
+  // reset viewport omdat sr0 (basis frame) verandert bij resize/fullscreen
   preview.view.panX = 0;
   preview.view.panY = 0;
   preview.view.zoom = 1.0;
-
-  scheduleRenderAll();
-  if (preview.ready) renderPreview();
-  else drawPreviewViewport();
+  drawPreviewViewport();
 });
 
   
