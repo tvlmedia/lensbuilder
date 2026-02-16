@@ -1134,38 +1134,25 @@ function resizePreviewCanvasToCSS() {
     ctx.restore();
   }
 
-   function drawPLFlange(world, xFlange) {
-  if (!ctx) return;
-
-  ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(255,255,255,.35)";
-  ctx.setLineDash([10, 8]);
-
-  const a = worldToScreen({ x: xFlange, y: -60 }, world);
-  const b = worldToScreen({ x: xFlange, y:  60 }, world);
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-
-  ctx.setLineDash([]);
-  ctx.restore();
-}
+ 
 
    const PL_FFD = 52.0; // mm
 
 function drawPLFlange(world, xFlange) {
-  if (!ctx) return;
+  if (!ctx || !canvas) return;
 
   ctx.save();
   ctx.lineWidth = 2;
   ctx.strokeStyle = "rgba(255,255,255,.35)";
   ctx.setLineDash([10, 8]);
 
-  // teken een nette lange lijn door het hele canvas (niet alleen sensorhoogte)
-  const a = worldToScreen({ x: xFlange, y: -60 }, world);
-  const b = worldToScreen({ x: xFlange, y:  60 }, world);
+  // teken door de hele view (ipv hardcoded -60..60)
+  const r = canvas.getBoundingClientRect();
+  const yWorld = (r.height / (world.s || 1)) * 0.6; // lekker lang
+
+  const a = worldToScreen({ x: xFlange, y: -yWorld }, world);
+  const b = worldToScreen({ x: xFlange, y:  yWorld }, world);
+
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
@@ -1174,7 +1161,6 @@ function drawPLFlange(world, xFlange) {
   ctx.setLineDash([]);
   ctx.restore();
 }
-
   function drawTitleOverlay(text) {
     if (!ctx) return;
     ctx.save();
