@@ -1,10 +1,8 @@
-/* TVL — Meridional Raytracer (2D) — Full CSS Rebuild
-   - fixes ctrl.two spans
-   - consistent button/input styling
-   - clean table + badges
-   - split canvas panes
-   - complete modal styling
-   - removes weird trailing chars issues
+/* TVL — Meridional Raytracer (2D) — Full CSS Rebuild (FIXED LAYOUT)
+   - no calc(100vh - 64px) clipping
+   - body = flex column, layout fills remaining height
+   - controls/header/status never shrink away
+   - only tableWrap and canvasFrame are scrollable regions
 */
 
 :root{
@@ -37,7 +35,9 @@
 
 /* -------------------- base -------------------- */
 *{ box-sizing:border-box; }
+
 html,body{ height:100%; }
+
 body{
   margin:0;
   font-family:var(--sans);
@@ -49,6 +49,12 @@ body{
 
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* KEY FIX: no height calc guessing; let layout fill remaining space */
+  display:flex;
+  flex-direction:column;
+  min-height:100%;
+  overflow:hidden; /* prevents the whole page from becoming the scroll container */
 }
 
 button, input, select, textarea{
@@ -60,9 +66,11 @@ a{ color:inherit; }
 
 /* -------------------- topbar -------------------- */
 .topbar{
+  /* sticky still works, but now it simply occupies real height */
   position:sticky;
   top:0;
   z-index:50;
+
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -72,13 +80,15 @@ a{ color:inherit; }
   background: linear-gradient(180deg, rgba(10,14,22,.92), rgba(10,14,22,.76));
   border-bottom:1px solid var(--stroke);
   backdrop-filter: blur(10px);
+
+  flex:0 0 auto; /* never shrink */
 }
 
 .brand{
   display:flex;
   align-items:center;
   gap:10px;
-  min-width: 320px;
+  min-width:320px;
 }
 
 .dot{
@@ -152,11 +162,16 @@ a{ color:inherit; }
 
 /* -------------------- layout / panels -------------------- */
 .layout{
+  /* KEY FIX: this fills remaining space under topbar; no vh math */
+  flex:1 1 auto;
+  min-height:0;
+
   display:grid;
   grid-template-columns: 520px 1fr;
   gap:14px;
   padding:14px;
-  height: calc(100vh - 64px);
+
+  overflow:hidden; /* don't let layout become the scroller */
 }
 
 .panel{
@@ -165,17 +180,23 @@ a{ color:inherit; }
   border-radius: var(--r2);
   overflow:hidden;
   box-shadow: 0 16px 50px rgba(0,0,0,.35);
+
+  /* KEY FIX: allow inner flex children to create scroll containers */
+  min-height:0;
+  display:flex;
+  flex-direction:column;
 }
 
 .left{
-  display:flex;
-  flex-direction:column;
   min-width:420px;
+
+  /* KEY FIX: keep scroll limited to tableWrap */
+  overflow:hidden;
 }
 
 .right{
-  display:flex;
-  flex-direction:column;
+  /* canvas side */
+  overflow:hidden;
 }
 
 /* -------------------- headers -------------------- */
@@ -183,6 +204,8 @@ a{ color:inherit; }
   padding:14px 14px 10px;
   border-bottom:1px solid var(--stroke);
   background: linear-gradient(180deg, rgba(255,255,255,.04), transparent);
+
+  flex:0 0 auto; /* never shrink away */
 }
 
 .h1{
@@ -202,6 +225,8 @@ a{ color:inherit; }
   padding:12px 14px;
   border-bottom:1px solid var(--stroke);
   background: rgba(0,0,0,.12);
+
+  flex:0 0 auto; /* KEY: controls never collapse/disappear */
 }
 
 .controlGrid{
@@ -243,9 +268,15 @@ a{ color:inherit; }
 
 /* -------------------- table -------------------- */
 .tableWrap{
-  flex:1;
+  /* KEY FIX: this is the ONLY scroll region in the left panel */
+  flex:1 1 auto;
+  min-height:0;
   overflow:auto;
+
   padding:10px 10px 14px;
+
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .tbl{
@@ -309,6 +340,8 @@ a{ color:inherit; }
   padding:12px 14px;
   border-top:1px solid var(--stroke);
   background: rgba(0,0,0,.18);
+
+  flex:0 0 auto; /* never shrink away */
 }
 
 .statusLine{
@@ -363,6 +396,8 @@ a{ color:inherit; }
   padding:14px;
   border-bottom:1px solid var(--stroke);
   background: linear-gradient(180deg, rgba(255,255,255,.04), transparent);
+
+  flex:0 0 auto;
 }
 
 .canvasTitle .hint{ margin:0; }
@@ -386,12 +421,16 @@ a{ color:inherit; }
 
 /* -------------------- canvas frame + split panes -------------------- */
 .canvasFrame{
+  /* KEY: right panel's scroll region (if needed) */
+  flex:1 1 auto;
+  min-height:0;
+
   position:relative;
-  flex:1;
   margin:14px;
   border-radius: var(--r2);
   border:1px solid var(--canvasBorder);
   overflow:hidden;
+
   background:
     radial-gradient(900px 520px at 40% 30%, rgba(42,110,242,.06), transparent 60%),
     radial-gradient(700px 520px at 70% 60%, rgba(66,209,143,.05), transparent 62%),
@@ -640,9 +679,10 @@ a{ color:inherit; }
 }
 
 @media (max-width: 980px){
+  body{ overflow:auto; } /* allow page scroll on mobile layout */
   .layout{
     grid-template-columns: 1fr;
-    height:auto;
+    overflow:visible;
   }
   .left{ min-width:0; }
   .canvasSplit{ grid-template-columns: 1fr; }
@@ -653,20 +693,4 @@ a{ color:inherit; }
   .modalGrid{ grid-template-columns: 1fr; }
   .controlGrid{ grid-template-columns: 1fr; }
   .ctrl.two{ grid-column: span 1; }
-}
-.panel{
-  /* IMPORTANT: allow inner flex children to become scroll containers */
-  min-height:0;
-}
-
-.left{
-  /* IMPORTANT: flex + overflow:auto needs min-height:0 to actually scroll */
-  min-height:0;
-}
-
-.tableWrap{
-  /* make sure this region can shrink and scroll inside the flex column */
-  min-height:0;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
 }
