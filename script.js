@@ -2041,10 +2041,11 @@ function bindPreviewViewControls() {
   }
 
   // -------------------- preview rendering (split-view) --------------------
-  function renderPreview() {
-    if (!pctx || !previewCanvasEl) return;
+ function renderPreview() {
+  if (!pctx || !previewCanvasEl) return;
 
-    computeVertices(lens.surfaces);
+  const lensShift = Number(ui.lensFocus?.value || 0);
+  computeVertices(lens.surfaces, lensShift);
 
     const wavePreset = ui.wavePreset?.value || "d";
     const sensorOffset = Number(ui.sensorOffset?.value || 0);
@@ -2546,39 +2547,36 @@ scheduleRenderPreview();
     }
   });
 
-  // -------------------- controls -> rerender --------------------
+ // -------------------- controls -> rerender --------------------
 ["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"]
   .forEach((id) => {
     on("#" + id, "input", scheduleRenderAll);
     on("#" + id, "change", scheduleRenderAll);
   });
 
-  // preview numeric controls => rerender preview (only if img loaded)
- ["sensorOffset", "lensFocus", "focusMode"].forEach((id) => {
-  on("#" + id, "input", () => scheduleRenderPreview());
-  on("#" + id, "change", () => scheduleRenderPreview());
+// preview controls => rerender preview (only if img loaded)
+["sensorOffset", "lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"].forEach((id) => {
+  on("#" + id, "input", scheduleRenderPreview);
+  on("#" + id, "change", scheduleRenderPreview);
 });
 
-  on("#sensorPreset", "change", (e) => {
-    applyPreset(e.target.value);
-    clampAllApertures(lens.surfaces);
-    renderAll();
-    if (preview.ready) renderPreview();
-  });
+on("#sensorPreset", "change", (e) => {
+  applyPreset(e.target.value);
+  clampAllApertures(lens.surfaces);
+  scheduleRenderAll();        // iets netter dan renderAll() direct
+  scheduleRenderPreview();    // i.p.v. renderPreview() direct
+});
 
- window.addEventListener("resize", () => {
+window.addEventListener("resize", () => {
   // reset viewport omdat sr0 verandert
   preview.view.panX = 0;
   preview.view.panY = 0;
   preview.view.zoom = 1.0;
 
   scheduleRenderAll();
-  if (preview.ready) renderPreview();
+  if (preview.ready) scheduleRenderPreview();
   else drawPreviewViewport();
 });
-
-  
-
   // -------------------- init --------------------
 function init() {
   populateSensorPresetsSelect();
