@@ -683,3 +683,73 @@ a{ color:inherit; }
   .ctrl.two{ grid-column: span 1; }
 }
 #badgeRays { display:none !important; }
+/* -------------------- small helpers (for updated index.html) -------------------- */
+
+/* Skip link (a11y) */
+.skipLink{
+  position:absolute;
+  left:12px;
+  top:10px;
+  z-index:999;
+  padding:10px 12px;
+  border-radius:12px;
+  border:1px solid var(--stroke);
+  background: rgba(10,14,22,.92);
+  color: var(--text);
+  text-decoration:none;
+  transform: translateY(-160%);
+  transition: transform .12s ease;
+}
+.skipLink:focus{ transform: translateY(0); }
+
+/* Screen-reader only text */
+.srOnly{
+  position:absolute !important;
+  width:1px !important;
+  height:1px !important;
+  padding:0 !important;
+  margin:-1px !important;
+  overflow:hidden !important;
+  clip: rect(0,0,0,0) !important;
+  white-space:nowrap !important;
+  border:0 !important;
+}
+
+/* Toast host (optional, if script uses it later) */
+.toastHost{
+  position:fixed;
+  right:16px;
+  bottom:16px;
+  z-index:200;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  pointer-events:none;
+}
+.toast{
+  pointer-events:auto;
+  min-width: 260px;
+  max-width: 420px;
+  border-radius: 16px;
+  border:1px solid var(--stroke);
+  background: linear-gradient(180deg, rgba(15,22,36,.98), rgba(12,18,32,.98));
+  box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  padding:12px 12px;
+  color: var(--text);
+}
+.toast .tTitle{ font-weight:900; font-size:13px; margin-bottom:4px; }
+.toast .tMsg{ color: var(--muted); font-size:12px; line-height:1.3; }
+
+/* If you use the Rays fullscreen button too */
+#btnRaysFS{ /* inherits .fsBtn, this is just a hook if you want tweaks */ }
+
+/* Prevent accidental text selection on drag areas (nice feel) */
+.canvasFrame, .pane, #canvas, #previewCanvas{
+  user-select:none;
+  -webkit-user-select:none;
+}
+
+/* Optional: keep table row border look consistent with border-spacing */
+.tbl tbody tr{
+  border-radius:14px;
+}
