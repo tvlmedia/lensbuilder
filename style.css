@@ -691,3 +691,23 @@ a{ color:inherit; }
   border-color: rgba(217,91,91,.55);
   background: linear-gradient(180deg, rgba(217,91,91,.28), rgba(217,91,91,.14));
 }
+/* --- SAFETY: canvassen mogen nooit buiten hun pane vangen --- */
+.canvasFrame { position: relative; }
+.canvasSplit { position: relative; isolation: isolate; } /* nieuwe stacking context */
+
+.pane { position: relative; z-index: 1; }   /* pane boven frame bg */
+.paneTag, .fsBtn { z-index: 10; }           /* labels/btn altijd boven canvas */
+
+/* canvassen alleen binnen pane */
+.pane > #canvas,
+.pane > #previewCanvas{
+  position: absolute;
+  inset: 0;
+  z-index: 0;           /* onder labels/btn */
+}
+
+/* als een canvas per ongeluk niet in .pane zit: maak ‘m inert */
+.canvasSplit > #canvas,
+.canvasSplit > #previewCanvas{
+  pointer-events: none;
+}
