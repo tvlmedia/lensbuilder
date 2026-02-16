@@ -861,54 +861,57 @@ const dir = normalize({ x: dx, y: -sensorYmm });
   }
 
 function autoFocus() {
-  const mode = (ui.focusMode?.value || "cam").toLowerCase();
+  // ✅ force lens focus only
+  if (ui.focusMode) ui.focusMode.value = "lens";
+  if (ui.sensorOffset) ui.sensorOffset.value = "0";
 
   const fieldAngle = Number(ui.fieldAngle?.value || 0);
-  const rayCount = Number(ui.rayCount?.value || 31);
+  const rayCount   = Number(ui.rayCount?.value || 31);
   const wavePreset = ui.wavePreset?.value || "d";
 
-  const currentSensorOff = Number(ui.sensorOffset?.value || 0);
   const currentLensShift = Number(ui.lensFocus?.value || 0);
+  const sensorX = 0.0; // ✅ fixed sensor plane
 
-  // --- CAM FOCUS (move sensor plane) ---
-  if (mode === "cam") {
-    const lensShift = currentLensShift;
-    computeVertices(lens.surfaces, lensShift);
+  const range = 20;
+  const coarseStep = 0.25;
+  const fineStep = 0.05;
 
+  let best = { shift: currentLensShift, rms: Infinity, n: 0 };
+
+  function evalShift(shift) {
+    computeVertices(lens.surfaces, shift);
     const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
     const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+    return spotRmsAtSensorX(traces, sensorX);
+  }
 
-    const baseX = 0.0; // IMS pinned at 0
-    const range = 80;
-    const coarseStep = 0.5;
-    const fineStep = 0.05;
-
-    let best = { off: currentSensorOff, rms: Infinity, n: 0 };
-
-    function scan(center, halfRange, step) {
-      const start = center - halfRange;
-      const end = center + halfRange;
-      for (let off = start; off <= end + 1e-9; off += step) {
-        const sensorX = baseX + off;
-        const { rms, n } = spotRmsAtSensorX(traces, sensorX);
-        if (rms == null) continue;
-        if (rms < best.rms) best = { off, rms, n };
-      }
+  function scan(center, halfRange, step) {
+    const start = center - halfRange;
+    const end   = center + halfRange;
+    for (let sh = start; sh <= end + 1e-9; sh += step) {
+      const { rms, n } = evalShift(sh);
+      if (rms == null) continue;
+      if (rms < best.rms) best = { shift: sh, rms, n };
     }
+  }
 
-    scan(currentSensorOff, range, coarseStep);
-    if (Number.isFinite(best.rms)) scan(best.off, 3.0, fineStep);
+  scan(currentLensShift, range, coarseStep);
+  if (Number.isFinite(best.rms)) scan(best.shift, 2.0, fineStep);
 
-    if (!Number.isFinite(best.rms) || best.n < 5) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus (cam) failed (too few valid rays). Try more rays / larger apertures.";
-      return;
-    }
-
-    if (ui.sensorOffset) ui.sensorOffset.value = best.off.toFixed(2);
-    if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus (cam): sensorOffset=${best.off.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+  if (!Number.isFinite(best.rms) || best.n < 5) {
+    if (ui.footerWarn) ui.footerWarn.textContent =
+      "Auto focus (lens) failed (too few valid rays). Try more rays / larger apertures.";
+    computeVertices(lens.surfaces, currentLensShift);
     renderAll();
     return;
   }
+
+  if (ui.lensFocus) ui.lensFocus.value = best.shift.toFixed(2);
+  if (ui.footerWarn) ui.footerWarn.textContent =
+    `Auto focus (LENS): lensFocus=${best.shift.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
+
+  renderAll();
+}
 
   // --- LENS FOCUS (move lens block) ---
   // Here we must retrace per candidate because surfaces move.
@@ -1437,16 +1440,9 @@ computeVertices(lens.surfaces, lensShift);
   const fieldAngle = Number(ui.fieldAngle?.value || 0);
   const rayCount = Number(ui.rayCount?.value || 31);
   const wavePreset = ui.wavePreset?.value || "d";
-  const sensorOffset = Number(ui.sensorOffset?.value || 0);
-
-  applySensorToIMS();
-  clampAllApertures(lens.surfaces);
-
-  // IMS is always X=0 because computeVertices() shifts all vx
-  const sensorX0 = 0.0;
-
-  // keep sensorOffset as diagnostic shim for now
-  const sensorX = sensorX0 + sensorOffset;
+ // ✅ Sensor plane is FIXED at x=0
+if (ui.sensorOffset) ui.sensorOffset.value = "0";
+const sensorX = 0.0;
 
   // PL flange plane is always -52mm from sensor
   const plX = -PL_FFD;
@@ -2051,18 +2047,10 @@ function renderPreview() {
   clampAllApertures(lens.surfaces);
 
   const wavePreset = ui.wavePreset?.value || "d";
-  const sensorOffset = Number(ui.sensorOffset?.value || 0);
-
-  const { w: sensorW, h: sensorH, halfW, halfH } = getSensorWH();
-  
-const sensorWv = sensorW * OV;
-const sensorHv = sensorH * OV;
-const halfWv = halfW * OV;
-const halfHv = halfH * OV;
-     
-  // Keep exactly the same convention as renderAll():
-const sensorX0 = 0.0;          // IMS is at 0 after computeVertices() shift
-const sensorX  = sensorX0 + sensorOffset;
+  // ✅ Sensor plane is FIXED at x=0
+if (ui.sensorOffset) ui.sensorOffset.value = "0";
+const sensorX = 0.0;
+   
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
@@ -2571,14 +2559,14 @@ if (ui.prevImg) {
   });
 
 // -------------------- controls -> rerender --------------------
-["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"]
+["fieldAngle", "rayCount", "wavePreset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"]
   .forEach((id) => {
     on("#" + id, "input", scheduleRenderAll);
     on("#" + id, "change", scheduleRenderAll);
   });
 
 // preview-affecting controls (only if img loaded in scheduler)
-["sensorOffset", "lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"]
+["lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"]
   .forEach((id) => {
     on("#" + id, "input", scheduleRenderPreview);
     on("#" + id, "change", scheduleRenderPreview);
@@ -2597,7 +2585,17 @@ function init() {
   loadLens(lens);
   bindViewControls();
   bindPreviewViewControls();
-  drawPreviewViewport(); // <= hier
+  lockSensor();          // ✅ ADD THIS
+  drawPreviewViewport();
+}
+   function lockSensor() {
+  if (ui.sensorOffset) {
+    ui.sensorOffset.value = "0";
+    ui.sensorOffset.disabled = true;
+    ui.sensorOffset.title = "Sensor is fixed (PL camera).";
+  }
+  // Force focus mode to lens
+  if (ui.focusMode) ui.focusMode.value = "lens";
 }
   init();
 })();
