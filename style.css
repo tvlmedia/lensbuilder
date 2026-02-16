@@ -654,3 +654,19 @@ a{ color:inherit; }
   .controlGrid{ grid-template-columns: 1fr; }
   .ctrl.two{ grid-column: span 1; }
 }
+.panel{
+  /* IMPORTANT: allow inner flex children to become scroll containers */
+  min-height:0;
+}
+
+.left{
+  /* IMPORTANT: flex + overflow:auto needs min-height:0 to actually scroll */
+  min-height:0;
+}
+
+.tableWrap{
+  /* make sure this region can shrink and scroll inside the flex column */
+  min-height:0;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
