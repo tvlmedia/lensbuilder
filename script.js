@@ -1186,42 +1186,39 @@ function drawPLFlange(world, xFlange) {
 function drawPLMountCutout(world, xFlange, opts = {}) {
   if (!ctx) return;
 
-  // --- PL mount key dimensions (mm) ---
-  // Sources:
-  // - PL mount diameter (opening) = 54mm; flange focal distance = 52mm (ARRI PL vs LPL spec) citeturn8search11turn8search15
-  // - Internal steps + filter-holder distance shown in SI-2K manual "PL Mount Dimensions" citeturn7screenshot0
-  //
-  // In this tool: sensor plane = x=0, lens is to the LEFT (negative x),
-  // so PL flange plane is at x = -52mm (xFlange passed in).
+  // Visual PL mount (side cutaway) — kept lightweight so it doesn't dominate the drawing.
+  // Tool convention: sensor plane = x=0, lens to the LEFT (-x). PL flange face is at x = -52mm.
 
-  const throatD   = Number.isFinite(opts.throatD)   ? opts.throatD   : 54.0; // Ø54 (PL throat)
-  const boreD1    = Number.isFinite(opts.boreD1)    ? opts.boreD1    : 48.0; // Ø48 (step, SI-2K drawing)
-  const boreD2    = Number.isFinite(opts.boreD2)    ? opts.boreD2    : 54.0; // Ø54 (inner tube)
-  const filterX   = Number.isFinite(opts.filterX)   ? opts.filterX   : 45.0; // 45mm from flange to filter holder (SI-2K)
-  const bodyDepth = Number.isFinite(opts.bodyDepth) ? opts.bodyDepth : 60.0; // how far we show "camera-side" structure
-  const lipLens   = Number.isFinite(opts.lipLens)   ? opts.lipLens   : 6.0;  // tiny lip toward lens side
-
-  // outer silhouette (not standardized in a single public PL CAD) — keep conservative
-  const outerR    = Number.isFinite(opts.outerR)    ? opts.outerR    : 36.0; // visual only
-  const flangeT   = Number.isFinite(opts.flangeT)   ? opts.flangeT   : 3.0;  // visual only
-
-  const throatR = throatD * 0.5;
-  const boreR1  = boreD1 * 0.5;
-  const boreR2  = boreD2 * 0.5;
+  // Key known dimension: PL throat Ø54mm => radius 27mm.
+  const throatR = Number.isFinite(opts.throatR) ? opts.throatR : 27;     // inner clear radius
+  const outerR  = Number.isFinite(opts.outerR)  ? opts.outerR  : 31;     // bayonet outer-ish radius (visual)
+  const camDepth = Number.isFinite(opts.camDepth) ? opts.camDepth : 14;  // depth into camera (+x)
+  const lensLip  = Number.isFinite(opts.lensLip)  ? opts.lensLip  : 3;   // small lip to lens side (-x)
+  const flangeT  = Number.isFinite(opts.flangeT)  ? opts.flangeT  : 2.0; // flange thickness into camera (+x)
 
   const P = (x, y) => worldToScreen({ x, y }, world);
 
   ctx.save();
   ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(0,0,0,.30)";
-  ctx.fillStyle = "rgba(0,0,0,.035)";
+  ctx.strokeStyle = "rgba(0,0,0,.32)";
+  ctx.fillStyle = "rgba(0,0,0,.02)";
 
-  // ---- outer mount block (camera side) ----
+  // --- flange face (the actual reference plane) ---
   {
-    const a = P(xFlange,              -outerR);
-    const b = P(xFlange + bodyDepth,  -outerR);
-    const c = P(xFlange + bodyDepth,   outerR);
-    const d = P(xFlange,               outerR);
+    const a = P(xFlange, -outerR);
+    const b = P(xFlange,  outerR);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  // --- thin flange plate thickness (into camera) ---
+  {
+    const a = P(xFlange,            -outerR);
+    const b = P(xFlange + flangeT,  -outerR);
+    const c = P(xFlange + flangeT,   outerR);
+    const d = P(xFlange,             outerR);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
@@ -1232,99 +1229,57 @@ function drawPLMountCutout(world, xFlange, opts = {}) {
     ctx.stroke();
   }
 
-  // ---- lens-side lip (small extension to the left) ----
+  // --- throat tube (the important clearance zone) ---
   {
-    const a = P(xFlange - lipLens, -outerR);
-    const b = P(xFlange,          -outerR);
-    const c = P(xFlange,           outerR);
-    const d = P(xFlange - lipLens,  outerR);
+    const a = P(xFlange - lensLip,          -throatR);
+    const b = P(xFlange + camDepth,         -throatR);
+    const c = P(xFlange + camDepth,          throatR);
+    const d = P(xFlange - lensLip,           throatR);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.lineTo(c.x, c.y);
     ctx.lineTo(d.x, d.y);
     ctx.closePath();
-    ctx.fill();
     ctx.stroke();
-  }
 
-  // ---- flange plate (visual) ----
-  {
-    const a = P(xFlange,           -outerR);
-    const b = P(xFlange + flangeT, -outerR);
-    const c = P(xFlange + flangeT,  outerR);
-    const d = P(xFlange,            outerR);
+    // inner "cut" shading (very subtle)
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,.05)";
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineTo(c.x, c.y);
-    ctx.lineTo(d.x, d.y);
-    ctx.closePath();
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = "#000";
     ctx.fill();
-    ctx.stroke();
     ctx.restore();
   }
 
-  // ---- internal bore (these are the "accurate" bits we care about) ----
-  ctx.save();
-  ctx.strokeStyle = "rgba(0,0,0,.22)";
-  ctx.lineWidth = 1.5;
-
-  // Ø54 throat lines
+  // --- small bayonet shoulder hint (keeps it reading as "mount", without the huge block) ---
   {
-    const t1 = P(xFlange - lipLens, -throatR);
-    const t2 = P(xFlange + bodyDepth, -throatR);
-    const b1 = P(xFlange - lipLens,  throatR);
-    const b2 = P(xFlange + bodyDepth,  throatR);
-    ctx.beginPath();
-    ctx.moveTo(t1.x, t1.y); ctx.lineTo(t2.x, t2.y);
-    ctx.moveTo(b1.x, b1.y); ctx.lineTo(b2.x, b2.y);
-    ctx.stroke();
-  }
-
-  // Ø48 step lines (show as shorter section until filter holder plane)
-  {
-    const xTo = xFlange + filterX;
-    const t1 = P(xFlange, -boreR1);
-    const t2 = P(xTo,     -boreR1);
-    const b1 = P(xFlange,  boreR1);
-    const b2 = P(xTo,      boreR1);
-    ctx.beginPath();
-    ctx.moveTo(t1.x, t1.y); ctx.lineTo(t2.x, t2.y);
-    ctx.moveTo(b1.x, b1.y); ctx.lineTo(b2.x, b2.y);
-    ctx.stroke();
-  }
-
-  // filter holder plane marker @ +45mm
-  {
-    const xF = xFlange + filterX;
-    const a = P(xF, -boreR2);
-    const b = P(xF,  boreR2);
-    ctx.setLineDash([4, 6]);
+    const shoulderX = xFlange + flangeT;
+    const a = P(shoulderX, -outerR);
+    const b = P(shoulderX + 3.0, -outerR);
+    const c = P(shoulderX + 3.0,  outerR);
+    const d = P(shoulderX,  outerR);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.closePath();
+    ctx.fill();
     ctx.stroke();
-    ctx.setLineDash([]);
   }
 
-  ctx.restore();
-
-  // label
+  // label (small)
   const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-  ctx.font = `12px ${mono}`;
+  ctx.font = `11px ${mono}`;
   ctx.fillStyle = "rgba(0,0,0,.55)";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  const lab = P(xFlange - lipLens + 1.5, -outerR - 8);
-  ctx.fillText("PL MOUNT (side) • Ø54 throat • flange @ -52mm", lab.x, lab.y);
+  const lab = P(xFlange - lensLip + 1.5, outerR + 6);
+  ctx.fillText("PL mount • Ø54 throat • flange @ -52mm", lab.x, lab.y);
 
   ctx.restore();
 }
 
-  
 function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
   if (!ctx) return;
 
@@ -1356,20 +1311,22 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
 
   // ticks every 10mm (= 1cm). Major every 50mm.
   for (let x = x0; x >= xMin - 1e-6; x -= 10) {
-    const major = (Math.round(Math.abs(x)) % 50) === 0;
-    const tLen = major ? 6 : 3;
+const major = (Math.round(Math.abs(x)) % 50) === 0;
+const tLen = major ? 6 : 3;
 
-    const p = P(x, y);
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
-    ctx.lineTo(p.x, p.y + tLen);
-    ctx.stroke();
+const p = P(x, y);
+ctx.beginPath();
+ctx.moveTo(p.x, p.y);
+ctx.lineTo(p.x, p.y + tLen);
+ctx.stroke();
 
-    if (major) {
-      // label in cm from sensor (0 at sensor, increasing to the left)
-      const cm = Math.round(Math.abs(x) / 10);
-      ctx.fillText(`${cm}cm`, p.x, p.y + tLen + 2);
-    }
+// label EVERY 10mm (= 1cm). Keep majors slightly darker.
+const cm = Math.round(Math.abs(x) / 10);
+ctx.save();
+ctx.fillStyle = major ? "rgba(0,0,0,.55)" : "rgba(0,0,0,.30)";
+ctx.font = major ? `11px ${mono}` : `10px ${mono}`;
+ctx.fillText(`${cm}cm`, p.x, p.y + tLen + 2);
+ctx.restore();
   }
 
   // 0 label
