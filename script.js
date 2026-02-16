@@ -1320,16 +1320,19 @@ function drawPLMountCutout(world, xFlange, opts = {}) {
   ctx.restore();
 }
 
-function drawRulerFrom(world, originX, xMin, yWorld = null, label = "PL") {
+function drawRulerFrom(world, originX, xMin, yWorld = null, label = "PL", yOffsetMm = 0) {
   if (!ctx) return;
 
-  // hoogte boven lens
   let maxAp = 0;
   if (lens?.surfaces?.length) {
     for (const s of lens.surfaces) maxAp = Math.max(maxAp, Math.abs(Number(s.ap || 0)));
   }
-  const y = (yWorld != null) ? yWorld : (maxAp + 18); // iets hoger dan je andere ruler
 
+  // basis hoogte + extra offset
+  const yBase = (yWorld != null) ? yWorld : (maxAp + 18);
+  const y = yBase + yOffsetMm;
+
+  // ...rest blijft exact hetzelfde
   const P = (x, yy) => worldToScreen({ x, y: yy }, world);
 
   ctx.save();
@@ -1550,11 +1553,12 @@ const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
 
   const world = makeWorldTransform();
   drawAxes(world);
-  drawRuler(world, 0, -200); // sensor ruler blijft
+  drawRuler(world, 0, -200); // sensor ruler
 
-// PL ruler: start bij flange, ga naar links tot voorbij front element
 const xMinPL = Math.min(frontVx - 20, plX - 20);
-drawRulerFrom(world, plX, xMinPL, null, "PL");
+
+// PL ruler 12mm hoger zodat labels niet overlappen
+drawRulerFrom(world, plX, xMinPL, null, "PL", +12);
   drawPLFlange(world, plX);          // ✅ PL line
   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
