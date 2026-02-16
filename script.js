@@ -1226,6 +1226,75 @@ function drawPLFlange(world, xFlange) {
   ctx.save();
   ctx.lineWidth = 2;
 
+
+
+function getLensTopY(surfaces) {
+  let m = 0;
+  for (const s of (surfaces || [])) {
+    const ap = Math.max(0, Number(s.ap || 0));
+    m = Math.max(m, ap);
+  }
+  return m;
+}
+
+function drawRulerFromSensor(world, sensorX0, yWorld, lenMm = 200, stepMm = 10) {
+  if (!ctx) return;
+
+  const xStart = sensorX0;           // 0 = sensor plane
+  const xEnd = sensorX0 - lenMm;     // to the left
+
+  ctx.save();
+
+  // line
+  ctx.strokeStyle = "rgba(0,0,0,.35)";
+  ctx.lineWidth = 2;
+
+  const a = worldToScreen({ x: xStart, y: yWorld }, world);
+  const b = worldToScreen({ x: xEnd,   y: yWorld }, world);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  // ticks
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+  ctx.font = `12px ${mono}`;
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.textBaseline = "bottom";
+
+  for (let mm = 0; mm <= lenMm; mm += stepMm) {
+    const x = sensorX0 - mm;
+
+    // tick sizes: 1cm small, 5cm medium, 10cm large
+    let tick = 6;
+    if (mm % 100 === 0) tick = 16;     // 10 cm
+    else if (mm % 50 === 0) tick = 12; // 5 cm
+
+    const p0 = worldToScreen({ x, y: yWorld }, world);
+    const p1 = worldToScreen({ x, y: yWorld + (tick / (world.s || 1)) }, world);
+
+    ctx.strokeStyle = "rgba(0,0,0,.35)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.stroke();
+
+    // labels every 1 cm (10mm), in centimeters
+    if (mm % 10 === 0) {
+      const cm = (mm / 10) | 0;
+     
+    }
+  }
+
+  // "0" marker at sensor
+  const z = worldToScreen({ x: sensorX0, y: yWorld + (28 / (world.s || 1)) }, world);
+  ctx.fillStyle = "rgba(0,0,0,.75)";
+  ctx.fillText("SENSOR 0", z.x - 28, z.y);
+
+  ctx.restore();
+}
+   
   // ✅ donker i.p.v. wit
   ctx.strokeStyle = "rgba(0,0,0,.25)";
   ctx.setLineDash([10, 8]);
@@ -1536,6 +1605,12 @@ drawCameraOverlay(world, plX); // ✅ NEW
   drawTitleOverlay(
     `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • ${rearTxt}`
   );
+
+     // ... na drawLens(world, lens.surfaces);
+  const topY = getLensTopY(lens.surfaces) + 8; // 8mm boven het hoogste glas
+  drawRulerFromSensor(world, 0.0, topY, 300, 10); // 300mm lang, per 1cm tick
+
+   
 }
 
   // -------------------- view controls --------------------
