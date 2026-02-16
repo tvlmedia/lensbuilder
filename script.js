@@ -623,7 +623,11 @@
   // Map ONE meridional sensor height (mm) -> object-plane height (mm), using chief-ray to stop center
   function sensorHeightToObjectHeight_mm(sensorYmm, sensorX, xStop, xObjPlane, surfaces, wavePreset) {
     const dir = normalize({ x: xStop - sensorX, y: -sensorYmm });
-    const r0 = { p: { x: sensorX, y: sensorYmm }, d: dir };
+    const eps = 0.01; // mm (0.001 kan ook)
+const r0 = {
+  p: { x: sensorX + dir.x * eps, y: sensorYmm + dir.y * eps },
+  d: dir
+};
     const tr = traceRayReverse(r0, surfaces, wavePreset);
     if (tr.vignetted || tr.tir) return null;
 
