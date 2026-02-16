@@ -400,7 +400,7 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
 
    applySensorToIMS();
 scheduleRenderAll();
-if (preview.ready) renderPreview(); // alleen als je live preview wilt updaten
+scheduleRenderPreview(); // throttle heavy preview render
   }
 
   function onCellCommit(e) {
@@ -425,6 +425,7 @@ if (preview.ready) renderPreview(); // alleen als je live preview wilt updaten
   // 2) zet deze aan/uit
   s.stop = want;
   if (want) s.type = "STOP";
+      if (want) s.R = 0.0;
 }
     else if (k === "glass") s.glass = el.value;
     else if (k === "type") s.type = el.value;
@@ -463,13 +464,18 @@ if (preview.ready) renderPreview(); // alleen als je live preview wilt updaten
     const R = surf.R;
     const ap = Math.max(0, surf.ap);
 
-    if (Math.abs(R) < 1e-9) {
-      const t = (vx - ray.p.x) / ray.d.x;
-      if (!Number.isFinite(t) || t <= 1e-9) return null;
-      const hit = add(ray.p, mul(ray.d, t));
-      const vignetted = Math.abs(hit.y) > ap + 1e-9;
-      return { hit, t, vignetted, normal: { x: -1, y: 0 } };
-    }
+  if (Math.abs(R) < 1e-9) {
+  if (Math.abs(ray.d.x) < 1e-12) return null;
+
+  const t = (vx - ray.p.x) / ray.d.x;
+  if (!Number.isFinite(t) || t <= 1e-9) return null;
+
+  const hit = add(ray.p, mul(ray.d, t));
+  const vignetted = Math.abs(hit.y) > ap + 1e-9;
+
+  const nx = ray.d.x >= 0 ? -1 : 1;
+  return { hit, t, vignetted, normal: { x: nx, y: 0 } };
+}
 
     const cx = vx + R;
     const rad = Math.abs(R);
@@ -513,7 +519,7 @@ if (preview.ready) renderPreview(); // alleen als je live preview wilt updaten
   if (imsIdx >= 0) {
     const shift = -(surfaces[imsIdx].vx || 0);
     for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
-    x += shift; // ✅ total shift mee (optioneel)
+   
   }
 
   return x;
@@ -654,7 +660,8 @@ if (preview.ready) renderPreview(); // alleen als je live preview wilt updaten
   }
 
   function intersectPlaneX(ray, xPlane) {
-    const t = (xPlane - ray.p.x) / ray.d.x;
+  if (Math.abs(ray.d.x) < 1e-12) return null;
+  const t = (xPlane - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     return add(ray.p, mul(ray.d, t));
   }
@@ -1182,6 +1189,15 @@ function scheduleRenderAll() {
   _rafAll = requestAnimationFrame(() => {
     _rafAll = 0;
     renderAll();
+  });
+}
+
+let _rafPrev = 0;
+function scheduleRenderPreview() {
+  if (_rafPrev) return;
+  _rafPrev = requestAnimationFrame(() => {
+    _rafPrev = 0;
+    if (preview.ready) renderPreview();
   });
 }
 
@@ -2305,10 +2321,10 @@ renderPreview();
 });
 
   // preview numeric controls => rerender preview (only if img loaded)
-  ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
-    on("#" + id, "input", () => { if (preview.ready) renderPreview(); });
-    on("#" + id, "change", () => { if (preview.ready) renderPreview(); });
-  });
+ ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
+  on("#" + id, "input", () => scheduleRenderPreview());
+  on("#" + id, "change", () => scheduleRenderPreview());
+});
 
   on("#sensorPreset", "change", (e) => {
     applyPreset(e.target.value);
