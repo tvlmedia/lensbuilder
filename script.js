@@ -2722,6 +2722,25 @@ function init() {
   lockSensor();          // ✅ ADD THIS
   drawPreviewViewport();
 }
+
+   function hideRaysChip() {
+  // zoek een klein overlay element met precies "Rays"
+  const candidates = Array.from(document.querySelectorAll("button, span, div, label, a"));
+  for (const el of candidates) {
+    const t = (el.textContent || "").trim();
+    if (t === "Rays") {
+      // alleen verbergen als het echt zo'n kleine chip is (geen hele panel)
+      const r = el.getBoundingClientRect();
+      if (r.width > 10 && r.width < 140 && r.height > 10 && r.height < 60) {
+        el.style.display = "none";
+        return true;
+      }
+    }
+  }
+  return false;
+}
+hideRaysChip();
+   
    function lockSensor() {
   if (ui.sensorOffset) {
     ui.sensorOffset.value = "0";
