@@ -501,15 +501,22 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     return { hit, t, vignetted, normal: Nout };
   }
 
-  function computeVertices(surfaces) {
-    let x = 0;
-    for (let i = 0; i < surfaces.length; i++) {
-      surfaces[i].vx = x;
-      x += Number(surfaces[i].t || 0);
-    }
-    return x;
+ function computeVertices(surfaces) {
+  let x = 0;
+  for (let i = 0; i < surfaces.length; i++) {
+    surfaces[i].vx = x;
+    x += Number(surfaces[i].t || 0);
   }
 
+  // --- NEW: align so IMS is exactly at X=0 ---
+  const imsIdx = surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
+  if (imsIdx >= 0) {
+    const dx = -(surfaces[imsIdx].vx || 0); // shift needed
+    for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += dx;
+  }
+
+  return x;
+}
   function findStopSurfaceIndex(surfaces) {
     return surfaces.findIndex((s) => !!s.stop);
   }
@@ -1127,6 +1134,47 @@ function resizePreviewCanvasToCSS() {
     ctx.restore();
   }
 
+   function drawPLFlange(world, xFlange) {
+  if (!ctx) return;
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
+  ctx.setLineDash([10, 8]);
+
+  const a = worldToScreen({ x: xFlange, y: -60 }, world);
+  const b = worldToScreen({ x: xFlange, y:  60 }, world);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+   const PL_FFD = 52.0; // mm
+
+function drawPLFlange(world, xFlange) {
+  if (!ctx) return;
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
+  ctx.setLineDash([10, 8]);
+
+  // teken een nette lange lijn door het hele canvas (niet alleen sensorhoogte)
+  const a = worldToScreen({ x: xFlange, y: -60 }, world);
+  const b = worldToScreen({ x: xFlange, y:  60 }, world);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
   function drawTitleOverlay(text) {
     if (!ctx) return;
     ctx.save();
@@ -1146,86 +1194,101 @@ function scheduleRenderAll() {
   });
 }
 
-// -------------------- render --------------------
-  // -------------------- render --------------------
-  function renderAll() {
-    if (!canvas || !ctx) return;
-    if (ui.footerWarn) ui.footerWarn.textContent = "";
+function renderAll() {
+  if (!canvas || !ctx) return;
+  if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-    computeVertices(lens.surfaces);
-    clampSelected();
+  computeVertices(lens.surfaces);
+  clampSelected();
 
-    const { w: sensorW, h: sensorH, halfH } = getSensorWH();
-    const fieldAngle = Number(ui.fieldAngle?.value || 0);
-    const rayCount = Number(ui.rayCount?.value || 31);
-    const wavePreset = ui.wavePreset?.value || "d";
-    const sensorOffset = Number(ui.sensorOffset?.value || 0);
+  const { w: sensorW, h: sensorH, halfH } = getSensorWH();
+  const fieldAngle = Number(ui.fieldAngle?.value || 0);
+  const rayCount = Number(ui.rayCount?.value || 31);
+  const wavePreset = ui.wavePreset?.value || "d";
+  const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
-    applySensorToIMS();
-    clampAllApertures(lens.surfaces);
+  applySensorToIMS();
+  clampAllApertures(lens.surfaces);
 
-    const ims = lens.surfaces[lens.surfaces.length - 1];
-    const sensorX = (ims?.vx ?? 0) + sensorOffset;
+  // IMS is always X=0 because computeVertices() shifts all vx
+  const sensorX0 = 0.0;
 
-    const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+  // keep sensorOffset as diagnostic shim for now
+  const sensorX = sensorX0 + sensorOffset;
 
-    const vCount = traces.filter((t) => t.vignetted).length;
-    const tirCount = traces.filter((t) => t.tir).length;
-    const vigPct = Math.round((vCount / traces.length) * 100);
+  // PL flange plane is always -52mm from sensor
+  const plX = -PL_FFD;
 
-    const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-    const T = estimateTStopApprox(efl, lens.surfaces);
+  const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
+  const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
-    const fov = computeFovDeg(efl, sensorW, sensorH);
-    const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+  const vCount = traces.filter((t) => t.vignetted).length;
+  const tirCount = traces.filter((t) => t.tir).length;
+  const vigPct = Math.round((vCount / traces.length) * 100);
 
-    const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
-    const covMode = "v";
-    const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+  const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
+  const T = estimateTStopApprox(efl, lens.surfaces);
 
-    const covTxt = !fov
-      ? "COV(V): —"
-      : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+  const fov = computeFovDeg(efl, sensorW, sensorH);
+  const fovTxt = !fov
+    ? "FOV: —"
+    : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-    if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
-    if (ui.fov) ui.fov.textContent = fovTxt;
-    if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
+  const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
+  const covMode = "v";
+  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
 
-    if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.fovTop) ui.fovTop.textContent = fovTxt;
-    if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
+  const covTxt = !fov
+    ? "COV(V): —"
+    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
-    if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+  // ---- NEW: rear intrusion / clearance relative to PL flange ----
+  const rearVx = lastPhysicalVertexX(lens.surfaces); // last non-IMS vertex X
+  const intrusion = rearVx - plX; // >0 = rear group passes flange toward sensor
+  const rearTxt = (intrusion > 0)
+    ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
+    : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
 
-    if (ui.status) {
-      ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
-    }
-    if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+  if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+  if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
+  if (ui.fov) ui.fov.textContent = fovTxt;
+  if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
 
-    resizeCanvasToCSS();
-   const r = canvas.getBoundingClientRect();
-ctx.clearRect(0, 0, r.width, r.height);
+  if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+  if (ui.fovTop) ui.fovTop.textContent = fovTxt;
+  if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-    const world = makeWorldTransform();
-    drawAxes(world);
-    drawLens(world, lens.surfaces);
-    drawStop(world, lens.surfaces);
-    drawRays(world, traces, sensorX);
-    drawSensor(world, sensorX, halfH);
+  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
-    const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
-    const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
-    const tTxt = T == null ? "—" : "T" + T.toFixed(2);
-    drawTitleOverlay(
-      `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`
-    );
+  if (ui.status) {
+    ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
   }
+  if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+
+  resizeCanvasToCSS();
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+
+  const world = makeWorldTransform();
+  drawAxes(world);
+  drawPLFlange(world, plX);          // ✅ PL line
+  drawLens(world, lens.surfaces);
+  drawStop(world, lens.surfaces);
+  drawRays(world, traces, sensorX);
+  drawSensor(world, sensorX, halfH); // sensor line
+
+  const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
+  const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
+  const tTxt = T == null ? "—" : "T" + T.toFixed(2);
+
+  drawTitleOverlay(
+    `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • ${rearTxt}`
+  );
+}
 
   // -------------------- view controls --------------------
   function bindViewControls() {
