@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
   <title>Meridional Raytracer (2D) — TVL Lens Builder</title>
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
 
@@ -24,191 +25,124 @@
 
     <div class="sep"></div>
 
-    <button id="btnAddSurf" class="btn">+ Surface</button>
-    <button id="btnAddElement" class="btn btnPrimary">+ Element (achromat)</button>
+    <button id="btnAdd" class="btn">+ Surface</button>
+    <button id="btnAddElement" class="btn">+ Element (achromat)</button>
 
     <div class="sep"></div>
 
     <button id="btnImport" class="btn">Import JSON</button>
     <button id="btnExport" class="btn">Export JSON</button>
-    <input id="fileJson" type="file" accept="application/json" hidden />
 
     <div class="sep"></div>
 
-    <button id="btnLoadChart" class="btn">Load chart (URL)</button>
-    <button id="btnPickChart" class="btn">Load chart (file)</button>
-    <input id="fileChart" type="file" accept="image/*" hidden />
+    <button id="btnChartUrl" class="btn">Load chart (URL)</button>
+    <button id="btnChartFile" class="btn">Load chart (file)</button>
 
-    <button id="btnFullscreenPreview" class="btn">Preview fullscreen</button>
+    <input id="fileJson" type="file" accept="application/json" hidden />
+    <input id="fileChart" type="file" accept="image/*" hidden />
+  </div>
+
+  <div class="topRight">
+    <button id="btnFullscreen" class="btn btnGhost">Preview fullscreen</button>
   </div>
 </header>
 
 <main class="wrap">
   <section class="panel controls">
-    <div class="ctrlRow">
-      <div class="ctrl">
-        <label>Sensor (mm)</label>
-        <div class="two">
-          <input id="sensorW" type="number" step="0.01" value="36.00">
-          <input id="sensorH" type="number" step="0.01" value="24.00">
+    <div class="controlsInner">
+      <div class="row">
+        <div class="field two">
+          <label>Sensor (mm)</label>
+          <div class="twoInputs">
+            <input id="sensorW" type="number" step="0.01" value="44" />
+            <input id="sensorH" type="number" step="0.01" value="33" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Flange (mm) (PL = 52)</label>
+          <input id="flange" type="number" step="0.01" value="52" />
+        </div>
+
+        <div class="field">
+          <label>Field angle (deg)</label>
+          <input id="fieldAngle" type="number" step="0.1" value="10" />
+        </div>
+
+        <div class="field">
+          <label>Ray count</label>
+          <input id="rayCount" type="number" step="1" min="5" max="101" value="17" />
+        </div>
+
+        <div class="field">
+          <label>Scale (px/mm)</label>
+          <input id="pxPerMm" type="number" step="0.1" value="6" />
+        </div>
+
+        <div class="toggles">
+          <label class="chk"><input id="chkStopAware" type="checkbox" checked /> stop-aware</label>
+          <label class="chk"><input id="chkShowAps" type="checkbox" checked /> show apertures</label>
+          <label class="chk"><input id="chkShowAxis" type="checkbox" checked /> show axis</label>
+          <label class="chk"><input id="chkShowPL" type="checkbox" checked /> show PL mount</label>
         </div>
       </div>
 
-      <div class="ctrl">
-        <label>Flange (mm) (PL = 52)</label>
-        <input id="flange" type="number" step="0.01" value="52.00">
+      <div class="badges">
+        <div id="badgeEfl" class="badge">EFL: —</div>
+        <div id="badgeBfl" class="badge">BFL: —</div>
+        <div id="badgeVig" class="badge">Vig: —</div>
+        <div id="status" class="badge badgeWide">Status: —</div>
       </div>
-
-      <div class="ctrl">
-        <label>Field angle (deg)</label>
-        <input id="fieldDeg" type="number" step="0.1" value="10.0">
-      </div>
-
-      <div class="ctrl">
-        <label>Ray count</label>
-        <input id="rayCount" type="number" step="1" min="3" max="61" value="17">
-      </div>
-
-      <div class="ctrl">
-        <label>Scale (px/mm)</label>
-        <input id="pxPerMm" type="number" step="0.1" value="6.0">
-      </div>
-
-      <div class="ctrl toggles">
-        <label class="chk"><input id="chkStops" type="checkbox" checked> stop-aware</label>
-        <label class="chk"><input id="chkApertures" type="checkbox" checked> show apertures</label>
-        <label class="chk"><input id="chkAxis" type="checkbox" checked> show axis</label>
-      </div>
-    </div>
-
-    <div class="badges">
-      <div class="badge">EFL: <span id="badgeEfl">—</span></div>
-      <div class="badge">BFL: <span id="badgeBfl">—</span></div>
-      <div class="badge">Vig: <span id="badgeVig">—</span></div>
-      <div class="badge">Status: <span id="statusText">ready</span></div>
     </div>
   </section>
 
-  <section class="panel mainSplit">
-    <div class="pane">
-      <div class="paneHead">
-        <div class="paneTitle">Lens doorsnede</div>
-        <div class="paneNote">x = optische as (+), y = hoogte</div>
-      </div>
-      <canvas id="canvasLens" width="960" height="540"></canvas>
+  <section class="panel views">
+    <div class="viewGrid">
 
-      <div class="tableWrap">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>R (mm)</th>
-              <th>t (mm)</th>
-              <th>ap (mm)</th>
-              <th>glass (after)</th>
-              <th>stop</th>
-              <th class="right">⋯</th>
-            </tr>
-          </thead>
-          <tbody id="surfTbody"></tbody>
-        </table>
-      </div>
-    </div>
+      <div class="viewBox">
+        <div class="viewHead">
+          <div class="h">Lens doorsnede</div>
+          <div class="hint">x = optische as (+), y = hoogte</div>
+        </div>
+        <canvas id="lensCanvas" width="960" height="540"></canvas>
 
-    <div class="pane">
-      <div class="paneHead">
-        <div class="paneTitle">Chart preview</div>
-        <div class="paneActions">
-          <button id="btnFit" class="btn btnSmall">Fit</button>
-          <button id="btnFill" class="btn btnSmall">Fill</button>
-          <button id="btn1to1" class="btn btnSmall">1:1</button>
+        <div class="tableWrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:42px">#</th>
+                <th>R (mm)</th>
+                <th>t (mm)</th>
+                <th>ap (mm)</th>
+                <th>glass (after)</th>
+                <th style="width:68px">stop</th>
+                <th style="width:120px"></th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
         </div>
       </div>
-      <canvas id="canvasPrev" width="960" height="540"></canvas>
-      <div class="hint">
-        Tip: zet je 3:2 chart op GitHub en vul alleen <code>DEFAULT_CHART_URL</code> in <code>script.js</code> aan.
+
+      <div class="viewBox">
+        <div class="viewHead">
+          <div class="h">Chart preview</div>
+          <div class="rightBtns">
+            <button id="btnChartFit" class="btn btnTiny">Fit</button>
+            <button id="btnChartFill" class="btn btnTiny">Fill</button>
+            <button id="btnChart11" class="btn btnTiny">1:1</button>
+          </div>
+        </div>
+        <canvas id="chartCanvas" width="960" height="540"></canvas>
+        <div class="chartFoot">
+          <div id="chartMeta" class="meta">chart: —</div>
+          <div class="meta">Tip: zet je 3:2 chart op GitHub en vul alleen <b>DEFAULT_CHART_URL</b> in <code>script.js</code> aan.</div>
+        </div>
       </div>
+
     </div>
   </section>
 </main>
-
-<!-- Element modal -->
-<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
-  <div class="modalCard">
-    <div class="modalHead">
-      <div class="modalTitle">Add element (achromat quick builder)</div>
-      <button id="btnCloseModal" class="btn btnSmall">Close</button>
-    </div>
-
-    <div class="modalBody">
-      <div class="grid2">
-        <div class="ctrl">
-          <label>Type</label>
-          <select id="elType">
-            <option value="achromat">Achromat (2 lenses, cemented)</option>
-            <option value="singlet">Singlet (1 lens)</option>
-          </select>
-        </div>
-        <div class="ctrl">
-          <label>Position (insert after surface #)</label>
-          <input id="elAfter" type="number" min="0" step="1" value="0">
-        </div>
-
-        <div class="ctrl">
-          <label>Clear semi-diameter (mm)</label>
-          <input id="elAp" type="number" step="0.1" value="18.0">
-        </div>
-        <div class="ctrl">
-          <label>Air gap after element (mm)</label>
-          <input id="elGap" type="number" step="0.1" value="2.0">
-        </div>
-
-        <div class="ctrl">
-          <label>Front R1 (mm)</label>
-          <input id="elR1" type="number" step="0.1" value="60.0">
-        </div>
-        <div class="ctrl">
-          <label>Front thickness (mm)</label>
-          <input id="elT1" type="number" step="0.1" value="6.0">
-        </div>
-
-        <div class="ctrl">
-          <label>Glass 1 (after R1)</label>
-          <select id="elG1"></select>
-        </div>
-        <div class="ctrl">
-          <label>Mid R2 (mm)</label>
-          <input id="elR2" type="number" step="0.1" value="-60.0">
-        </div>
-
-        <div class="ctrl">
-          <label>Back R3 (mm)</label>
-          <input id="elR3" type="number" step="0.1" value="-120.0">
-        </div>
-        <div class="ctrl">
-          <label>Back thickness (mm)</label>
-          <input id="elT2" type="number" step="0.1" value="4.0">
-        </div>
-
-        <div class="ctrl">
-          <label>Glass 2 (after R2)</label>
-          <select id="elG2"></select>
-        </div>
-        <div class="ctrl">
-          <label>Stop surface inside element?</label>
-          <select id="elStopMode">
-            <option value="none">None</option>
-            <option value="atR2">Mark R2 as STOP</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <div class="modalFoot">
-      <button id="btnInsertElement" class="btn btnPrimary">Insert element</button>
-    </div>
-  </div>
-</div>
 
 <script src="./script.js"></script>
 </body>
