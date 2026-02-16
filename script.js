@@ -41,10 +41,13 @@ const preview = {
 
   imgData: null, // ✅ CACHE pixels 1x
 
-  // NEW: offscreen rendered "world" (lens output)
-  worldCanvas: document.createElement("canvas"),
-  worldCtx: null,
-  worldReady: false,
+ worldCanvas: document.createElement("canvas"),      // front (wat je tekent)
+worldCtx: null,
+worldReady: false,
+
+worldBack: document.createElement("canvas"),        // back (waar je in rendert)
+worldBackCtx: null,
+rendering: false,
 
   // NEW: view controls for the SENSOR viewport
   view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
@@ -1653,9 +1656,8 @@ drawCameraOverlayImage(world);
      const topY = getLensTopY(lens.surfaces) + 8; // 8mm boven het hoogste glas
   drawRulerFromSensor(world, 0.0, topY, 300, 10); // 300mm lang, per 1cm tick
 
-  // ✅ keep preview in sync with any lens change
-  if (preview.ready) scheduleRenderPreview();
-  else drawPreviewViewport();
+ // ✅ preview NIET rerenderen vanuit renderAll (anders flikkert hij leeg tijdens heavy render)
+drawPreviewViewport();
 }
 
   // -------------------- view controls --------------------
