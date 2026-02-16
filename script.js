@@ -1301,19 +1301,21 @@ function applyViewToSensorRect(sr0, v) {
 function drawPreviewViewport() {
   if (!previewCanvasEl || !pctx) return;
 
-  // zorg dat canvas pixel-size klopt met CSS size
   resizePreviewCanvasToCSS();
 
+  const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
+  const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
+
   // background
-  const r = previewCanvasEl.getBoundingClientRect();
-  pctx.clearRect(0, 0, r.width, r.height);
+  pctx.clearRect(0, 0, Wc, Hc);
   pctx.fillStyle = "#000";
-  pctx.fillRect(0, 0, r.width, r.height);
+  pctx.fillRect(0, 0, Wc, Hc);
 
   if (!preview.worldReady) {
-    // nog niks gerenderd
     pctx.fillStyle = "rgba(255,255,255,.65)";
-    pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+    pctx.font =
+      "12px " +
+      (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
     pctx.fillText("Preview: render first", 18, 24);
     return;
   }
@@ -1325,22 +1327,33 @@ function drawPreviewViewport() {
   const sr = applyViewToSensorRect(sr0, preview.view);
 
   // draw world into viewport
-  // (we tekenen de hele worldCanvas in de sensor-viewport; jouw OV + mapping zit al in renderPreview)
   pctx.imageSmoothingEnabled = true;
-  pctx.drawImage(preview.worldCanvas, 0, 0, preview.worldCanvas.width, preview.worldCanvas.height, sr.x, sr.y, sr.w, sr.h);
+  pctx.drawImage(
+    preview.worldCanvas,
+    0,
+    0,
+    preview.worldCanvas.width,
+    preview.worldCanvas.height,
+    sr.x,
+    sr.y,
+    sr.w,
+    sr.h
+  );
 
-  // outline / guides
+  // guides
   pctx.save();
   pctx.strokeStyle = "rgba(255,255,255,.20)";
   pctx.lineWidth = 1;
   pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h); // basis sensor frame
   pctx.strokeStyle = "rgba(42,110,242,.55)";
-  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);     // huidige view frame (pan/zoom)
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h); // huidige view frame
   pctx.restore();
 }
 
 function bindPreviewViewControls() {
   if (!previewCanvasEl) return;
+  if (previewCanvasEl.dataset._pvBound === "1") return;
+  previewCanvasEl.dataset._pvBound = "1";
 
   previewCanvasEl.addEventListener("mousedown", (e) => {
     preview.view.dragging = true;
@@ -2232,10 +2245,16 @@ renderPreview();
     if (preview.ready) renderPreview();
   });
 
-  window.addEventListener("resize", () => {
-    renderAll();
-    if (preview.ready) renderPreview();
-  });
+ window.addEventListener("resize", () => {
+  renderAll();
+  if (preview.ready) renderPreview();
+
+  // reset viewport omdat sr0 (basis frame) verandert bij resize/fullscreen
+  preview.view.panX = 0;
+  preview.view.panY = 0;
+  preview.view.zoom = 1.0;
+  drawPreviewViewport();
+});
 
   
 
