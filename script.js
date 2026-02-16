@@ -2266,6 +2266,9 @@ const ANG_SAMPLES = 12;   // angular samples around the circle
 const STOP_SAMPLES = 11;  // samples across stop semi-diameter (2D pupil height)
 const epsX = 0.05;
 
+   const startX = sensorX + epsX; // ✅ start net rechts van de sensor/IMS (x=0)
+
+   
 function median(arr) {
   const a = arr.slice().sort((x,y)=>x-y);
   return a[(a.length/2)|0];
@@ -2295,11 +2298,9 @@ for (let k = 0; k < LUT_N; k++) {
 
   for (let m = 0; m < ANG_SAMPLES; m++) {
     const ang = (m / ANG_SAMPLES) * Math.PI * 2;
-    const sx = Math.cos(ang) * r;
-    const sy = Math.sin(ang) * r;
-
-    const startX = sensorX + epsX;
-    const startY = sy;
+    
+   const sy = Math.sin(ang) * r;
+const startY = sy;
 
     // --- 1) mapping ray: chief ray goes through stop center (yStop=0) ---
     {
@@ -2310,7 +2311,7 @@ for (let k = 0; k < LUT_N; k++) {
         if (hitObj) rObjVals.push(Math.abs(hitObj.y));
 
         // cos^4 based on image-side chief ray angle (dir at sensor side)
-        const cos = Math.max(0, Math.min(1, Math.abs(dirChief.x)));
+       const cos = Math.max(0, Math.min(1, Math.abs(dirChief.x)));
         cos4Sum += cos * cos * cos * cos;
       } else {
         cos4Sum += 0;
@@ -2355,16 +2356,19 @@ function lookupROutTransCos4(r) {
   return { rObj, trans, cos4 };
 }
     // ✅ dirty-key: only rerender world if optics/settings changed
-    const key = JSON.stringify({
-      lensShift: Number(ui.lensFocus?.value || 0),
-      wave: wavePreset,
-      sensor: getSensorWH(),
-      objDist,
-      objH,
-      base,
-      lensHash: lens.surfaces.map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(",")).join("|")
-    });
+const { w: sW, h: sH } = getSensorWH(); // pak alleen wat je echt nodig hebt
 
+const key = JSON.stringify({
+  lensShift: Number(ui.lensFocus?.value || 0),
+  wave: wavePreset,
+  sensor: [Number(sW.toFixed(4)), Number(sH.toFixed(4))], // ✅ stabiel
+  objDist,
+  objH,
+  base,
+  lensHash: lens.surfaces
+    .map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(","))
+    .join("|"),
+});
     if (preview.worldReady && preview.dirtyKey === key) {
       drawPreviewViewport();
       return;
