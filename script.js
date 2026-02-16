@@ -484,8 +484,9 @@ if (k === "stop") {
 
   // plane surface normal is a property of the surface, not of the ray.
 // In our convention, normals point toward the OBJECT side (-x).
-return { hit, t, vignetted, normal: { x: -1, y: 0 } };
-}
+const N = (ray.d.x >= 0) ? { x: -1, y: 0 } : { x: 1, y: 0 };
+  return { hit, t, vignetted, normal: N };
+  }
 
     const cx = vx + R;
     const rad = Math.abs(R);
@@ -683,7 +684,6 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
     if (!newDir) { tir = true; break; }
 
     ray = { p: hitInfo.hit, d: newDir };
-    nRegion = nLeft;
   }
 
   return { pts, vignetted, tir, endRay: ray };
