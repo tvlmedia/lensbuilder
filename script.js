@@ -685,41 +685,41 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     return { pts, vignetted, tir, endRay: ray };
   }
 
-  function traceRayReverse(ray, surfaces, wavePreset) {
-    const pts = [{ x: ray.p.x, y: ray.p.y }];
-    let vignetted = false;
-    let tir = false;
+ function traceRayReverse(ray, surfaces, wavePreset) {
+  const pts = [{ x: ray.p.x, y: ray.p.y }];
+  let vignetted = false;
+  let tir = false;
 
-    let nRight = 1.0; // sensor side is AIR
+  for (let i = surfaces.length - 1; i >= 0; i--) {
+    const s = surfaces[i];
+    const isIMS = String(s?.type || "").toUpperCase() === "IMS";
 
-    for (let i = surfaces.length - 1; i >= 0; i--) {
-      const s = surfaces[i];
-      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
+    const hitInfo = intersectSurface(ray, s);
+    if (!hitInfo) { vignetted = true; break; }
 
-      const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
+    pts.push(hitInfo.hit);
 
-      pts.push(hitInfo.hit);
+    // IMS must not clip rays
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+    // OSLO-ish: glass = medium AFTER surface
+    // reverse: right side is AFTER surface i, left side is BEFORE surface i
+    const nRight = glassN(s.glass, wavePreset);
+    const nLeft  = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
 
-      const nLeft = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
-
-      if (Math.abs(nLeft - nRight) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        nRight = nLeft;
-        continue;
-      }
-
-      const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
-      if (!newDir) { tir = true; break; }
-
-      ray = { p: hitInfo.hit, d: newDir };
-      nRight = nLeft;
+    if (Math.abs(nLeft - nRight) < 1e-9) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
     }
 
-    return { pts, vignetted, tir, endRay: ray };
+    const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
+    if (!newDir) { tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
   }
+
+  return { pts, vignetted, tir, endRay: ray };
+}
 
   function intersectPlaneX(ray, xPlane) {
   if (Math.abs(ray.d.x) < 1e-12) return null;
@@ -1988,6 +1988,26 @@ const H = Math.max(64, base);
    
 
    const hasImg = preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0;
+
+     // ---- fast path: no image loaded -> don't run heavy pixel loop ----
+if (!hasImg) {
+  preview.worldCanvas.width = W;
+  preview.worldCanvas.height = H;
+
+  const wctx = preview.worldCtx;
+  wctx.fillStyle = "#111";
+  wctx.fillRect(0, 0, W, H);
+
+  wctx.fillStyle = "rgba(255,255,255,.75)";
+  wctx.font =
+    "14px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+  wctx.fillText("Upload an image to preview", 18, 28);
+
+  preview.worldReady = true;
+  drawPreviewViewport();
+  return;
+}
+     
 const imgW = preview.imgCanvas.width;
 const imgH = preview.imgCanvas.height;
 const imgData = hasImg ? preview.imgData : null;
@@ -2028,8 +2048,19 @@ const rMaxSensor = Math.hypot(halfWv, halfHv);
     for (let k = 0; k < LUT_N; k++) {
       const a = k / (LUT_N - 1);
       const r = a * rMaxSensor;
-     let rObj = sensorHeightToObjectHeight_mm(r, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-if (rObj == null || !Number.isFinite(rObj)) {
+// sample 4 directions to stabilize radial mapping
+const s1 = sensorHeightToObjectHeight_mm( r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+const s2 = sensorHeightToObjectHeight_mm(-r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+const s3 = sensorHeightToObjectHeight_mm( r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+const s4 = sensorHeightToObjectHeight_mm(-r,  sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+
+let rObj = null;
+let acc = 0, n = 0;
+for (const v of [s1, s2, s3, s4]) {
+  if (v != null && Number.isFinite(v)) { acc += Math.abs(v); n++; }
+}
+if (n) rObj = acc / n;
+       if (rObj == null || !Number.isFinite(rObj)) {
   rObjLUT[k] = 0;
   validLUT[k] = 0;
 } else {
