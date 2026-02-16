@@ -1382,6 +1382,7 @@ pctx.save();
 pctx.setTransform(1, 0, 0, 1, 0, 0);
 pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
 pctx.restore();
+   pctx.fillRect(0, 0, Wc, Hc);
 
 pctx.fillStyle = "#000";
 pctx.fillRect(0, 0, Wc, Hc);
@@ -2279,7 +2280,7 @@ drawPreviewViewport();
 preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
 
 preview.ready = true;
-renderPreview();
+scheduleRenderPreview();
         URL.revokeObjectURL(url);
       };
       im.src = url;
