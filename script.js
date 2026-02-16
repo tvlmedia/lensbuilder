@@ -1320,7 +1320,7 @@ function drawPLMountCutout(world, xFlange, opts = {}) {
   ctx.restore();
 }
 
-function drawRulerFrom(world, originX, xMin, yWorld = null, label = "PL", yOffsetMm = 0) {
+function drawRulerFrom(world, originX, xMin, yWorld = null, label = "", yOffsetMm = ) {
   if (!ctx) return;
 
   let maxAp = 0;
