@@ -552,8 +552,8 @@ if (k === "stop") {
 
   // plane surface normal is a property of the surface, not of the ray.
 // In our convention, normals point toward the OBJECT side (-x).
-const nx = (ray.d.x > 0) ? -1 : +1; // normal wijst tegen de ray in
-return { hit, t, vignetted, normal: { x: nx, y: 0 } };
+// plane surface normal is fixed: points to OBJECT side (-x)
+return { hit, t, vignetted, normal: { x: -1, y: 0 } };
 }
 
     const cx = vx + R;
@@ -2444,7 +2444,43 @@ const wctx = preview.worldBackCtx;
 const out = wctx.createImageData(W, H);
 const outD = out.data;
 
-// ... jouw pixel-loop vult outD precies zoals nu ...
+// Render sensor pixels -> object plane via radial LUT
+for (let j = 0; j < H; j++) {
+  // sensor y in mm (top->bottom)
+  const sy = ((j + 0.5) / H) * sensorHv - halfHv;
+
+  for (let i = 0; i < W; i++) {
+    const sx = ((i + 0.5) / W) * sensorWv - halfWv;
+
+    // radius on sensor
+    const rs = Math.hypot(sx, sy);
+    const ro = lookupROut(rs);
+
+    const o = (j * W + i) * 4;
+
+    // if outside LUT / ray invalid -> black
+    if (ro == null || !Number.isFinite(ro)) {
+      outD[o] = 0; outD[o + 1] = 0; outD[o + 2] = 0; outD[o + 3] = 255;
+      continue;
+    }
+
+    // map direction (keep angle) + scale radius
+    const ang = Math.atan2(sy, sx);
+    const ox = Math.cos(ang) * ro;
+    const oy = Math.sin(ang) * ro;
+
+    // object plane is a rectangle: width matches uploaded image aspect
+    // normalize to [0..1]
+    const u = (ox / halfObjH) * 0.5 + 0.5; // using objH as “diameter” basis
+    const v = 0.5 - (oy / halfObjH) * 0.5;
+
+    const c = sample(u, v);
+    outD[o] = c[0] | 0;
+    outD[o + 1] = c[1] | 0;
+    outD[o + 2] = c[2] | 0;
+    outD[o + 3] = c[3] | 0;
+  }
+}
 
 wctx.putImageData(out, 0, 0);
 
@@ -2464,6 +2500,8 @@ preview.worldReady = true;
 preview.rendering = false;
 
 drawPreviewViewport();
+return;
+}
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
