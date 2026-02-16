@@ -170,65 +170,59 @@ const OV = 1.0;
     applySensorToIMS();
   }
 
-// -------------------- camera silhouettes (vector, simple) --------------------
-// Coordinates are in mm, relative to PL flange plane (x=0 here means flange plane).
-// We'll place them at worldX = plX + shape.x
-const CAMERA_PRESETS = {
-  "ARRI Alexa Mini (S35)": {
-    label: "ARRI",
-    model: "ALEXA MINI",
-    body:  { x: 0,  y: -70, w: 175, h: 140, r: 10 }, // ✅ start at flange, goes to +x
-    bumps: [
-      { x: 25, y: -92, w: 80, h: 22, r: 8 },
-      { x: 140, y: -35, w: 30, h: 70, r: 8 },
-    ],
-    logoPos: { x: 10, y: -55 },
-    sensorMark: { x: 52, y: 0, w: 18, h: 12 } // ✅ flange +52 = sensor plane
-  },
+// -------------------- camera overlay (PNG, calibrated) --------------------
+// We will draw a real camera silhouette image and pin it to:
+//   sensor plane = world x = 0
+//   PL flange plane = world x = -PL_FFD
+//
+// Calibration needs two clicks on the overlay image:
+//   1) click sensor plane marker
+//   2) click flange plane marker (mount face)
+//
+// pxPerMm = |flangePxX - sensorPxX| / PL_FFD
 
-  "ARRI Alexa Mini LF (LF)": {
-    label: "ARRI",
-    model: "ALEXA MINI LF",
-    body:  { x: 0,  y: -78, w: 190, h: 156, r: 12 },
-    bumps: [
-      { x: 28,  y: -102, w: 90, h: 24, r: 9 },
-      { x: 150, y: -40,  w: 34, h: 78, r: 9 },
-    ],
-    logoPos: { x: 10, y: -60 },
-    sensorMark: { x: 52, y: 0, w: 18, h: 12 }
-  },
-
+const CAMERA_IMG = {
   "Sony VENICE (FF)": {
-    label: "SONY",
-    model: "VENICE",
-    body:  { x: 0,  y: -82, w: 220, h: 164, r: 12 },
-    bumps: [
-      { x: 35,  y: -108, w: 110, h: 26, r: 10 },
-      { x: 160, y: -46,  w: 42,  h: 92, r: 10 },
-      { x: 0,   y: -25,  w: 18,  h: 50, r: 6 },
-    ],
-    logoPos: { x: 10, y: -62 },
-    sensorMark: { x: 52, y: 0, w: 18, h: 12 }
+    src: "assets/venice.png",
+
+    // These will be set by calibration:
+    sensorPx: { x: null, y: null },
+    flangePxX: null,
+    pxPerMm: null,
+
+    // Optional fine vertical tweak in world mm (usually 0)
+    yMmOffset: 0,
   },
 
-  "Fuji GFX (MF)": {
-    label: "FUJI",
-    model: "ETERNA (GFX)",
-    body:  { x: 0,  y: -80, w: 205, h: 160, r: 12 },
-    bumps: [
-      { x: 30,  y: -106, w: 95, h: 24, r: 9 },
-      { x: 150, y: -42,  w: 38, h: 84, r: 9 },
-    ],
-    logoPos: { x: 10, y: -62 },
-    sensorMark: { x: 52, y: 0, w: 18, h: 12 }
-  },
+  // If you later add more PNGs:
+  // "ARRI Alexa Mini (S35)": { src:"assets/alexa_mini.png", sensorPx:{x:null,y:null}, flangePxX:null, pxPerMm:null, yMmOffset:0 },
 };
 
-function getCurrentCameraPreset() {
-  const key = ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)";
-  return CAMERA_PRESETS[key] || CAMERA_PRESETS["ARRI Alexa Mini LF (LF)"];
+const camImgCache = new Map();
+
+function getCamImgPresetKey() {
+  // tie it to your sensorPreset dropdown:
+  const key = ui.sensorPreset?.value || "Sony VENICE (FF)";
+  // fallback to Venice
+  return CAMERA_IMG[key] ? key : "Sony VENICE (FF)";
 }
-   
+
+function getCamPreset() {
+  return CAMERA_IMG[getCamImgPresetKey()];
+}
+
+function getCamImg() {
+  const key = getCamImgPresetKey();
+  const p = CAMERA_IMG[key];
+  if (!p) return null;
+
+  if (!camImgCache.has(key)) {
+    const im = new Image();
+    im.src = p.src;
+    camImgCache.set(key, im);
+  }
+  return camImgCache.get(key);
+}
   // -------------------- glass db --------------------
   const GLASS_DB = {
     AIR: { nd: 1.0, Vd: 999.0 },
@@ -978,6 +972,18 @@ const dir = normalize({ x: dx, y: -sensorYmm });
   // -------------------- drawing --------------------
   let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
 
+// -------------------- camera calibration state --------------------
+let camCal = {
+  active: false,
+  stage: 0, // 0 = waiting sensor click, 1 = waiting flange click
+};
+
+function camIsCalibrated(p) {
+  return !!(p && p.pxPerMm && Number.isFinite(p.pxPerMm) && p.pxPerMm > 0 &&
+            p.sensorPx && Number.isFinite(p.sensorPx.x) && Number.isFinite(p.sensorPx.y) &&
+            Number.isFinite(p.flangePxX));
+}
+   
   function resizeCanvasToCSS() {
     if (!canvas || !ctx) return;
     const r = canvas.getBoundingClientRect();
@@ -1444,61 +1450,41 @@ function drawRoundedRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawCameraOverlay(world, xFlange) {
+function drawCameraOverlayImage(world) {
   if (!ctx) return;
 
-  const cam = getCurrentCameraPreset();
-  const P = (x, y) => worldToScreen({ x, y }, world);
+  const key = getCamImgPresetKey();
+  const p = getCamPreset();
+  const im = getCamImg();
+  if (!p || !im || !im.complete) return;
+
+  // If not calibrated, we show a hint and don't draw (or draw at arbitrary scale)
+  if (!camIsCalibrated(p)) {
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
+    ctx.fillText(`Camera overlay not calibrated (press C) • preset: ${key}`, 14, 40);
+    ctx.restore();
+    return;
+  }
+
+  // World scaling: world.s = pixels per mm on the main canvas
+  // Image scaling: pxPerMm = pixels per mm in the source image itself
+  const scale = world.s / p.pxPerMm;
+
+  const drawW = im.naturalWidth * scale;
+  const drawH = im.naturalHeight * scale;
+
+  // Place image so that sensorPx lands on world x=0,y=0 (sensor center)
+  const sensorScreen = worldToScreen({ x: 0, y: 0 }, world);
+
+  const sx = sensorScreen.x - p.sensorPx.x * scale;
+  const sy = sensorScreen.y - p.sensorPx.y * scale - (p.yMmOffset || 0) * world.s;
 
   ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(0,0,0,.25)";
-  ctx.fillStyle = "rgba(0,0,0,.03)";
-
-  // body
-  {
-    const b = cam.body;
-    const p = P(xFlange + b.x, b.y);
-    const w = b.w * world.s;
-    const h = b.h * world.s;
-
-    drawRoundedRect(ctx, p.x, p.y, w, h, (b.r || 10) * world.s);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  // bumps
-  for (const bb of (cam.bumps || [])) {
-    const p = P(xFlange + bb.x, bb.y);
-    const w = bb.w * world.s;
-    const h = bb.h * world.s;
-    drawRoundedRect(ctx, p.x, p.y, w, h, (bb.r || 8) * world.s);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  // sensor mark inside camera
-  if (cam.sensorMark) {
-    const sm = cam.sensorMark;
-    const p = P(xFlange + sm.x, -sm.h * 0.5);
-    const w = sm.w * world.s;
-    const h = sm.h * world.s;
-    ctx.fillStyle = "rgba(42,110,242,.10)";
-    ctx.strokeStyle = "rgba(42,110,242,.45)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.rect(p.x, p.y, w, h);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  // label
-  ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
-  const lp = cam.logoPos || { x: 10, y: -55 };
-  const t = P(xFlange + lp.x, lp.y);
-  ctx.fillText(`${cam.label} ${cam.model}`, t.x, t.y);
-
+  ctx.globalAlpha = 0.22;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(im, sx, sy, drawW, drawH);
   ctx.restore();
 }
  
@@ -1609,8 +1595,8 @@ const intrusion = rearX0 - plX;
   drawAxes(world);
   drawPLFlange(world, plX);
 drawPLMountSide(world, plX);// ✅ mount ring zichtbaar
-drawCameraOverlay(world, plX);  // ✅ camera body zichtbaar
-  drawLens(world, lens.surfaces);
+drawCameraOverlayImage(world);
+   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
   drawRays(world, traces, sensorX);
   drawSensor(world, sensorX, halfH); // sensor line
@@ -1666,6 +1652,113 @@ drawCameraOverlay(world, plX);  // ✅ camera body zichtbaar
       renderAll();
     });
   }
+
+   // -------------------- camera calibration (click 2 points) --------------------
+function screenToWorld(xScr, yScr, world) {
+  // inverse of worldToScreen:
+  // xScr = cx + x* s  => x = (xScr - cx)/s
+  // yScr = cy - y* s  => y = (cy - yScr)/s
+  return {
+    x: (xScr - world.cx) / world.s,
+    y: (world.cy - yScr) / world.s,
+  };
+}
+
+function handleCameraCalibrationClick(e) {
+  if (!camCal.active) return;
+
+  const p = getCamPreset();
+  const im = getCamImg();
+  if (!p || !im || !im.complete) return;
+
+  // we need the current world transform to map click to world coords,
+  // then we can map that back to image pixel coords via the overlay transform.
+  const world = makeWorldTransform();
+
+  // If not calibrated yet, we can temporarily assume pxPerMm from flange if stage 0?
+  // We solve it by using the current displayed overlay mapping:
+  // But mapping needs scale. For stage 0, we can pick scale=1 and store pixel coords directly by
+  // computing where the image is drawn currently. Simpler:
+  //
+  // We'll draw the image uncalibrated? Not doing that. So instead:
+  // We'll do calibration in IMAGE pixel space by assuming the image is drawn at 1:1 relative to screen
+  // using a temporary pxPerMm guess (1). Then we only use click pixel positions relative to the image draw.
+  //
+  // So: we draw the image "floating" centered on sensor with scale based on a temporary pxPerMm guess
+  // if not calibrated, we set pxPerMm = 10 as a starter so it appears.
+  const tempPxPerMm = camIsCalibrated(p) ? p.pxPerMm : 10;
+
+  const scale = world.s / tempPxPerMm;
+
+  const drawW = im.naturalWidth * scale;
+  const drawH = im.naturalHeight * scale;
+
+  const sensorScreen = worldToScreen({ x: 0, y: 0 }, world);
+
+  const sx = sensorScreen.x - (Number.isFinite(p.sensorPx.x) ? p.sensorPx.x : im.naturalWidth * 0.5) * scale;
+  const sy = sensorScreen.y - (Number.isFinite(p.sensorPx.y) ? p.sensorPx.y : im.naturalHeight * 0.5) * scale;
+
+  // Mouse click in CSS pixels
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  // Convert click to IMAGE pixel coords (relative to drawn image)
+  const ix = (mx - sx) / scale;
+  const iy = (my - sy) / scale;
+
+  // must be inside image
+  if (ix < 0 || iy < 0 || ix > im.naturalWidth || iy > im.naturalHeight) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration click must be on the camera image.";
+    return;
+  }
+
+  if (camCal.stage === 0) {
+    p.sensorPx = { x: ix, y: iy };
+    camCal.stage = 1;
+    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration: now click the PL flange plane (mount face).";
+    renderAll();
+    return;
+  }
+
+  // stage 1: flange click
+  p.flangePxX = ix;
+
+  const dx = Math.abs(p.flangePxX - p.sensorPx.x);
+  if (dx < 1) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration failed: sensor and flange X too close.";
+    return;
+  }
+
+  p.pxPerMm = dx / PL_FFD;
+
+  camCal.active = false;
+  camCal.stage = 0;
+
+  if (ui.footerWarn) ui.footerWarn.textContent =
+    `Camera calibrated ✅ pxPerMm=${p.pxPerMm.toFixed(4)} (sensor↔flange = ${dx.toFixed(1)}px / ${PL_FFD}mm)`;
+
+  renderAll();
+}
+
+function toggleCameraCalibration() {
+  const p = getCamPreset();
+  const im = getCamImg();
+  if (!p || !im) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "No camera image preset available.";
+    return;
+  }
+
+  camCal.active = !camCal.active;
+  camCal.stage = 0;
+
+  if (camCal.active) {
+    if (ui.footerWarn) ui.footerWarn.textContent =
+      "Calibration ON: click SENSOR plane on the Venice image, then click PL FLANGE plane.";
+  } else {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration OFF.";
+  }
+}
 function getSensorRectBaseInPane() {
   if (!previewCanvasEl) return { x: 0, y: 0, w: 0, h: 0 };
 
