@@ -177,55 +177,50 @@ const CAMERA_PRESETS = {
   "ARRI Alexa Mini (S35)": {
     label: "ARRI",
     model: "ALEXA MINI",
-    // simple silhouette as a rounded body + top handle bump
-    body: { x: -115, y: -70, w: 175, h: 140, r: 10 }, // mm (relative to flange)
+    body:  { x: 0,  y: -70, w: 175, h: 140, r: 10 }, // ✅ start at flange, goes to +x
     bumps: [
-      { x: -40, y: -92, w: 80, h: 22, r: 8 },  // top “handle”
-      { x:  40, y: -35, w: 30, h: 70, r: 8 },  // viewfinder-ish block
+      { x: 25, y: -92, w: 80, h: 22, r: 8 },
+      { x: 140, y: -35, w: 30, h: 70, r: 8 },
     ],
-    logoPos: { x: -105, y: -55 },  // inside body, relative to flange
-         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
-
+    logoPos: { x: 10, y: -55 },
+    sensorMark: { x: 52, y: 0, w: 18, h: 12 } // ✅ flange +52 = sensor plane
   },
 
   "ARRI Alexa Mini LF (LF)": {
     label: "ARRI",
     model: "ALEXA MINI LF",
-    body: { x: -125, y: -78, w: 190, h: 156, r: 12 },
+    body:  { x: 0,  y: -78, w: 190, h: 156, r: 12 },
     bumps: [
-      { x: -45, y: -102, w: 90, h: 24, r: 9 },
-      { x:  50, y: -40,  w: 34, h: 78, r: 9 },
+      { x: 28,  y: -102, w: 90, h: 24, r: 9 },
+      { x: 150, y: -40,  w: 34, h: 78, r: 9 },
     ],
-    logoPos: { x: -115, y: -60 },
-         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
-
+    logoPos: { x: 10, y: -60 },
+    sensorMark: { x: 52, y: 0, w: 18, h: 12 }
   },
 
   "Sony VENICE (FF)": {
     label: "SONY",
     model: "VENICE",
-    body: { x: -150, y: -82, w: 220, h: 164, r: 12 },
+    body:  { x: 0,  y: -82, w: 220, h: 164, r: 12 },
     bumps: [
-      { x: -65, y: -108, w: 110, h: 26, r: 10 },
-      { x:  65, y: -46,  w: 42,  h: 92, r: 10 },
-      { x: -150, y: -25, w: 18,  h: 50, r: 6 }, // rear “plate”
+      { x: 35,  y: -108, w: 110, h: 26, r: 10 },
+      { x: 160, y: -46,  w: 42,  h: 92, r: 10 },
+      { x: 0,   y: -25,  w: 18,  h: 50, r: 6 },
     ],
-    logoPos: { x: -140, y: -62 },
-         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
-
+    logoPos: { x: 10, y: -62 },
+    sensorMark: { x: 52, y: 0, w: 18, h: 12 }
   },
 
   "Fuji GFX (MF)": {
     label: "FUJI",
     model: "ETERNA (GFX)",
-    body: { x: -135, y: -80, w: 205, h: 160, r: 12 },
+    body:  { x: 0,  y: -80, w: 205, h: 160, r: 12 },
     bumps: [
-      { x: -55, y: -106, w: 95, h: 24, r: 9 },
-      { x:  58, y: -42,  w: 38, h: 84, r: 9 },
+      { x: 30,  y: -106, w: 95, h: 24, r: 9 },
+      { x: 150, y: -42,  w: 38, h: 84, r: 9 },
     ],
-    logoPos: { x: -125, y: -62 },
-         sensorMark: { x: 52, y: 0, w: 18, h: 12 }
-
+    logoPos: { x: 10, y: -62 },
+    sensorMark: { x: 52, y: 0, w: 18, h: 12 }
   },
 };
 
@@ -1318,16 +1313,14 @@ function drawPLFlange(world, xFlange) {
   ctx.restore();
 }
 
-   function drawPLMountOutline(world, xFlange) {
+  function drawPLMountSide(world, xFlange) {
   if (!ctx) return;
 
-  // Rough PL mount dimensions (visual only)
-  const outerR = 30;   // outer ring radius (mm-ish)
-  const innerR = 22;   // throat radius
-  const depth  = 10;   // little "tube" depth to the left
-
-  // Place around optical axis at y=0
-  const cx = xFlange;
+  // Visual-only rough PL throat/profile (SIDE VIEW)
+  const outerR = 30;     // outer “mount body” half-height (mm-ish)
+  const throatR = 22;    // throat half-height
+  const camDepth = 18;   // how far mount body goes into camera (+x)
+  const lensLip  = 4;    // small lip to lens side (-x)
 
   const P = (x, y) => worldToScreen({ x, y }, world);
 
@@ -1336,154 +1329,72 @@ function drawPLFlange(world, xFlange) {
   ctx.strokeStyle = "rgba(0,0,0,.30)";
   ctx.fillStyle = "rgba(0,0,0,.03)";
 
-  // Outer ring (circle)
-  ctx.beginPath();
-  const c0 = P(cx, 0);
-  ctx.arc(c0.x, c0.y, outerR * world.s, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Inner throat (circle)
-  ctx.beginPath();
-  ctx.arc(c0.x, c0.y, innerR * world.s, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Small “tube” to the left (mount depth)
-  const a = P(cx - depth, -innerR);
-  const b = P(cx,        -innerR);
-  const c = P(cx,         innerR);
-  const d = P(cx - depth, innerR);
-
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.lineTo(c.x, c.y);
-  ctx.lineTo(d.x, d.y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // 3 tabs (simple)
-  ctx.strokeStyle = "rgba(0,0,0,.35)";
-  ctx.lineWidth = 3;
-
-  const tabAngles = [ -30, 90, 210 ].map(deg => (deg * Math.PI) / 180);
-  for (const ang of tabAngles) {
-    const r1 = outerR * 0.92;
-    const r2 = outerR * 1.05;
-    const x1 = cx + Math.cos(ang) * r1;
-    const y1 = 0  + Math.sin(ang) * r1;
-    const x2 = cx + Math.cos(ang) * r2;
-    const y2 = 0  + Math.sin(ang) * r2;
-
-    const p1 = P(x1, y1);
-    const p2 = P(x2, y2);
+  // Outer mount block (camera side)
+  {
+    const a = P(xFlange,        -outerR);
+    const b = P(xFlange+camDepth, -outerR);
+    const c = P(xFlange+camDepth,  outerR);
+    const d = P(xFlange,         outerR);
 
     ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
+    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
+    ctx.closePath();
+    ctx.fill();
     ctx.stroke();
   }
 
-  // label
+  // Small lens-side lip (just to show flange lip)
+  {
+    const a = P(xFlange - lensLip, -outerR*0.55);
+    const b = P(xFlange,          -outerR*0.55);
+    const c = P(xFlange,           outerR*0.55);
+    const d = P(xFlange - lensLip, outerR*0.55);
+
+    ctx.fillStyle = "rgba(0,0,0,.02)";
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Throat "hole" (cut-out)
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  {
+    const a = P(xFlange,          -throatR);
+    const b = P(xFlange+camDepth, -throatR);
+    const c = P(xFlange+camDepth,  throatR);
+    const d = P(xFlange,           throatR);
+
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Throat outline
+  {
+    const a = P(xFlange,          -throatR);
+    const b = P(xFlange+camDepth, -throatR);
+    const c = P(xFlange+camDepth,  throatR);
+    const d = P(xFlange,           throatR);
+
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.lineTo(d.x,d.y);
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // Label
   ctx.fillStyle = "rgba(0,0,0,.55)";
   ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
-  const t = P(cx + 6, outerR + 6);
-  ctx.fillText("PL MOUNT", t.x, t.y);
+  const t = P(xFlange + 6, outerR + 6);
+  ctx.fillText("PL MOUNT (side)", t.x, t.y);
 
   ctx.restore();
 }
-
-function roundedRectPath(world, x, y, w, h, r) {
-  r = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
-
-  const p = (xx, yy) => worldToScreen({ x: xx, y: yy }, world);
-
-  const a = p(x + r, y);
-  const b = p(x + w - r, y);
-  const c = p(x + w, y + r);
-  const d = p(x + w, y + h - r);
-  const e = p(x + w - r, y + h);
-  const f = p(x + r, y + h);
-  const g = p(x, y + h - r);
-  const h2 = p(x, y + r);
-
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.quadraticCurveTo(p(x + w, y).x, p(x + w, y).y, c.x, c.y);
-  ctx.lineTo(d.x, d.y);
-  ctx.quadraticCurveTo(p(x + w, y + h).x, p(x + w, y + h).y, e.x, e.y);
-  ctx.lineTo(f.x, f.y);
-  ctx.quadraticCurveTo(p(x, y + h).x, p(x, y + h).y, g.x, g.y);
-  ctx.lineTo(h2.x, h2.y);
-  ctx.quadraticCurveTo(p(x, y).x, p(x, y).y, a.x, a.y);
-  ctx.closePath();
-}
-
-function drawRoundedRect(world, x, y, w, h, r, { fill = null, stroke = null, lineWidth = 2 } = {}) {
-  if (!ctx) return;
-  ctx.save();
-  ctx.lineWidth = lineWidth;
-  roundedRectPath(world, x, y, w, h, r);
-  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-  if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
-  ctx.restore();
-}
-
-function drawCameraOverlay(world, plX) {
-  if (!ctx) return;
-
-  const cam = getCurrentCameraPreset();
-  if (!cam || !cam.body) return;
-
-  const baseX = plX;
-  const body = cam.body;
-
-    // colors (visible on white canvas)
-  const stroke = "rgba(0,0,0,.25)";
-  const fill   = "rgba(0,0,0,.04)";
-  const bumpFill = "rgba(0,0,0,.03)";
-  const logo = "rgba(0,0,0,.50)";
-
-  // SENSOR MARK inside the camera body (should align with world sensor x=0)
-  if (cam.sensorMark) {
-    const sm = cam.sensorMark;
-
-    drawRoundedRect(
-      world,
-      baseX + sm.x - sm.w * 0.5,
-      sm.y - sm.h * 0.5,
-      sm.w,
-      sm.h,
-      3,
-      { fill: "rgba(42,110,242,.18)", stroke: "rgba(42,110,242,.75)", lineWidth: 1.5 }
-    );
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(42,110,242,.75)";
-    ctx.lineWidth = 1;
-
-    const a = worldToScreen({ x: baseX + sm.x - sm.w * 0.5, y: sm.y }, world);
-    const b = worldToScreen({ x: baseX + sm.x + sm.w * 0.5, y: sm.y }, world);
-    const c = worldToScreen({ x: baseX + sm.x, y: sm.y - sm.h * 0.5 }, world);
-    const d = worldToScreen({ x: baseX + sm.x, y: sm.y + sm.h * 0.5 }, world);
-
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-    ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y);
-    ctx.stroke();
-    ctx.restore();
-
-    ctx.save();
-    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-    ctx.font = `11px ${mono}`;
-    ctx.fillStyle = "rgba(42,110,242,.9)";
-    ctx.textBaseline = "bottom";
-    const t = worldToScreen({ x: baseX + sm.x + 10, y: sm.y - 8 }, world);
-    ctx.fillText("SENSOR", t.x, t.y);
-    ctx.restore();
-  }
 
   // BODY
   drawRoundedRect(
@@ -1629,7 +1540,7 @@ function renderAll() {
   const world = makeWorldTransform();
   drawAxes(world);
   drawPLFlange(world, plX);
-drawPLMountOutline(world, plX); // ✅ mount ring zichtbaar
+drawPLMountSide(world, plX);// ✅ mount ring zichtbaar
 drawCameraOverlay(world, plX);  // ✅ camera body zichtbaar
   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
