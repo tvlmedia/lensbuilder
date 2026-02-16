@@ -1320,8 +1320,8 @@ function drawPLMountCutout(world, xFlange, opts = {}) {
   ctx.restore();
 }
 
-function drawRulerFrom(world, originX, xMin, yWorld = null, label = "", yOffsetMm = ) {
-  if (!ctx) return;
+function drawRulerFrom(world, originX, xMin, yWorld = null, label = "", yOffsetMm = 0) {
+   if (!ctx) return;
 
   let maxAp = 0;
   if (lens?.surfaces?.length) {
@@ -1372,12 +1372,14 @@ function drawRulerFrom(world, originX, xMin, yWorld = null, label = "", yOffsetM
     ctx.restore();
   }
 
-  // origin label
+ // origin label (optional)
+if (label) {
   const p0 = P(originX, y);
   ctx.save();
   ctx.fillStyle = "rgba(0,0,0,.65)";
   ctx.fillText(`${label} 0`, p0.x, p0.y + 10);
   ctx.restore();
+}
 
   ctx.restore();
 }
@@ -1430,10 +1432,6 @@ ctx.font = major ? `11px ${mono}` : `10px ${mono}`;
 ctx.fillText(`${cm}cm`, p.x, p.y + tLen + 2);
 ctx.restore();
   }
-
-  // 0 label
-  const p0 = P(0, y);
-  ctx.fillText("0", p0.x, p0.y + 10);
 
   ctx.restore();
 }
