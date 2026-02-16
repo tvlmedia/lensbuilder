@@ -412,20 +412,25 @@ scheduleRenderPreview(); // throttle heavy preview render
     selectedIndex = i;
     const s = lens.surfaces[i];
     if (!s) return;
-
-   if (k === "stop") {
+if (k === "stop") {
   const want = !!el.checked;
 
-  // 1) clear alle stops + STOP types
+  // ✅ STOP mag niet op OBJ of IMS
+  const t0 = String(s.type || "").toUpperCase();
+  if (t0 === "OBJ" || t0 === "IMS") {
+    el.checked = false;
+    if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
+    return;
+  }
+
   lens.surfaces.forEach((ss, j) => {
     ss.stop = false;
     if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
   });
 
-  // 2) zet deze aan/uit
   s.stop = want;
   if (want) s.type = "STOP";
-      if (want) s.R = 0.0;
+  if (want) s.R = 0.0;
 }
     else if (k === "glass") s.glass = el.value;
     else if (k === "type") s.type = el.value;
@@ -2241,11 +2246,20 @@ drawPreviewViewport();
   if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
 });
 
-     document.addEventListener("fullscreenchange", () => {
-    // preview pane kan van size veranderen => redraw
-    if (preview.ready) renderPreview();
+    document.addEventListener("fullscreenchange", () => {
+  // ✅ canvas size verandert in fullscreen
+  resizePreviewCanvasToCSS();
+
+  // ✅ als world al gerenderd is: alleen viewport redraw (geen heavy render)
+  if (preview.worldReady) {
     drawPreviewViewport();
-  });
+    return;
+  }
+
+  // ✅ anders: render 1x als er een image is
+  if (preview.ready) renderPreview();
+  else drawPreviewViewport();
+});
 
   if (ui.prevImg) {
     ui.prevImg.addEventListener("change", (e) => {
@@ -2265,6 +2279,7 @@ drawPreviewViewport();
 preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
 
 preview.ready = true;
+preview.worldReady = false;   // ✅ reset world cache
 scheduleRenderPreview();
         URL.revokeObjectURL(url);
       };
