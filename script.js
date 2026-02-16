@@ -1623,11 +1623,12 @@ drawCameraOverlay(world, plX);  // ✅ camera body zichtbaar
     `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • ${rearTxt}`
   );
 
-     // ... na drawLens(world, lens.surfaces);
-  const topY = getLensTopY(lens.surfaces) + 8; // 8mm boven het hoogste glas
+     const topY = getLensTopY(lens.surfaces) + 8; // 8mm boven het hoogste glas
   drawRulerFromSensor(world, 0.0, topY, 300, 10); // 300mm lang, per 1cm tick
 
-   
+  // ✅ keep preview in sync with any lens change
+  if (preview.ready) scheduleRenderPreview();
+  else drawPreviewViewport();
 }
 
   // -------------------- view controls --------------------
@@ -2368,8 +2369,9 @@ drawPreviewViewport();
 
     computeVertices(lens.surfaces);
     clampAllApertures(lens.surfaces);
-    buildTable();
+      buildTable();
     renderAll();
+    if (preview.ready) scheduleRenderPreview();
 
     if (ui.footerWarn) ui.footerWarn.textContent = `Scale→FL: EFL ${cur.toFixed(2)} → target ${target.toFixed(2)} (k=${k.toFixed(4)}).`;
   }
@@ -2398,8 +2400,9 @@ drawPreviewViewport();
     lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
 
     clampAllApertures(lens.surfaces);
-    buildTable();
+        buildTable();
     renderAll();
+    if (preview.ready) scheduleRenderPreview();
 
     if (ui.footerWarn) ui.footerWarn.textContent = `Set T: stop ap → ${lens.surfaces[stopIdx].ap.toFixed(2)}mm (semi-diam) for T${targetT.toFixed(2)} @ EFL ${efl.toFixed(2)}mm.`;
   }
@@ -2677,9 +2680,17 @@ scheduleRenderPreview();
   });
 
   // -------------------- controls -> rerender --------------------
- ["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
-  on("#" + id, "input", scheduleRenderAll);
-  on("#" + id, "change", scheduleRenderAll);
+["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
+  on("#" + id, "input", () => {
+    scheduleRenderAll();
+    if (preview.ready) scheduleRenderPreview();
+    else drawPreviewViewport();
+  });
+  on("#" + id, "change", () => {
+    scheduleRenderAll();
+    if (preview.ready) scheduleRenderPreview();
+    else drawPreviewViewport();
+  });
 });
 
   // preview numeric controls => rerender preview (only if img loaded)
