@@ -39,6 +39,8 @@ const preview = {
   imgCtx: null,
   ready: false,
 
+  imgData: null, // ✅ CACHE pixels 1x
+
   // NEW: offscreen rendered "world" (lens output)
   worldCanvas: document.createElement("canvas"),
   worldCtx: null,
@@ -408,7 +410,19 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     const s = lens.surfaces[i];
     if (!s) return;
 
-    if (k === "stop") { s.stop = !!el.checked; enforceSingleStop(i); }
+   if (k === "stop") {
+  const want = !!el.checked;
+
+  // 1) clear alle stops + STOP types
+  lens.surfaces.forEach((ss, j) => {
+    ss.stop = false;
+    if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
+  });
+
+  // 2) zet deze aan/uit
+  s.stop = want;
+  if (want) s.type = "STOP";
+}
     else if (k === "glass") s.glass = el.value;
     else if (k === "type") s.type = el.value;
     else s[k] = num(el.value, s[k] ?? 0);
@@ -632,7 +646,9 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
   }
 
   function sensorHeightToObjectHeight_mm(sensorYmm, sensorX, xStop, xObjPlane, surfaces, wavePreset) {
-    const dir = normalize({ x: xStop - sensorX, y: -sensorYmm });
+    const dx = xStop - sensorX;
+if (Math.abs(dx) < 1e-6) return null;
+const dir = normalize({ x: dx, y: -sensorYmm });
     const eps = 0.01;
     const r0 = { p: { x: sensorX + dir.x * eps, y: sensorYmm + dir.y * eps }, d: dir };
     const tr = traceRayReverse(r0, surfaces, wavePreset);
@@ -1118,7 +1134,17 @@ function resizePreviewCanvasToCSS() {
     ctx.fillText(text, 14, 20);
     ctx.restore();
   }
+// -------------------- render scheduler (RAF throttle) --------------------
+let _rafAll = 0;
+function scheduleRenderAll() {
+  if (_rafAll) return;
+  _rafAll = requestAnimationFrame(() => {
+    _rafAll = 0;
+    renderAll();
+  });
+}
 
+// -------------------- render --------------------
   // -------------------- render --------------------
   function renderAll() {
     if (!canvas || !ctx) return;
@@ -1745,10 +1771,10 @@ function bindPreviewViewControls() {
 
    
 
-    const hasImg = preview.ready && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0;
-    const imgW = preview.imgCanvas.width;
-    const imgH = preview.imgCanvas.height;
-    const imgData = hasImg ? preview.imgCtx.getImageData(0, 0, imgW, imgH).data : null;
+   const hasImg = preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0;
+const imgW = preview.imgCanvas.width;
+const imgH = preview.imgCanvas.height;
+const imgData = hasImg ? preview.imgData : null;
 
     function sample(u, v) {
       if (!hasImg) return [255, 255, 0, 255];      // yellow if no image
@@ -2153,9 +2179,13 @@ drawPreviewViewport();
         preview.imgCanvas.width = im.naturalWidth;
         preview.imgCanvas.height = im.naturalHeight;
         preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-        preview.imgCtx.drawImage(im, 0, 0);
-        preview.ready = true;
-        renderPreview();
+      preview.imgCtx.drawImage(im, 0, 0);
+
+// CACHE imgData 1x (BELANGRIJK)
+preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
+
+preview.ready = true;
+renderPreview();
         URL.revokeObjectURL(url);
       };
       im.src = url;
@@ -2191,10 +2221,10 @@ drawPreviewViewport();
   });
 
   // -------------------- controls -> rerender --------------------
-  ["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
-    on("#" + id, "input", renderAll);
-    on("#" + id, "change", renderAll);
-  });
+ ["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "renderScale", "sensorW", "sensorH"].forEach((id) => {
+  on("#" + id, "input", scheduleRenderAll);
+  on("#" + id, "change", scheduleRenderAll);
+});
 
   // preview numeric controls => rerender preview (only if img loaded)
   ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
