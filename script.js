@@ -648,7 +648,7 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
   let tir = false;
 
   // We starten aan sensorzijde in AIR
-  let nRegion = 1.0;
+ 
 
   for (let i = surfaces.length - 1; i >= 0; i--) {
     const s = surfaces[i];
@@ -660,14 +660,14 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
     pts.push(hitInfo.hit);
     if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-    // OSLO-ish: medium rechts van surface i (tussen i en i+1) = s.glass
-    const nRight = isIMS ? 1.0 : glassN(String(s.glass || "AIR"), wavePreset);
-
-         // ✅ IMS is a pure sensor plane: do not refract here
+        // ✅ IMS is a pure sensor plane: do not refract here
     if (isIMS) {
       ray = { p: hitInfo.hit, d: ray.d };
       continue;
     }
+
+    // OSLO-ish: medium rechts van surface i (tussen i en i+1) = s.glass
+    const nRight = glassN(String(s.glass || "AIR"), wavePreset);
 
     // medium links van surface i (tussen i-1 en i) = surfaces[i-1].glass, of AIR bij i=0
     const nLeft = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
@@ -676,7 +676,6 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
     // Dus: refract nRight -> nLeft.
     if (Math.abs(nLeft - nRight) < 1e-9) {
       ray = { p: hitInfo.hit, d: ray.d };
-      nRegion = nLeft;
       continue;
     }
 
