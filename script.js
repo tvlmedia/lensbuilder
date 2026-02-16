@@ -170,6 +170,62 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     applySensorToIMS();
   }
 
+// -------------------- camera silhouettes (vector, simple) --------------------
+// Coordinates are in mm, relative to PL flange plane (x=0 here means flange plane).
+// We'll place them at worldX = plX + shape.x
+const CAMERA_PRESETS = {
+  "ARRI Alexa Mini (S35)": {
+    label: "ARRI",
+    model: "ALEXA MINI",
+    // simple silhouette as a rounded body + top handle bump
+    body: { x: -115, y: -70, w: 175, h: 140, r: 10 }, // mm (relative to flange)
+    bumps: [
+      { x: -40, y: -92, w: 80, h: 22, r: 8 },  // top “handle”
+      { x:  40, y: -35, w: 30, h: 70, r: 8 },  // viewfinder-ish block
+    ],
+    logoPos: { x: -105, y: -55 },  // inside body, relative to flange
+  },
+
+  "ARRI Alexa Mini LF (LF)": {
+    label: "ARRI",
+    model: "ALEXA MINI LF",
+    body: { x: -125, y: -78, w: 190, h: 156, r: 12 },
+    bumps: [
+      { x: -45, y: -102, w: 90, h: 24, r: 9 },
+      { x:  50, y: -40,  w: 34, h: 78, r: 9 },
+    ],
+    logoPos: { x: -115, y: -60 },
+  },
+
+  "Sony VENICE (FF)": {
+    label: "SONY",
+    model: "VENICE",
+    body: { x: -150, y: -82, w: 220, h: 164, r: 12 },
+    bumps: [
+      { x: -65, y: -108, w: 110, h: 26, r: 10 },
+      { x:  65, y: -46,  w: 42,  h: 92, r: 10 },
+      { x: -150, y: -25, w: 18,  h: 50, r: 6 }, // rear “plate”
+    ],
+    logoPos: { x: -140, y: -62 },
+  },
+
+  "Fuji GFX (MF)": {
+    label: "FUJI",
+    model: "ETERNA (GFX)",
+    body: { x: -135, y: -80, w: 205, h: 160, r: 12 },
+    bumps: [
+      { x: -55, y: -106, w: 95, h: 24, r: 9 },
+      { x:  58, y: -42,  w: 38, h: 84, r: 9 },
+    ],
+    logoPos: { x: -125, y: -62 },
+  },
+};
+
+function getCurrentCameraPreset() {
+  const key = ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)";
+  return CAMERA_PRESETS[key] || CAMERA_PRESETS["ARRI Alexa Mini LF (LF)"];
+}
+   
   // -------------------- glass db --------------------
   const GLASS_DB = {
     AIR: { nd: 1.0, Vd: 999.0 },
@@ -1188,6 +1244,111 @@ function drawPLFlange(world, xFlange) {
     ctx.fillText(text, 14, 20);
     ctx.restore();
   }
+
+   function drawRoundedRectOutline(world, x, y, w, h, r) {
+  if (!ctx) return;
+  r = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
+
+  const p = (xx, yy) => worldToScreen({ x: xx, y: yy }, world);
+
+  const a = p(x + r, y);
+  const b = p(x + w - r, y);
+  const c = p(x + w, y + r);
+  const d = p(x + w, y + h - r);
+  const e = p(x + w - r, y + h);
+  const f = p(x + r, y + h);
+  const g = p(x, y + h - r);
+  const h2 = p(x, y + r);
+
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.quadraticCurveTo(p(x + w, y).x, p(x + w, y).y, c.x, c.y);
+  ctx.lineTo(d.x, d.y);
+  ctx.quadraticCurveTo(p(x + w, y + h).x, p(x + w, y + h).y, e.x, e.y);
+  ctx.lineTo(f.x, f.y);
+  ctx.quadraticCurveTo(p(x, y + h).x, p(x, y + h).y, g.x, g.y);
+  ctx.lineTo(h2.x, h2.y);
+  ctx.quadraticCurveTo(p(x, y).x, p(x, y).y, a.x, a.y);
+  ctx.closePath();
+  ctx.stroke();
+}
+
+function drawCameraOverlay(world, plX) {
+  if (!ctx) return;
+
+  const cam = getCurrentCameraPreset();
+  const baseX = plX; // flange is reference
+  const body = cam.body;
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(0,0,0,.55)";           // outline
+  ctx.fillStyle   = "rgba(255,255,255,.18)";     // subtle fill
+
+  // BODY (filled)
+  // fill by drawing path twice: once fill, once stroke
+  (function () {
+    // temporary draw rounded rect path in world coords by reusing outline helper
+    // easiest: manual path with same method but fill before stroke:
+    const x = baseX + body.x;
+    const y = body.y;
+    const w = body.w;
+    const h = body.h;
+    const r = body.r;
+
+    // Build same rounded rect as a path
+    const p = (xx, yy) => worldToScreen({ x: xx, y: yy }, world);
+    const rr = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
+    const a = p(x + rr, y);
+    const b = p(x + w - rr, y);
+    const c = p(x + w, y + rr);
+    const d = p(x + w, y + h - rr);
+    const e = p(x + w - rr, y + h);
+    const f = p(x + rr, y + h);
+    const g = p(x, y + h - rr);
+    const h2 = p(x, y + rr);
+
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.quadraticCurveTo(p(x + w, y).x, p(x + w, y).y, c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.quadraticCurveTo(p(x + w, y + h).x, p(x + w, y + h).y, e.x, e.y);
+    ctx.lineTo(f.x, f.y);
+    ctx.quadraticCurveTo(p(x, y + h).x, p(x, y + h).y, g.x, g.y);
+    ctx.lineTo(h2.x, h2.y);
+    ctx.quadraticCurveTo(p(x, y).x, p(x, y).y, a.x, a.y);
+    ctx.closePath();
+
+    ctx.fill();
+    ctx.stroke();
+  })();
+
+  // BUMPS (outline only)
+  ctx.fillStyle = "rgba(255,255,255,.10)";
+  for (const b of (cam.bumps || [])) {
+    const x = baseX + b.x;
+    const y = b.y;
+    // fill + stroke
+    // quick: draw outline then fill by drawing same rounded rect path as outline-only (ok)
+    drawRoundedRectOutline(world, x, y, b.w, b.h, b.r);
+  }
+
+  // “Logo” text inside
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
+  ctx.font = `12px ${mono}`;
+  ctx.fillStyle = "rgba(0,0,0,.60)";
+  ctx.textBaseline = "top";
+
+  const lp = cam.logoPos || { x: body.x + 10, y: body.y + 10 };
+  const s1 = worldToScreen({ x: baseX + lp.x, y: lp.y }, world);
+  const s2 = worldToScreen({ x: baseX + lp.x, y: lp.y + 14 }, world);
+  ctx.fillText(cam.label || "CAM", s1.x, s1.y);
+  ctx.fillText(cam.model || "", s2.x, s2.y);
+
+  ctx.restore();
+}
 // -------------------- render scheduler (RAF throttle) --------------------
 let _rafAll = 0;
 function scheduleRenderAll() {
@@ -1289,6 +1450,7 @@ function renderAll() {
   const world = makeWorldTransform();
   drawAxes(world);
   drawPLFlange(world, plX);          // ✅ PL line
+drawCameraOverlay(world, plX); // ✅ NEW
   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
   drawRays(world, traces, sensorX);
