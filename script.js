@@ -1697,12 +1697,7 @@ drawCameraOverlayImage(world);
     scheduleRenderAll();
   });
 
-  window.addEventListener("keydown", (e) => {
-    const tag = (e.target?.tagName || "").toUpperCase();
-    const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
-    if (typing) return;
-    if (e.key?.toLowerCase() === "c") toggleCameraCalibration();
-  });
+ 
 }
    // -------------------- camera calibration (click 2 points) --------------------
 function screenToWorld(xScr, yScr, world) {
@@ -2719,28 +2714,18 @@ drawPreviewViewport();
   // Preview bindings
   if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
   if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
-  // Keyboard shortcut: P => fullscreen preview
-  window.addEventListener("keydown", (e) => {
-  const tag = (e.target?.tagName || "").toUpperCase();
-  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
-  if (typing) return;
-
-  if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
-});
+ 
 
     document.addEventListener("fullscreenchange", () => {
-  // ✅ canvas size verandert in fullscreen
   resizePreviewCanvasToCSS();
 
-  // ✅ als world al gerenderd is: alleen viewport redraw (geen heavy render)
   if (preview.worldReady) {
     drawPreviewViewport();
-    return;
+  } else if (preview.ready) {
+    scheduleRenderPreview();
+  } else {
+    drawPreviewViewport();
   }
-
-  // ✅ anders: render 1x als er een image is
-  if (preview.ready) renderPreview();
-  else drawPreviewViewport();
 });
 
   if (ui.prevImg) {
@@ -2817,24 +2802,35 @@ scheduleRenderPreview();
   on("#" + id, "change", () => scheduleRenderPreview());
 });
 
-  on("#sensorPreset", "change", (e) => {
-    applyPreset(e.target.value);
-    clampAllApertures(lens.surfaces);
-    renderAll();
-    if (preview.ready) renderPreview();
-  });
+on("#sensorPreset", "change", (e) => {
+  applyPreset(e.target.value);
+  clampAllApertures(lens.surfaces);
+  scheduleRenderAll();
+  if (preview.ready) scheduleRenderPreview();
+  else drawPreviewViewport();
+});
 
- window.addEventListener("resize", () => {
-  // reset viewport omdat sr0 verandert
+// -------------------- window resize / init --------------------
+function onResize() {
+  // resize BOTH canvases to their CSS size
+  resizeCanvasToCSS();
+  resizePreviewCanvasToCSS();
+
+  // (optioneel) reset preview viewport on resize:
   preview.view.panX = 0;
   preview.view.panY = 0;
   preview.view.zoom = 1.0;
 
+  // redraw (throttled)
   scheduleRenderAll();
-  if (preview.ready) renderPreview();
+  if (preview.ready) scheduleRenderPreview();
   else drawPreviewViewport();
-});
+}
 
+window.addEventListener("resize", onResize);
+
+// helps when layout changes without resize + first paint
+requestAnimationFrame(onResize);
   
 
   // -------------------- init --------------------
@@ -2844,7 +2840,23 @@ function init() {
   loadLens(lens);
   bindViewControls();
   bindPreviewViewControls();
-  drawPreviewViewport(); // <= hier
+  onResize();
 }
-  init();
+
+// -------------------- global hotkeys (bind once) --------------------
+if (!window.__tvlKeysBound) {
+  window.__tvlKeysBound = true;
+
+  window.addEventListener("keydown", (e) => {
+    const tag = (e.target?.tagName || "").toUpperCase();
+    const typing =
+      tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
+    if (typing) return;
+
+    if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
+    if (e.key?.toLowerCase() === "c") toggleCameraCalibration();
+  });
+}
+
+init();
 })();
