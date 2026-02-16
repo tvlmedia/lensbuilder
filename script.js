@@ -778,7 +778,17 @@ const dir = normalize({ x: dx, y: -sensorYmm });
     const idx = isIMS ? surfaces.length - 2 : surfaces.length - 1;
     return surfaces[Math.max(0, idx)]?.vx ?? 0;
   }
-
+function firstPhysicalVertexX(surfaces) {
+  if (!surfaces?.length) return 0;
+  let minX = Infinity;
+  for (const s of surfaces) {
+    const t = String(s?.type || "").toUpperCase();
+    if (t === "OBJ" || t === "IMS") continue;
+    if (!Number.isFinite(s.vx)) continue;
+    minX = Math.min(minX, s.vx);
+  }
+  return Number.isFinite(minX) ? minX : (surfaces[0]?.vx ?? 0);
+}
   function estimateEflBflParaxial(surfaces, wavePreset) {
     const lastVx = lastPhysicalVertexX(surfaces);
     const xStart = (surfaces[0]?.vx ?? 0) - 160;
@@ -1183,7 +1193,8 @@ function resizePreviewCanvasToCSS() {
 
  
 
-   const PL_FFD = 52.0; // mm
+  const PL_FFD = 52.0;        // flange focal distance (sensor->flange)
+const PL_LENS_LIP = 3.0;    // hoe ver de mount visueel naar lens-zijde steekt (zelfde als drawPLMountCutout default)
 
 function drawPLFlange(world, xFlange) {
   if (!ctx || !canvas) return;
@@ -1309,6 +1320,65 @@ function drawPLMountCutout(world, xFlange, opts = {}) {
   ctx.restore();
 }
 
+function drawRulerFrom(world, originX, xMin, yWorld = null, label = "PL") {
+  if (!ctx) return;
+
+  // hoogte boven lens
+  let maxAp = 0;
+  if (lens?.surfaces?.length) {
+    for (const s of lens.surfaces) maxAp = Math.max(maxAp, Math.abs(Number(s.ap || 0)));
+  }
+  const y = (yWorld != null) ? yWorld : (maxAp + 18); // iets hoger dan je andere ruler
+
+  const P = (x, yy) => worldToScreen({ x, y: yy }, world);
+
+  ctx.save();
+  ctx.lineWidth = 1.25;
+  ctx.strokeStyle = "rgba(0,0,0,.35)";
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+  ctx.font = `11px ${mono}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  // main line (van xMin naar originX)
+  const a = P(xMin, y);
+  const b = P(originX, y);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  // ticks elke 10mm (1cm)
+  for (let x = originX; x >= xMin - 1e-6; x -= 10) {
+    const distMm = originX - x; // afstand vanaf flange
+    const major = (Math.round(distMm) % 50) === 0;
+    const tLen = major ? 6 : 3;
+
+    const p = P(x, y);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x, p.y + tLen);
+    ctx.stroke();
+
+    const cm = Math.round(distMm / 10);
+    ctx.save();
+    ctx.fillStyle = major ? "rgba(0,0,0,.55)" : "rgba(0,0,0,.30)";
+    ctx.font = major ? `11px ${mono}` : `10px ${mono}`;
+    ctx.fillText(`${cm}cm`, p.x, p.y + tLen + 2);
+    ctx.restore();
+  }
+
+  // origin label
+  const p0 = P(originX, y);
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,.65)";
+  ctx.fillText(`${label} 0`, p0.x, p0.y + 10);
+  ctx.restore();
+
+  ctx.restore();
+}
+   
 function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
   if (!ctx) return;
 
@@ -1413,6 +1483,17 @@ const sensorX = 0.0;
   // PL flange plane is always -52mm from sensor
   const plX = -PL_FFD;
 
+   const frontVx = firstPhysicalVertexX(lens.surfaces);
+
+// lenslengte van front -> flange
+const lenToFlange = plX - frontVx; // mm (positief als lens links van flange ligt)
+
+// “incl. PL mount lengte” (lens-side lip)
+const totalLen = lenToFlange + PL_LENS_LIP;
+const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
+  ? `LEN≈ ${totalLen.toFixed(1)}mm (front→PL + mount)`
+  : `LEN≈ —`;
+
   const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
   const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
@@ -1469,7 +1550,11 @@ const sensorX = 0.0;
 
   const world = makeWorldTransform();
   drawAxes(world);
-  drawRuler(world, 0, -200);
+  drawRuler(world, 0, -200); // sensor ruler blijft
+
+// PL ruler: start bij flange, ga naar links tot voorbij front element
+const xMinPL = Math.min(frontVx - 20, plX - 20);
+drawRulerFrom(world, plX, xMinPL, null, "PL");
   drawPLFlange(world, plX);          // ✅ PL line
   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
@@ -1487,7 +1572,7 @@ const sensorX = 0.0;
 const lensOff = Number(ui.lensFocus?.value || 0);
 
 drawTitleOverlay(
-  `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • CAMFOCUS ${camOff.toFixed(2)}mm • LENSFOCUS ${lensOff.toFixed(2)}mm • ${rearTxt}`
+  `${lens.name} • ${lenTxt} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • CAMFOCUS ${camOff.toFixed(2)}mm • LENSFOCUS ${lensOff.toFixed(2)}mm • ${rearTxt}`
 );
 }
 
