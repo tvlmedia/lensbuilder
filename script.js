@@ -1438,14 +1438,60 @@ ctx.restore();
 
 
 function drawTitleOverlay(text) {
-    if (!ctx) return;
-    ctx.save();
-    const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
-    ctx.font = "14px " + mono;
-    ctx.fillStyle = "#333";
-    ctx.fillText(text, 14, 20);
-    ctx.restore();
+  if (!ctx || !canvas) return;
+
+  const mono =
+    (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+
+  const r = canvas.getBoundingClientRect();
+  const maxW = r.width - 28;   // padding
+  const x = 14;
+  const y = 18;
+  const lineH = 16;
+  const maxLines = 2;
+
+  ctx.save();
+  ctx.font = `13px ${mono}`;
+  ctx.fillStyle = "rgba(0,0,0,.62)";
+
+  // subtle background bar
+  ctx.fillRect(8, 6, r.width - 16, 34);
+
+  ctx.fillStyle = "rgba(255,255,255,.92)";
+
+  // Prefer wrapping on your bullet separator
+  const parts = String(text).split(" • ").map(s => s.trim()).filter(Boolean);
+
+  const lines = [];
+  let cur = "";
+
+  for (const p of parts) {
+    const test = cur ? (cur + " • " + p) : p;
+    if (ctx.measureText(test).width <= maxW) {
+      cur = test;
+    } else {
+      if (cur) lines.push(cur);
+      cur = p;
+      if (lines.length >= maxLines) break;
+    }
   }
+  if (lines.length < maxLines && cur) lines.push(cur);
+
+  // Ellipsis if overflow
+  if (lines.length === maxLines && parts.length) {
+    let last = lines[maxLines - 1];
+    while (ctx.measureText(last + " …").width > maxW && last.length > 0) {
+      last = last.slice(0, -1);
+    }
+    lines[maxLines - 1] = last + " …";
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], x, y + i * lineH);
+  }
+
+  ctx.restore();
+}
 // -------------------- render scheduler (RAF throttle) --------------------
 let _rafAll = 0;
 function scheduleRenderAll() {
