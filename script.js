@@ -1304,7 +1304,7 @@ function drawPreviewViewport() {
   const r = previewCanvasEl.getBoundingClientRect();
   const Wc = r.width, Hc = r.height;
 
-  // IMPORTANT: we draw in CSS pixels (because we setTransform(dpr,..))
+  // we draw in CSS pixels (because we setTransform(dpr,..))
   pctx.clearRect(0, 0, Wc, Hc);
 
   // background
@@ -1315,39 +1315,20 @@ function drawPreviewViewport() {
 
   const v = preview.view;
 
-const sr0 = getSensorRectBaseInPane();
-const sr  = applyViewToSensorRect(sr0, v);
+  const sr0 = getSensorRectBaseInPane();
+  const sr  = applyViewToSensorRect(sr0, v);
 
-// draw the world image contained in the (moved/scaled) sensor rect
-if (preview.worldReady && preview.worldCanvas && preview.worldCanvas.width > 0) {
-  const iw = preview.worldCanvas.width;
-  const ih = preview.worldCanvas.height;
+  // draw the world image contained in the (moved/scaled) sensor rect
+  if (preview.worldReady && preview.worldCanvas && preview.worldCanvas.width > 0) {
+    const iw = preview.worldCanvas.width;
+    const ih = preview.worldCanvas.height;
 
-  // ✅ contain-fit (NO extra v.zoom here — sr already scaled)
-  const s = Math.min(sr.w / iw, sr.h / ih);
+    // contain-fit inside sr (NO extra zoom here — sr already includes v.zoom)
+    const s = Math.min(sr.w / iw, sr.h / ih);
 
-  const cx = sr.x + sr.w * 0.5;
-  const cy = sr.y + sr.h * 0.5;
+    const cx = sr.x + sr.w * 0.5;
+    const cy = sr.y + sr.h * 0.5;
 
-  const dw = iw * s;
-  const dh = ih * s;
-  const dx = cx - dw * 0.5;
-  const dy = cy - dh * 0.5;
-
-  pctx.save();
-  pctx.beginPath();
-  pctx.rect(sr.x, sr.y, sr.w, sr.h);
-  pctx.clip();
-  pctx.imageSmoothingEnabled = true;
-  pctx.drawImage(preview.worldCanvas, dx, dy, dw, dh);
-  pctx.restore();
-}
-
-    // center of sensor rect
-    const cx = sr.x + sr.w * 0.5 + v.panX;
-    const cy = sr.y + sr.h * 0.5 + v.panY;
-
-    // top-left where we draw the image
     const dw = iw * s;
     const dh = ih * s;
     const dx = cx - dw * 0.5;
