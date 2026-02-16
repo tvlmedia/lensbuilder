@@ -623,7 +623,8 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
       pts.push(hitInfo.hit);
-      if (hitInfo.vignetted) { vignetted = true; break; }
+      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
+if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
       // medium on the LEFT side of this surface (in forward direction: nBefore)
       const nLeft = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
@@ -1334,6 +1335,32 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
   }
 
   function renderPreview() {
+
+     // ---------- DOF helpers ----------
+function rand01(seedObj) {
+  // simpele LCG (deterministisch)
+  seedObj.v = (seedObj.v * 1664525 + 1013904223) >>> 0;
+  return seedObj.v / 4294967296;
+}
+
+function samplePupilY(stopAp, seedObj) {
+  // 1D pupil sample: uniform in [-stopAp, +stopAp]
+  const u = rand01(seedObj) * 2 - 1;
+  return u * stopAp;
+}
+
+// sensor point -> object-plane y, maar nu door een pupil punt (xStop, pupilY)
+function sensorToObjectY_mm_pupil(sensorYmm, sensorX, xStop, pupilY, xObjPlane, surfaces, wavePreset) {
+  const dir = normalize({ x: xStop - sensorX, y: pupilY - sensorYmm });
+  const r0 = { p: { x: sensorX, y: sensorYmm }, d: dir };
+  const tr = traceRayReverse(r0, surfaces, wavePreset);
+  if (tr.vignetted || tr.tir) return null;
+
+  const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
+  if (!hitObj) return null;
+  return hitObj.y;
+}
+     
     if (!pctx || !previewCanvasEl) return;
 
     computeVertices(lens.surfaces);
@@ -1347,6 +1374,12 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
+
+     const stopAp = (stopIdx >= 0) ? Math.max(0.001, Number(lens.surfaces[stopIdx].ap || 0)) : 1.0;
+
+// DOF samples (meer = mooier maar trager)
+const SAMPLES = 16; // probeer 8 / 16 / 32
+const seedBase = 1337; // vaste seed zodat het beeld niet flikkert
 
     const objDist = Math.max(1, Number(elUI.prevObjDist?.value || 2000)); // mm
     const objH = Math.max(1, Number(elUI.prevObjH?.value || 500));       // full height in mm
@@ -1406,19 +1439,36 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
         const nx = (i / (W - 1)) * 2 - 1;
         const sensorXmm_local = nx * (sensorW * 0.5);
 
-        const yObj = sensorToObjectY_mm(sensorYmm, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-        const xObj = sensorToObjectY_mm(sensorXmm_local, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+       let rAcc = 0, gAcc = 0, bAcc = 0, aAcc = 0;
+let okN = 0;
 
-        let r = 0, g = 0, b = 0, a = 255;
+// deterministische seed per pixel (zodat het stabiel blijft)
+const seedObj = { v: (seedBase ^ ((j + 1) * 73856093) ^ ((i + 1) * 19349663)) >>> 0 };
 
-       if (yObj == null || xObj == null) {
-  // mapping faalt -> blauw
-  r = 0; g = 120; b = 255; a = 255;
-} else {
+for (let s = 0; s < SAMPLES; s++) {
+  const pupilY = samplePupilY(stopAp, seedObj);
+
+  // jouw 2D hack: xObj via "zelfde functie" maar dan met sensorXmm_local als y-input
+  const yObj = sensorToObjectY_mm_pupil(sensorYmm, sensorX, xStop, pupilY, xObjPlane, lens.surfaces, wavePreset);
+  const xObj = sensorToObjectY_mm_pupil(sensorXmm_local, sensorX, xStop, pupilY, xObjPlane, lens.surfaces, wavePreset);
+
+  if (yObj == null || xObj == null) continue;
+
   const u = 0.5 + (xObj / (2 * halfObjH));
   const v = 0.5 - (yObj / (2 * halfObjH));
   const c = sample(u, v);
-  r = c[0]; g = c[1]; b = c[2]; a = c[3];
+
+  rAcc += c[0]; gAcc += c[1]; bAcc += c[2]; aAcc += c[3];
+  okN++;
+}
+
+let r = 0, g = 120, b = 255, a = 255; // default blauw als fail
+
+if (okN > 0) {
+  r = Math.round(rAcc / okN);
+  g = Math.round(gAcc / okN);
+  b = Math.round(bAcc / okN);
+  a = Math.round(aAcc / okN);
 }
         const o = (j * W + i) * 4;
         outD[o] = r;
