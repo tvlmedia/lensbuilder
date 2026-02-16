@@ -641,41 +641,47 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     return { pts, vignetted, tir, endRay: ray };
   }
 
-  function traceRayReverse(ray, surfaces, wavePreset) {
-    const pts = [{ x: ray.p.x, y: ray.p.y }];
-    let vignetted = false;
-    let tir = false;
+ function traceRayReverse(ray, surfaces, wavePreset) {
+  const pts = [{ x: ray.p.x, y: ray.p.y }];
+  let vignetted = false;
+  let tir = false;
 
-    let nRight = 1.0; // sensor side is AIR
+  // We starten aan sensorzijde in AIR
+  let nRegion = 1.0;
 
-    for (let i = surfaces.length - 1; i >= 0; i--) {
-      const s = surfaces[i];
-      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
+  for (let i = surfaces.length - 1; i >= 0; i--) {
+    const s = surfaces[i];
+    const isIMS = String(s?.type || "").toUpperCase() === "IMS";
 
-      const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
+    const hitInfo = intersectSurface(ray, s);
+    if (!hitInfo) { vignetted = true; break; }
 
-      pts.push(hitInfo.hit);
+    pts.push(hitInfo.hit);
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+    // OSLO-ish: medium rechts van surface i (tussen i en i+1) = s.glass
+    const nRight = isIMS ? 1.0 : glassN(String(s.glass || "AIR"), wavePreset);
 
-      const nLeft = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
+    // medium links van surface i (tussen i-1 en i) = surfaces[i-1].glass, of AIR bij i=0
+    const nLeft = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
 
-      if (Math.abs(nLeft - nRight) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        nRight = nLeft;
-        continue;
-      }
-
-      const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
-      if (!newDir) { tir = true; break; }
-
-      ray = { p: hitInfo.hit, d: newDir };
-      nRight = nLeft;
+    // De ray zit in de regio rechts van deze surface (we lopen van rechts -> links)
+    // Dus: refract nRight -> nLeft.
+    if (Math.abs(nLeft - nRight) < 1e-9) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      nRegion = nLeft;
+      continue;
     }
 
-    return { pts, vignetted, tir, endRay: ray };
+    const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
+    if (!newDir) { tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
+    nRegion = nLeft;
   }
+
+  return { pts, vignetted, tir, endRay: ray };
+}
 
   function intersectPlaneX(ray, xPlane) {
   if (Math.abs(ray.d.x) < 1e-12) return null;
@@ -2010,6 +2016,21 @@ function renderPreview() {
   if (ui.sensorOffset) ui.sensorOffset.value = "0";
   const sensorX = 0.0;
 
+  const stopIdx = findStopSurfaceIndex(lens.surfaces);
+  const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
+  const xStop = stopSurf.vx;
+
+  // object plane: links van de lens (negatieve x), afstand uit UI (mm)
+  const objDist = Number(ui.prevObjDist?.value || 2000); // bv 2000mm default
+  const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+
+  // object plane "height" die je image mapped (mm). UI veld = totale hoogte of half? (kies één)
+  const objH = Number(ui.prevObjH?.value || 200); // totale hoogte in mm
+  const halfObjH = Math.max(1e-3, objH * 0.5);
+
+  // preview res basis (hoogte in px), uit dropdown/slider
+  const base = Math.max(64, Number(ui.prevRes?.value || 720));
+   
   const { w: sensorW, h: sensorH } = getSensorWH();
   const sensorWv = sensorW * OV;
   const sensorHv = sensorH * OV;
