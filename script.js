@@ -1659,17 +1659,13 @@ drawCameraOverlayImage(world);
 }
 
   // -------------------- view controls --------------------
-  function bindViewControls() {
+ function bindViewControls() {
   if (!canvas) return;
   if (canvas.dataset._boundView === "1") return;
   canvas.dataset._boundView = "1";
 
-  // mouse down: if calibrating -> capture click, else start pan
   canvas.addEventListener("mousedown", (e) => {
-    if (camCal.active) {
-      handleCameraCalibrationClick(e);
-      return;
-    }
+    if (camCal.active) { handleCameraCalibrationClick(e); return; }
     view.dragging = true;
     view.lastX = e.clientX;
     view.lastY = e.clientY;
@@ -1701,7 +1697,6 @@ drawCameraOverlayImage(world);
     scheduleRenderAll();
   });
 
-  // key shortcut: C toggles calibration
   window.addEventListener("keydown", (e) => {
     const tag = (e.target?.tagName || "").toUpperCase();
     const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
@@ -1709,35 +1704,6 @@ drawCameraOverlayImage(world);
     if (e.key?.toLowerCase() === "c") toggleCameraCalibration();
   });
 }
-
-  window.addEventListener("mouseup", () => { view.dragging = false; });
-
-  window.addEventListener("mousemove", (e) => {
-    if (!view.dragging) return;
-    const dx = e.clientX - view.lastX;
-    const dy = e.clientY - view.lastY;
-    view.lastX = e.clientX;
-    view.lastY = e.clientY;
-    view.panX += dx;
-    view.panY += dy;
-    scheduleRenderAll();
-  });
-
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const delta = Math.sign(e.deltaY);
-    const factor = delta > 0 ? 0.92 : 1.08;
-    view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-    scheduleRenderAll();
-  }, { passive: false });
-
-  canvas.addEventListener("dblclick", () => {
-    view.panX = 0; view.panY = 0; view.zoom = 1.0;
-    scheduleRenderAll();
-  });
-}
-  }
-
    // -------------------- camera calibration (click 2 points) --------------------
 function screenToWorld(xScr, yScr, world) {
   // inverse of worldToScreen:
