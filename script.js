@@ -1450,6 +1450,7 @@ function drawRoundedRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+// Draw overlay, ALSO during calibration (even if not calibrated yet)
 function drawCameraOverlayImage(world) {
   if (!ctx) return;
 
@@ -1458,34 +1459,74 @@ function drawCameraOverlayImage(world) {
   const im = getCamImg();
   if (!p || !im || !im.complete) return;
 
-  // If not calibrated, we show a hint and don't draw (or draw at arbitrary scale)
-  if (!camIsCalibrated(p)) {
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,.55)";
-    ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
-    ctx.fillText(`Camera overlay not calibrated (press C) • preset: ${key}`, 14, 40);
-    ctx.restore();
-    return;
-  }
+  const calibrated = camIsCalibrated(p);
 
-  // World scaling: world.s = pixels per mm on the main canvas
-  // Image scaling: pxPerMm = pixels per mm in the source image itself
-  const scale = world.s / p.pxPerMm;
+  // If not calibrated, still draw it with a TEMP scale so you can click it.
+  const tempPxPerMm = 10;
+  const pxPerMm = calibrated ? p.pxPerMm : tempPxPerMm;
 
+  const scale = world.s / pxPerMm;
   const drawW = im.naturalWidth * scale;
   const drawH = im.naturalHeight * scale;
 
-  // Place image so that sensorPx lands on world x=0,y=0 (sensor center)
+  // Place image so that sensorPx lands on world x=0,y=0.
+  // If sensorPx unknown yet, start centered (so first click can define it).
   const sensorScreen = worldToScreen({ x: 0, y: 0 }, world);
+  const anchorX = Number.isFinite(p.sensorPx?.x) ? p.sensorPx.x : im.naturalWidth * 0.5;
+  const anchorY = Number.isFinite(p.sensorPx?.y) ? p.sensorPx.y : im.naturalHeight * 0.5;
 
-  const sx = sensorScreen.x - p.sensorPx.x * scale;
-  const sy = sensorScreen.y - p.sensorPx.y * scale - (p.yMmOffset || 0) * world.s;
+  const sx = sensorScreen.x - anchorX * scale;
+  const sy = sensorScreen.y - anchorY * scale - (p.yMmOffset || 0) * world.s;
 
   ctx.save();
-  ctx.globalAlpha = 0.22;
+  ctx.globalAlpha = calibrated ? 0.22 : 0.12;
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(im, sx, sy, drawW, drawH);
+
+  // UI hint text
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
+  if (!calibrated) {
+    ctx.fillText(`Camera overlay not calibrated • Press C to calibrate • preset: ${key}`, 14, 40);
+  } else {
+    ctx.fillText(`Camera overlay calibrated • preset: ${key}`, 14, 40);
+  }
+
+  // If calibrating, draw stage hint + markers if known
+  if (camCal.active) {
+    ctx.fillStyle = "rgba(0,0,0,.75)";
+    const msg = camCal.stage === 0
+      ? "CALIBRATION: click SENSOR center on overlay"
+      : "CALIBRATION: click FLANGE plane (mount face) on overlay";
+    ctx.fillText(msg, 14, 58);
+
+    // draw marker cross for sensorPx if already set
+    if (Number.isFinite(p.sensorPx?.x) && Number.isFinite(p.sensorPx?.y)) {
+      const mx = sx + p.sensorPx.x * scale;
+      const my = sy + p.sensorPx.y * scale;
+      ctx.strokeStyle = "rgba(42,110,242,.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(mx - 10, my); ctx.lineTo(mx + 10, my);
+      ctx.moveTo(mx, my - 10); ctx.lineTo(mx, my + 10);
+      ctx.stroke();
+    }
+
+    // draw flange vertical marker if already set
+    if (Number.isFinite(p.flangePxX)) {
+      const fx = sx + p.flangePxX * scale;
+      ctx.strokeStyle = "rgba(178,59,59,.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(fx, sy); ctx.lineTo(fx, sy + drawH);
+      ctx.stroke();
+    }
+  }
+
   ctx.restore();
+
+  // store the last draw mapping so click->image mapping is exact
+  drawCameraOverlayImage._last = { sx, sy, scale, drawW, drawH, key };
 }
  
 // -------------------- render scheduler (RAF throttle) --------------------
@@ -1619,38 +1660,82 @@ drawCameraOverlayImage(world);
 
   // -------------------- view controls --------------------
   function bindViewControls() {
-    if (!canvas) return;
+  if (!canvas) return;
+  if (canvas.dataset._boundView === "1") return;
+  canvas.dataset._boundView = "1";
 
-    canvas.addEventListener("mousedown", (e) => {
-      view.dragging = true;
-      view.lastX = e.clientX;
-      view.lastY = e.clientY;
-    });
-    window.addEventListener("mouseup", () => { view.dragging = false; });
+  // mouse down: if calibrating -> capture click, else start pan
+  canvas.addEventListener("mousedown", (e) => {
+    if (camCal.active) {
+      handleCameraCalibrationClick(e);
+      return;
+    }
+    view.dragging = true;
+    view.lastX = e.clientX;
+    view.lastY = e.clientY;
+  });
 
-    window.addEventListener("mousemove", (e) => {
-      if (!view.dragging) return;
-      const dx = e.clientX - view.lastX;
-      const dy = e.clientY - view.lastY;
-      view.lastX = e.clientX;
-      view.lastY = e.clientY;
-      view.panX += dx;
-      view.panY += dy;
-      renderAll();
-    });
+  window.addEventListener("mouseup", () => { view.dragging = false; });
 
-    canvas.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      const delta = Math.sign(e.deltaY);
-      const factor = delta > 0 ? 0.92 : 1.08;
-      view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-      renderAll();
-    }, { passive: false });
+  window.addEventListener("mousemove", (e) => {
+    if (!view.dragging) return;
+    const dx = e.clientX - view.lastX;
+    const dy = e.clientY - view.lastY;
+    view.lastX = e.clientX;
+    view.lastY = e.clientY;
+    view.panX += dx;
+    view.panY += dy;
+    scheduleRenderAll();
+  });
 
-    canvas.addEventListener("dblclick", () => {
-      view.panX = 0; view.panY = 0; view.zoom = 1.0;
-      renderAll();
-    });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const delta = Math.sign(e.deltaY);
+    const factor = delta > 0 ? 0.92 : 1.08;
+    view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+    scheduleRenderAll();
+  }, { passive: false });
+
+  canvas.addEventListener("dblclick", () => {
+    view.panX = 0; view.panY = 0; view.zoom = 1.0;
+    scheduleRenderAll();
+  });
+
+  // key shortcut: C toggles calibration
+  window.addEventListener("keydown", (e) => {
+    const tag = (e.target?.tagName || "").toUpperCase();
+    const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
+    if (typing) return;
+    if (e.key?.toLowerCase() === "c") toggleCameraCalibration();
+  });
+}
+
+  window.addEventListener("mouseup", () => { view.dragging = false; });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!view.dragging) return;
+    const dx = e.clientX - view.lastX;
+    const dy = e.clientY - view.lastY;
+    view.lastX = e.clientX;
+    view.lastY = e.clientY;
+    view.panX += dx;
+    view.panY += dy;
+    scheduleRenderAll();
+  });
+
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const delta = Math.sign(e.deltaY);
+    const factor = delta > 0 ? 0.92 : 1.08;
+    view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+    scheduleRenderAll();
+  }, { passive: false });
+
+  canvas.addEventListener("dblclick", () => {
+    view.panX = 0; view.panY = 0; view.zoom = 1.0;
+    scheduleRenderAll();
+  });
+}
   }
 
    // -------------------- camera calibration (click 2 points) --------------------
@@ -1664,50 +1749,22 @@ function screenToWorld(xScr, yScr, world) {
   };
 }
 
+// Click handler: map canvas click -> image pixel coords using LAST draw mapping
 function handleCameraCalibrationClick(e) {
   if (!camCal.active) return;
 
   const p = getCamPreset();
   const im = getCamImg();
-  if (!p || !im || !im.complete) return;
+  const last = drawCameraOverlayImage._last;
+  if (!p || !im || !im.complete || !last || !Number.isFinite(last.scale) || last.scale <= 0) return;
 
-  // we need the current world transform to map click to world coords,
-  // then we can map that back to image pixel coords via the overlay transform.
-  const world = makeWorldTransform();
-
-  // If not calibrated yet, we can temporarily assume pxPerMm from flange if stage 0?
-  // We solve it by using the current displayed overlay mapping:
-  // But mapping needs scale. For stage 0, we can pick scale=1 and store pixel coords directly by
-  // computing where the image is drawn currently. Simpler:
-  //
-  // We'll draw the image uncalibrated? Not doing that. So instead:
-  // We'll do calibration in IMAGE pixel space by assuming the image is drawn at 1:1 relative to screen
-  // using a temporary pxPerMm guess (1). Then we only use click pixel positions relative to the image draw.
-  //
-  // So: we draw the image "floating" centered on sensor with scale based on a temporary pxPerMm guess
-  // if not calibrated, we set pxPerMm = 10 as a starter so it appears.
-  const tempPxPerMm = camIsCalibrated(p) ? p.pxPerMm : 10;
-
-  const scale = world.s / tempPxPerMm;
-
-  const drawW = im.naturalWidth * scale;
-  const drawH = im.naturalHeight * scale;
-
-  const sensorScreen = worldToScreen({ x: 0, y: 0 }, world);
-
-  const sx = sensorScreen.x - (Number.isFinite(p.sensorPx.x) ? p.sensorPx.x : im.naturalWidth * 0.5) * scale;
-  const sy = sensorScreen.y - (Number.isFinite(p.sensorPx.y) ? p.sensorPx.y : im.naturalHeight * 0.5) * scale;
-
-  // Mouse click in CSS pixels
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
 
-  // Convert click to IMAGE pixel coords (relative to drawn image)
-  const ix = (mx - sx) / scale;
-  const iy = (my - sy) / scale;
+  const ix = (mx - last.sx) / last.scale;
+  const iy = (my - last.sy) / last.scale;
 
-  // must be inside image
   if (ix < 0 || iy < 0 || ix > im.naturalWidth || iy > im.naturalHeight) {
     if (ui.footerWarn) ui.footerWarn.textContent = "Calibration click must be on the camera image.";
     return;
@@ -1716,12 +1773,13 @@ function handleCameraCalibrationClick(e) {
   if (camCal.stage === 0) {
     p.sensorPx = { x: ix, y: iy };
     camCal.stage = 1;
-    if (ui.footerWarn) ui.footerWarn.textContent = "Calibration: now click the PL flange plane (mount face).";
-    renderAll();
+    if (ui.footerWarn) ui.footerWarn.textContent =
+      "Calibration: now click the PL flange plane (mount face) on the overlay.";
+    scheduleRenderAll();
     return;
   }
 
-  // stage 1: flange click
+  // stage 1
   p.flangePxX = ix;
 
   const dx = Math.abs(p.flangePxX - p.sensorPx.x);
@@ -1738,7 +1796,7 @@ function handleCameraCalibrationClick(e) {
   if (ui.footerWarn) ui.footerWarn.textContent =
     `Camera calibrated ✅ pxPerMm=${p.pxPerMm.toFixed(4)} (sensor↔flange = ${dx.toFixed(1)}px / ${PL_FFD}mm)`;
 
-  renderAll();
+  scheduleRenderAll();
 }
 
 function toggleCameraCalibration() {
@@ -1754,10 +1812,11 @@ function toggleCameraCalibration() {
 
   if (camCal.active) {
     if (ui.footerWarn) ui.footerWarn.textContent =
-      "Calibration ON: click SENSOR plane on the Venice image, then click PL FLANGE plane.";
+      "Calibration ON: click SENSOR center on overlay, then click PL FLANGE plane.";
   } else {
     if (ui.footerWarn) ui.footerWarn.textContent = "Calibration OFF.";
   }
+  scheduleRenderAll();
 }
 function getSensorRectBaseInPane() {
   if (!previewCanvasEl) return { x: 0, y: 0, w: 0, h: 0 };
