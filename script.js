@@ -1259,12 +1259,11 @@ function scheduleRenderAll() {
       renderAll();
     });
   }
-function getSensorRectInPane() {
+function getSensorRectBaseInPane() {
   if (!previewCanvasEl) return { x: 0, y: 0, w: 0, h: 0 };
 
-  // Sensor rect is FIXED in the preview pane, based on sensor aspect.
   const r = previewCanvasEl.getBoundingClientRect();
-  const pad = 22; // CSS px padding
+  const pad = 22;
   const paneW = r.width, paneH = r.height;
 
   const { w: sensorW, h: sensorH } = getSensorWH();
@@ -1281,6 +1280,20 @@ function getSensorRectInPane() {
   const x = (paneW - rw) * 0.5;
   const y = (paneH - rh) * 0.5;
   return { x, y, w: rw, h: rh };
+}
+
+function applyViewToSensorRect(sr0, v) {
+  // center-based scale + pan
+  const cx0 = sr0.x + sr0.w * 0.5;
+  const cy0 = sr0.y + sr0.h * 0.5;
+
+  const cx = cx0 + v.panX;
+  const cy = cy0 + v.panY;
+
+  const w = sr0.w * v.zoom;
+  const h = sr0.h * v.zoom;
+
+  return { x: cx - w * 0.5, y: cy - h * 0.5, w, h };
 }
 
 function drawPreviewViewport() {
@@ -1300,18 +1313,35 @@ function drawPreviewViewport() {
   pctx.fillRect(0, 0, Wc, Hc);
   pctx.restore();
 
-  const sr = getSensorRectInPane();
+  const v = preview.view;
 
-  // draw the world image with pan/zoom, centered inside sensor rect
-  if (preview.worldReady && preview.worldCanvas && preview.worldCanvas.width > 0) {
-    const v = preview.view;
+const sr0 = getSensorRectBaseInPane();
+const sr  = applyViewToSensorRect(sr0, v);
 
-    const iw = preview.worldCanvas.width;
-    const ih = preview.worldCanvas.height;
+// draw the world image contained in the (moved/scaled) sensor rect
+if (preview.worldReady && preview.worldCanvas && preview.worldCanvas.width > 0) {
+  const iw = preview.worldCanvas.width;
+  const ih = preview.worldCanvas.height;
 
-    // contain-fit into sensor rect at zoom=1
-    const sFit = Math.min(sr.w / iw, sr.h / ih);
-    const s = sFit * v.zoom;
+  // ✅ contain-fit (NO extra v.zoom here — sr already scaled)
+  const s = Math.min(sr.w / iw, sr.h / ih);
+
+  const cx = sr.x + sr.w * 0.5;
+  const cy = sr.y + sr.h * 0.5;
+
+  const dw = iw * s;
+  const dh = ih * s;
+  const dx = cx - dw * 0.5;
+  const dy = cy - dh * 0.5;
+
+  pctx.save();
+  pctx.beginPath();
+  pctx.rect(sr.x, sr.y, sr.w, sr.h);
+  pctx.clip();
+  pctx.imageSmoothingEnabled = true;
+  pctx.drawImage(preview.worldCanvas, dx, dy, dw, dh);
+  pctx.restore();
+}
 
     // center of sensor rect
     const cx = sr.x + sr.w * 0.5 + v.panX;
@@ -1812,14 +1842,16 @@ const imgData = hasImg ? preview.imgData : null;
     for (let k = 0; k < LUT_N; k++) {
       const a = k / (LUT_N - 1);
       const r = a * rMaxSensor;
-      const rObj = sensorHeightToObjectHeight_mm(r, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-      if (rObj == null || !Number.isFinite(rObj)) {
-        rObjLUT[k] = 0;
-        validLUT[k] = 0;
-      } else {
-        rObjLUT[k] = rObj;
-        validLUT[k] = 1;
-      }
+     let rObj = sensorHeightToObjectHeight_mm(r, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+if (rObj == null || !Number.isFinite(rObj)) {
+  rObjLUT[k] = 0;
+  validLUT[k] = 0;
+} else {
+  // ✅ radial symmetry: radius must be positive, otherwise you get a 180° flip
+  rObj = Math.abs(rObj);
+  rObjLUT[k] = rObj;
+  validLUT[k] = 1;
+}
     }
 
     function lookupROut(r) {
