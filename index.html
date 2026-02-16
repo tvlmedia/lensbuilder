@@ -101,6 +101,37 @@
           <label>Render scale</label>
           <input id="renderScale" type="range" min="0.6" max="2.6" step="0.05" value="1.25" />
         </div>
+
+        <!-- PREVIEW CONTROLS (STEP 1) -->
+        <div class="ctrl two">
+          <label>Preview image</label>
+          <input id="prevImg" type="file" accept="image/*" />
+        </div>
+
+        <div class="ctrl">
+          <label>Object distance (mm)</label>
+          <input id="prevObjDist" type="number" step="1" value="2000" />
+        </div>
+
+        <div class="ctrl">
+          <label>Object height (mm)</label>
+          <input id="prevObjH" type="number" step="1" value="500" />
+        </div>
+
+        <div class="ctrl">
+          <label>Preview res</label>
+          <select id="prevRes">
+            <option value="256">256 px (fast)</option>
+            <option value="384" selected>384 px</option>
+            <option value="512">512 px</option>
+            <option value="768">768 px (slow)</option>
+          </select>
+        </div>
+
+        <div class="ctrl two">
+          <label>&nbsp;</label>
+          <button id="btnRenderPreview" class="btn btnPrimary" type="button">Render Preview</button>
+        </div>
       </div>
     </section>
 
@@ -158,10 +189,20 @@
       </div>
     </div>
 
+    <!-- NEW: Tabs + dual canvas -->
+    <div class="canvasTabs">
+      <button id="tabRays" class="tabBtn active" type="button">Rays</button>
+      <button id="tabPreview" class="tabBtn" type="button">Preview</button>
+    </div>
+
     <div class="canvasFrame">
       <canvas id="canvas"></canvas>
+      <canvas id="previewCanvas" class="hiddenCanvas"></canvas>
+
       <div class="canvasOverlay">
-        <div class="overlayHelp">Tips: zet stop op “STOP” surface • IMS ap = sensor half-height • “Scale → FL” fixeert focal drift</div>
+        <div class="overlayHelp" id="overlayHelp">
+          Tips: zet stop op “STOP” surface • IMS ap = sensor half-height • “Scale → FL” fixeert focal drift
+        </div>
       </div>
     </div>
   </section>
