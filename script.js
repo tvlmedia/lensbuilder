@@ -1346,6 +1346,49 @@ function drawCameraOverlay(world, plX) {
   const bumpFill = "rgba(255,255,255,.04)";
   const logo = "rgba(255,255,255,.55)";
 
+
+  // ✅ SENSOR MARK inside the camera body (should align with world sensor x=0)
+  if (cam.sensorMark) {
+    const sm = cam.sensorMark;
+
+    // small “sensor box”
+    drawRoundedRect(
+      world,
+      baseX + sm.x - sm.w * 0.5,
+      sm.y - sm.h * 0.5,
+      sm.w,
+      sm.h,
+      3,
+      { fill: "rgba(42,110,242,.18)", stroke: "rgba(42,110,242,.75)", lineWidth: 1.5 }
+    );
+
+    // crosshair
+    ctx.save();
+    ctx.strokeStyle = "rgba(42,110,242,.75)";
+    ctx.lineWidth = 1;
+    const a = worldToScreen({ x: baseX + sm.x - sm.w*0.5, y: sm.y }, world);
+    const b = worldToScreen({ x: baseX + sm.x + sm.w*0.5, y: sm.y }, world);
+    const c = worldToScreen({ x: baseX + sm.x, y: sm.y - sm.h*0.5 }, world);
+    const d = worldToScreen({ x: baseX + sm.x, y: sm.y + sm.h*0.5 }, world);
+
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+    ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+     if (cam.sensorMark) {
+    ctx.save();
+    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+    ctx.font = `11px ${mono}`;
+    ctx.fillStyle = "rgba(42,110,242,.9)";
+    ctx.textBaseline = "bottom";
+    const t = worldToScreen({ x: baseX + cam.sensorMark.x + 10, y: cam.sensorMark.y - 8 }, world);
+    ctx.fillText("SENSOR", t.x, t.y);
+    ctx.restore();
+  }
+   
   // BODY
   drawRoundedRect(
     world,
