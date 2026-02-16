@@ -694,3 +694,43 @@ a{ color:inherit; }
   .controlGrid{ grid-template-columns: 1fr; }
   .ctrl.two{ grid-column: span 1; }
 }
+/* --- HARD FIX: layout hoogte + left panel scrolling --- */
+html, body { height: 100%; }
+
+body{
+  min-height: 100vh;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden; /* voorkomt rare page scroll */
+}
+
+/* topbar blijft sticky, maar hoeft niet in hoogte-calc */
+.topbar{ flex: 0 0 auto; }
+
+/* layout neemt de resterende hoogte */
+.layout{
+  flex: 1 1 auto;
+  height: auto;      /* kill calc(100vh - 64px) */
+  min-height: 0;     /* SUPER belangrijk voor inner scroll */
+  overflow: hidden;  /* scroll mag NIET op de layout */
+}
+
+/* panels moeten kunnen "krimpen" zodat inner scroll werkt */
+.panel, .left, .right{ min-height:0; }
+
+/* LEFT panel: controls mogen nooit verdwijnen */
+.left{ display:flex; flex-direction:column; min-height:0; }
+.panelHeader{ flex: 0 0 auto; }
+.controls{
+  flex: 0 0 auto;    /* <- key: dit blok blijft altijd zichtbaar */
+}
+.status{ flex: 0 0 auto; }
+
+/* alleen de tabel scrolt */
+.tableWrap{
+  flex: 1 1 auto;
+  min-height:0;
+  overflow:auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
