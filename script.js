@@ -143,6 +143,13 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     return { w, h, halfH: Math.max(0.1, h * 0.5), halfW: Math.max(0.1, w * 0.5) };
   }
 
+   const OV = 1.6; // overscan factor (1.2..2.0 is nice)
+
+const sensorWv = sensorW * OV;
+const sensorHv = sensorH * OV;
+const halfWv = halfW * OV;
+const halfHv = halfH * OV;
+
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
     const i = lens.surfaces.length - 1;
@@ -1297,77 +1304,7 @@ function applyViewToSensorRect(sr0, v) {
 }
 
 function drawPreviewViewport() {
-  if (!pctx || !previewCanvasEl) return;
 
-  resizePreviewCanvasToCSS();
-
-  const r = previewCanvasEl.getBoundingClientRect();
-  const Wc = r.width, Hc = r.height;
-
-  // we draw in CSS pixels (because we setTransform(dpr,..))
-  pctx.clearRect(0, 0, Wc, Hc);
-
-  // background
-  pctx.save();
-  pctx.fillStyle = "rgba(0,0,0,.04)";
-  pctx.fillRect(0, 0, Wc, Hc);
-  pctx.restore();
-
-  const v = preview.view;
-
-  const sr0 = getSensorRectBaseInPane();
-  const sr  = applyViewToSensorRect(sr0, v);
-
-  // draw the world image contained in the (moved/scaled) sensor rect
-  if (preview.worldReady && preview.worldCanvas && preview.worldCanvas.width > 0) {
-    const iw = preview.worldCanvas.width;
-    const ih = preview.worldCanvas.height;
-
-    // contain-fit inside sr (NO extra zoom here — sr already includes v.zoom)
-    const s = Math.min(sr.w / iw, sr.h / ih);
-
-    const cx = sr.x + sr.w * 0.5;
-    const cy = sr.y + sr.h * 0.5;
-
-    const dw = iw * s;
-    const dh = ih * s;
-    const dx = cx - dw * 0.5;
-    const dy = cy - dh * 0.5;
-
-    // clip to sensor rect
-    pctx.save();
-    pctx.beginPath();
-    pctx.rect(sr.x, sr.y, sr.w, sr.h);
-    pctx.clip();
-
-    pctx.imageSmoothingEnabled = true;
-    pctx.drawImage(preview.worldCanvas, dx, dy, dw, dh);
-    pctx.restore();
-  }
-
-  // dim outside sensor
-  pctx.save();
-  pctx.fillStyle = "rgba(0,0,0,.25)";
-  pctx.beginPath();
-  pctx.rect(0, 0, Wc, Hc);
-  pctx.rect(sr.x, sr.y, sr.w, sr.h);
-  pctx.fill("evenodd");
-  pctx.restore();
-
-  // sensor border + label
-  pctx.save();
-  pctx.lineWidth = 2;
-  pctx.strokeStyle = "rgba(255,255,255,.85)";
-  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
-
-  pctx.fillStyle = "rgba(255,255,255,.85)";
-  pctx.font =
-    "12px " +
-    (getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "ui-monospace");
-  const { w: sw, h: sh } = getSensorWH();
-  pctx.fillText(`${sw.toFixed(2)}×${sh.toFixed(2)}mm`, sr.x + 10, sr.y + 18);
-  pctx.restore();
-}
 
 function bindPreviewViewControls() {
   if (!previewCanvasEl) return;
@@ -1777,8 +1714,8 @@ function bindPreviewViewControls() {
     const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
     const aspect = sensorW / sensorH;
-    const W = Math.max(64, Math.round(base * aspect));
-    const H = Math.max(64, base);
+const W = Math.max(64, Math.round(base * aspect));
+const H = Math.max(64, base);
 
    
 
@@ -1815,8 +1752,8 @@ const imgData = hasImg ? preview.imgData : null;
 
      
     // LUT: r_sensor -> r_object
-    const rMaxSensor = Math.hypot(halfW, halfH);
-    const LUT_N = 512;
+const rMaxSensor = Math.hypot(halfWv, halfHv);
+     const LUT_N = 512;
     const rObjLUT = new Float32Array(LUT_N);
     const validLUT = new Uint8Array(LUT_N);
 
@@ -1872,12 +1809,13 @@ const outD = out.data;
     // Fill outD (world image)
     for (let py = 0; py < H; py++) {
       // sensor y in mm
-      const sy = (0.5 - (py + 0.5) / H) * sensorH;
+      const sy = (0.5 - (py + 0.5) / H) * sensorHv; // OV
+
 
       for (let px = 0; px < W; px++) {
         // sensor x in mm
-        const sx = ((px + 0.5) / W - 0.5) * sensorW;
-
+const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
+         
         const r = Math.hypot(sx, sy);
         const idx = (py * W + px) * 4;
 
