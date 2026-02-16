@@ -1524,7 +1524,7 @@ const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
     ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
     : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
 
-  if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.efl) ui.efl.textContent = `Focal Length: ${efl == null ? "—" : efl.toFixed(2)}mm`;
   if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
   if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
   if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
