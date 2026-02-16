@@ -682,3 +682,4 @@ a{ color:inherit; }
   .controlGrid{ grid-template-columns: 1fr; }
   .ctrl.two{ grid-column: span 1; }
 }
+#badgeRays { display:none !important; }
