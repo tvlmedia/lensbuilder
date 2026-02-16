@@ -2482,17 +2482,21 @@ drawPreviewViewport();
   if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
 });
 
-    document.addEventListener("fullscreenchange", () => {
-  // ✅ canvas size verandert in fullscreen
+  // Fullscreen change: just re-measure + redraw (no heavy render unless needed)
+document.addEventListener("fullscreenchange", () => {
   resizePreviewCanvasToCSS();
 
-  // ✅ als world al gerenderd is: alleen viewport redraw (geen heavy render)
+  // if we already rendered the world, only redraw viewport
   if (preview.worldReady) {
     drawPreviewViewport();
     return;
   }
 
-  // ✅ anders: render 1x als er een image is
+  // otherwise render once (only if an image is loaded)
+  if (preview.ready) scheduleRenderPreview();
+});
+
+// Window resize: reset view and redraw (and optionally re-render if needed)
 window.addEventListener("resize", () => {
   preview.view.panX = 0;
   preview.view.panY = 0;
@@ -2504,31 +2508,39 @@ window.addEventListener("resize", () => {
   else scheduleRenderPreview();
 });
 
-  if (ui.prevImg) {
-    ui.prevImg.addEventListener("change", (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
+// Image load (cache pixels once)
+if (ui.prevImg) {
+  ui.prevImg.addEventListener("change", (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
 
-      const url = URL.createObjectURL(f);
-      const im = new Image();
-      im.onload = () => {
-        preview.img = im;
-        preview.imgCanvas.width = im.naturalWidth;
-        preview.imgCanvas.height = im.naturalHeight;
-        preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+    const url = URL.createObjectURL(f);
+    const im = new Image();
+
+    im.onload = () => {
+      preview.img = im;
+
+      preview.imgCanvas.width = im.naturalWidth;
+      preview.imgCanvas.height = im.naturalHeight;
+
+      preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
       preview.imgCtx.drawImage(im, 0, 0);
 
-// CACHE imgData 1x (BELANGRIJK)
-preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
+      // ✅ cache imgData 1x
+      preview.imgData = preview.imgCtx
+        .getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height)
+        .data;
 
-preview.ready = true;
-preview.worldReady = false;   // ✅ reset world cache
-scheduleRenderPreview();
-        URL.revokeObjectURL(url);
-      };
-      im.src = url;
-    });
-  }
+      preview.ready = true;
+      preview.worldReady = false; // reset world cache
+
+      scheduleRenderPreview();
+      URL.revokeObjectURL(url);
+    };
+
+    im.src = url;
+  });
+}
 
   // -------------------- file load --------------------
   on("#fileLoad", "change", async (e) => {
