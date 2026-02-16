@@ -143,8 +143,8 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     return { w, h, halfH: Math.max(0.1, h * 0.5), halfW: Math.max(0.1, w * 0.5) };
   }
 
-   const OV = 1.6; // overscan factor
-
+const OV = 1.0;
+   
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
     const i = lens.surfaces.length - 1;
@@ -492,7 +492,22 @@ if (k === "stop") {
   if (want) s.R = 0.0;
 }
     else if (k === "glass") s.glass = el.value;
-    else if (k === "type") s.type = el.value;
+   else if (k === "type") {
+  const v = String(el.value || "");
+  s.type = v;
+
+  // ✅ als iemand letterlijk "STOP" typt: maak het ook echt de stop
+  if (v.trim().toUpperCase() === "STOP") {
+    if (String(s.type).toUpperCase() === "OBJ" || String(s.type).toUpperCase() === "IMS") {
+      s.type = String(i);
+      if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ/IMS.";
+    } else {
+      lens.surfaces.forEach((ss, j) => { ss.stop = false; if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j); });
+      s.stop = true;
+      s.R = 0.0;
+    }
+  }
+}
     else s[k] = num(el.value, s[k] ?? 0);
 
     applySensorToIMS();
@@ -539,7 +554,8 @@ if (k === "stop") {
 
   // plane surface normal is a property of the surface, not of the ray.
 // In our convention, normals point toward the OBJECT side (-x).
-return { hit, t, vignetted, normal: { x: -1, y: 0 } };
+const nx = (ray.d.x > 0) ? -1 : +1; // normal wijst tegen de ray in
+return { hit, t, vignetted, normal: { x: nx, y: 0 } };
 }
 
     const cx = vx + R;
@@ -603,11 +619,19 @@ return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
     return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
   }
- function clampSurfaceAp(s) {
+function clampSurfaceAp(s) {
   if (!s) return;
 
   const t = String(s.type || "").toUpperCase();
-  if (t === "IMS" || t === "OBJ") return; // ✅ niet clampen
+
+  // ✅ niet clampen
+  if (t === "IMS" || t === "OBJ") return;
+
+  // ✅ STOP apart (plane)
+  if (t === "STOP") {
+    s.ap = Math.max(AP_MIN, Math.min(Number(s.ap || 0), AP_MAX_PLANE));
+    return;
+  }
 
   const lim = maxApForSurface(s);
   const ap = Number(s.ap || 0);
@@ -1396,39 +1420,7 @@ function drawPLFlange(world, xFlange) {
   ctx.restore();
 }
 
-  // BODY
-  drawRoundedRect(
-    world,
-    baseX + body.x, body.y,
-    body.w, body.h, body.r,
-    { fill, stroke, lineWidth: 2 }
-  );
-
-  // BUMPS
-  for (const b of (cam.bumps || [])) {
-    drawRoundedRect(
-      world,
-      baseX + b.x, b.y,
-      b.w, b.h, b.r,
-      { fill: bumpFill, stroke, lineWidth: 2 }
-    );
-  }
-
-  // LOGO text
-  ctx.save();
-  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-  ctx.font = `12px ${mono}`;
-  ctx.fillStyle = logo;
-  ctx.textBaseline = "top";
-
-  const lp = cam.logoPos || { x: body.x + 10, y: body.y + 10 };
-  const p1 = worldToScreen({ x: baseX + lp.x, y: lp.y }, world);
-  const p2 = worldToScreen({ x: baseX + lp.x, y: lp.y + 14 }, world);
-
-  ctx.fillText(cam.label || "CAM", p1.x, p1.y);
-  ctx.fillText(cam.model || "", p2.x, p2.y);
-  ctx.restore();
-}
+  
 
 function drawTitleOverlay(text) {
   if (!ctx) return;
@@ -1439,6 +1431,77 @@ function drawTitleOverlay(text) {
   ctx.fillText(text, 14, 20);
   ctx.restore();
 }
+
+  
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function drawCameraOverlay(world, xFlange) {
+  if (!ctx) return;
+
+  const cam = getCurrentCameraPreset();
+  const P = (x, y) => worldToScreen({ x, y }, world);
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(0,0,0,.25)";
+  ctx.fillStyle = "rgba(0,0,0,.03)";
+
+  // body
+  {
+    const b = cam.body;
+    const p = P(xFlange + b.x, b.y);
+    const w = b.w * world.s;
+    const h = b.h * world.s;
+
+    drawRoundedRect(ctx, p.x, p.y, w, h, (b.r || 10) * world.s);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // bumps
+  for (const bb of (cam.bumps || [])) {
+    const p = P(xFlange + bb.x, bb.y);
+    const w = bb.w * world.s;
+    const h = bb.h * world.s;
+    drawRoundedRect(ctx, p.x, p.y, w, h, (bb.r || 8) * world.s);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // sensor mark inside camera
+  if (cam.sensorMark) {
+    const sm = cam.sensorMark;
+    const p = P(xFlange + sm.x, -sm.h * 0.5);
+    const w = sm.w * world.s;
+    const h = sm.h * world.s;
+    ctx.fillStyle = "rgba(42,110,242,.10)";
+    ctx.strokeStyle = "rgba(42,110,242,.45)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.rect(p.x, p.y, w, h);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // label
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
+  const lp = cam.logoPos || { x: 10, y: -55 };
+  const t = P(xFlange + lp.x, lp.y);
+  ctx.fillText(`${cam.label} ${cam.model}`, t.x, t.y);
+
+  ctx.restore();
+}
+ 
 // -------------------- render scheduler (RAF throttle) --------------------
 let _rafAll = 0;
 function scheduleRenderAll() {
@@ -1507,8 +1570,13 @@ function renderAll() {
     : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
   // ---- NEW: rear intrusion / clearance relative to PL flange ----
-  const rearVx = lastPhysicalVertexX(lens.surfaces); // last non-IMS vertex X
-  const intrusion = rearVx - plX; // >0 = rear group passes flange toward sensor
+ const lastIdx = (String(lens.surfaces.at(-1)?.type).toUpperCase() === "IMS")
+  ? lens.surfaces.length - 2
+  : lens.surfaces.length - 1;
+
+const rearSurf = lens.surfaces[Math.max(0, lastIdx)];
+const rearX0 = surfaceXatY(rearSurf, 0) ?? rearSurf.vx; // y=0 silhouette
+const intrusion = rearX0 - plX;
   const rearTxt = (intrusion > 0)
     ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
     : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
@@ -2068,6 +2136,8 @@ function bindPreviewViewControls() {
     });
   }
 
+
+   
   // -------------------- preview rendering (split-view) --------------------
   function renderPreview() {
     if (!pctx || !previewCanvasEl) return;
