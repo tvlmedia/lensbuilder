@@ -1703,17 +1703,22 @@ drawPreviewViewport();
   });
 
 canvas.addEventListener("wheel", (e) => {
-  // OLD/SAFE zoom behavior (center-based) — prevents "everything jumps away" feeling
-  // because we don't rewrite panX/panY while zooming.
   e.preventDefault();
-  if (!e.deltaY) return;
 
+  // Center-based zoom (stable, like the old script)
   const delta = Math.sign(e.deltaY);
-  const factor = delta > 0 ? 0.92 : 1.08;
-  view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+  if (!delta) return;
 
-  // safety
-  if (!Number.isFinite(view.zoom)) view.zoom = 1.0;
+  const factor = delta > 0 ? 0.92 : 1.08;
+  view.zoom = Math.max(0.12, Math.min(12, (Number.isFinite(view.zoom) ? view.zoom : 1.0) * factor));
+
+  // Safety: if pan ever blows up, reset so nothing "vanishes" off-screen
+  const r = canvas.getBoundingClientRect();
+  const limX = r.width * 8;
+  const limY = r.height * 8;
+  if (!Number.isFinite(view.panX) || !Number.isFinite(view.panY) || Math.abs(view.panX) > limX || Math.abs(view.panY) > limY) {
+    view.panX = 0; view.panY = 0;
+  }
 
   scheduleRenderAll();
 }, { passive: false });
