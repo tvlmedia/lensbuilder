@@ -398,8 +398,9 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
     else s[k] = num(el.value, s[k] ?? 0);
 
-    applySensorToIMS();
-    renderAll();
+   applySensorToIMS();
+scheduleRenderAll();
+scheduleRenderPreview(); // throttle heavy preview render
   }
 
   function onCellCommit(e) {
@@ -411,19 +412,25 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     selectedIndex = i;
     const s = lens.surfaces[i];
     if (!s) return;
-
-   if (k === "stop") {
+if (k === "stop") {
   const want = !!el.checked;
 
-  // 1) clear alle stops + STOP types
+  // ✅ STOP mag niet op OBJ of IMS
+  const t0 = String(s.type || "").toUpperCase();
+  if (t0 === "OBJ" || t0 === "IMS") {
+    el.checked = false;
+    if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
+    return;
+  }
+
   lens.surfaces.forEach((ss, j) => {
     ss.stop = false;
     if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
   });
 
-  // 2) zet deze aan/uit
   s.stop = want;
   if (want) s.type = "STOP";
+  if (want) s.R = 0.0;
 }
     else if (k === "glass") s.glass = el.value;
     else if (k === "type") s.type = el.value;
@@ -462,13 +469,19 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     const R = surf.R;
     const ap = Math.max(0, surf.ap);
 
-    if (Math.abs(R) < 1e-9) {
-      const t = (vx - ray.p.x) / ray.d.x;
-      if (!Number.isFinite(t) || t <= 1e-9) return null;
-      const hit = add(ray.p, mul(ray.d, t));
-      const vignetted = Math.abs(hit.y) > ap + 1e-9;
-      return { hit, t, vignetted, normal: { x: -1, y: 0 } };
-    }
+  if (Math.abs(R) < 1e-9) {
+  if (Math.abs(ray.d.x) < 1e-12) return null;
+
+  const t = (vx - ray.p.x) / ray.d.x;
+  if (!Number.isFinite(t) || t <= 1e-9) return null;
+
+  const hit = add(ray.p, mul(ray.d, t));
+  const vignetted = Math.abs(hit.y) > ap + 1e-9;
+
+  // plane surface normal is a property of the surface, not of the ray.
+// In our convention, normals point toward the OBJECT side (-x).
+return { hit, t, vignetted, normal: { x: -1, y: 0 } };
+}
 
     const cx = vx + R;
     const rad = Math.abs(R);
@@ -501,15 +514,22 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     return { hit, t, vignetted, normal: Nout };
   }
 
-  function computeVertices(surfaces) {
-    let x = 0;
-    for (let i = 0; i < surfaces.length; i++) {
-      surfaces[i].vx = x;
-      x += Number(surfaces[i].t || 0);
-    }
-    return x;
+ function computeVertices(surfaces) {
+  let x = 0;
+  for (let i = 0; i < surfaces.length; i++) {
+    surfaces[i].vx = x;
+    x += Number(surfaces[i].t || 0);
   }
 
+  const imsIdx = surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
+  if (imsIdx >= 0) {
+    const shift = -(surfaces[imsIdx].vx || 0);
+    for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
+   
+  }
+
+  return x;
+}
   function findStopSurfaceIndex(surfaces) {
     return surfaces.findIndex((s) => !!s.stop);
   }
@@ -524,12 +544,16 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
     return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
   }
-  function clampSurfaceAp(s) {
-    if (!s) return;
-    const lim = maxApForSurface(s);
-    const ap = Number(s.ap || 0);
-    s.ap = Math.max(AP_MIN, Math.min(ap, lim));
-  }
+ function clampSurfaceAp(s) {
+  if (!s) return;
+
+  const t = String(s.type || "").toUpperCase();
+  if (t === "IMS" || t === "OBJ") return; // ✅ niet clampen
+
+  const lim = maxApForSurface(s);
+  const ap = Number(s.ap || 0);
+  s.ap = Math.max(AP_MIN, Math.min(ap, lim));
+}
   function clampAllApertures(surfaces) {
     if (!Array.isArray(surfaces)) return;
     for (const s of surfaces) clampSurfaceAp(s);
@@ -642,7 +666,8 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
   }
 
   function intersectPlaneX(ray, xPlane) {
-    const t = (xPlane - ray.p.x) / ray.d.x;
+  if (Math.abs(ray.d.x) < 1e-12) return null;
+  const t = (xPlane - ray.p.x) / ray.d.x;
     if (!Number.isFinite(t) || t <= 1e-9) return null;
     return add(ray.p, mul(ray.d, t));
   }
@@ -1127,7 +1152,192 @@ function resizePreviewCanvasToCSS() {
     ctx.restore();
   }
 
-  function drawTitleOverlay(text) {
+ 
+
+   const PL_FFD = 52.0; // mm
+
+function drawPLFlange(world, xFlange) {
+  if (!ctx || !canvas) return;
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
+  ctx.setLineDash([10, 8]);
+
+  // teken door de hele view (ipv hardcoded -60..60)
+  const r = canvas.getBoundingClientRect();
+  const yWorld = (r.height / (world.s || 1)) * 0.6; // lekker lang
+
+  const a = worldToScreen({ x: xFlange, y: -yWorld }, world);
+  const b = worldToScreen({ x: xFlange, y:  yWorld }, world);
+
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// Visual-only PL mount cutout (side cross-section) so you can see rear clearance.
+// Convention in this tool: sensor plane = x=0, lens is to the LEFT (negative x).
+// Therefore PL flange plane is at x = -52mm, and the camera body is to the RIGHT.
+function drawPLMountCutout(world, xFlange, opts = {}) {
+  if (!ctx) return;
+
+  // Visual PL mount (side cutaway) — kept lightweight so it doesn't dominate the drawing.
+  // Tool convention: sensor plane = x=0, lens to the LEFT (-x). PL flange face is at x = -52mm.
+
+  // Key known dimension: PL throat Ø54mm => radius 27mm.
+  const throatR = Number.isFinite(opts.throatR) ? opts.throatR : 27;     // inner clear radius
+  const outerR  = Number.isFinite(opts.outerR)  ? opts.outerR  : 31;     // bayonet outer-ish radius (visual)
+  const camDepth = Number.isFinite(opts.camDepth) ? opts.camDepth : 14;  // depth into camera (+x)
+  const lensLip  = Number.isFinite(opts.lensLip)  ? opts.lensLip  : 3;   // small lip to lens side (-x)
+  const flangeT  = Number.isFinite(opts.flangeT)  ? opts.flangeT  : 2.0; // flange thickness into camera (+x)
+
+  const P = (x, y) => worldToScreen({ x, y }, world);
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(0,0,0,.32)";
+  ctx.fillStyle = "rgba(0,0,0,.02)";
+
+  // --- flange face (the actual reference plane) ---
+  {
+    const a = P(xFlange, -outerR);
+    const b = P(xFlange,  outerR);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  // --- thin flange plate thickness (into camera) ---
+  {
+    const a = P(xFlange,            -outerR);
+    const b = P(xFlange + flangeT,  -outerR);
+    const c = P(xFlange + flangeT,   outerR);
+    const d = P(xFlange,             outerR);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // --- throat tube (the important clearance zone) ---
+  {
+    const a = P(xFlange - lensLip,          -throatR);
+    const b = P(xFlange + camDepth,         -throatR);
+    const c = P(xFlange + camDepth,          throatR);
+    const d = P(xFlange - lensLip,           throatR);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.closePath();
+    ctx.stroke();
+
+    // inner "cut" shading (very subtle)
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = "#000";
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // --- small bayonet shoulder hint (keeps it reading as "mount", without the huge block) ---
+  {
+    const shoulderX = xFlange + flangeT;
+    const a = P(shoulderX, -outerR);
+    const b = P(shoulderX + 3.0, -outerR);
+    const c = P(shoulderX + 3.0,  outerR);
+    const d = P(shoulderX,  outerR);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(d.x, d.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // label (small)
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+  ctx.font = `11px ${mono}`;
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  const lab = P(xFlange - lensLip + 1.5, outerR + 6);
+  ctx.fillText("PL mount • Ø54 throat • flange @ -52mm", lab.x, lab.y);
+
+  ctx.restore();
+}
+
+function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
+  if (!ctx) return;
+
+  // place ruler slightly above the tallest aperture in current lens (in mm)
+  let maxAp = 0;
+  if (lens?.surfaces?.length) {
+    for (const s of lens.surfaces) maxAp = Math.max(maxAp, Math.abs(Number(s.ap || 0)));
+  }
+  const y = (yWorld != null) ? yWorld : (maxAp + 10); // 10mm above glass
+
+  const P = (x, yy) => worldToScreen({ x, y: yy }, world);
+
+  ctx.save();
+  ctx.lineWidth = 1.25;
+  ctx.strokeStyle = "rgba(0,0,0,.35)";
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+  ctx.font = `11px ${mono}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  // main line
+  const a = P(xMin, y);
+  const b = P(x0,  y);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  // ticks every 10mm (= 1cm). Major every 50mm.
+  for (let x = x0; x >= xMin - 1e-6; x -= 10) {
+const major = (Math.round(Math.abs(x)) % 50) === 0;
+const tLen = major ? 6 : 3;
+
+const p = P(x, y);
+ctx.beginPath();
+ctx.moveTo(p.x, p.y);
+ctx.lineTo(p.x, p.y + tLen);
+ctx.stroke();
+
+// label EVERY 10mm (= 1cm). Keep majors slightly darker.
+const cm = Math.round(Math.abs(x) / 10);
+ctx.save();
+ctx.fillStyle = major ? "rgba(0,0,0,.55)" : "rgba(0,0,0,.30)";
+ctx.font = major ? `11px ${mono}` : `10px ${mono}`;
+ctx.fillText(`${cm}cm`, p.x, p.y + tLen + 2);
+ctx.restore();
+  }
+
+  // 0 label
+  const p0 = P(0, y);
+  ctx.fillText("0", p0.x, p0.y + 10);
+
+  ctx.restore();
+}
+
+
+function drawTitleOverlay(text) {
     if (!ctx) return;
     ctx.save();
     const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
@@ -1146,86 +1356,114 @@ function scheduleRenderAll() {
   });
 }
 
-// -------------------- render --------------------
-  // -------------------- render --------------------
-  function renderAll() {
-    if (!canvas || !ctx) return;
-    if (ui.footerWarn) ui.footerWarn.textContent = "";
+let _rafPrev = 0;
+function scheduleRenderPreview() {
+  if (_rafPrev) return;
+  _rafPrev = requestAnimationFrame(() => {
+    _rafPrev = 0;
+    if (preview.ready) renderPreview();
+  });
+}
 
-    computeVertices(lens.surfaces);
-    clampSelected();
+function renderAll() {
+  if (!canvas || !ctx) return;
+  if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-    const { w: sensorW, h: sensorH, halfH } = getSensorWH();
-    const fieldAngle = Number(ui.fieldAngle?.value || 0);
-    const rayCount = Number(ui.rayCount?.value || 31);
-    const wavePreset = ui.wavePreset?.value || "d";
-    const sensorOffset = Number(ui.sensorOffset?.value || 0);
+  computeVertices(lens.surfaces);
+  clampSelected();
 
-    applySensorToIMS();
-    clampAllApertures(lens.surfaces);
+  const { w: sensorW, h: sensorH, halfH } = getSensorWH();
+  const fieldAngle = Number(ui.fieldAngle?.value || 0);
+  const rayCount = Number(ui.rayCount?.value || 31);
+  const wavePreset = ui.wavePreset?.value || "d";
+  const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
-    const ims = lens.surfaces[lens.surfaces.length - 1];
-    const sensorX = (ims?.vx ?? 0) + sensorOffset;
+  applySensorToIMS();
+  clampAllApertures(lens.surfaces);
 
-    const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+  // IMS is always X=0 because computeVertices() shifts all vx
+  const sensorX0 = 0.0;
 
-    const vCount = traces.filter((t) => t.vignetted).length;
-    const tirCount = traces.filter((t) => t.tir).length;
-    const vigPct = Math.round((vCount / traces.length) * 100);
+  // keep sensorOffset as diagnostic shim for now
+  const sensorX = sensorX0 + sensorOffset;
 
-    const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-    const T = estimateTStopApprox(efl, lens.surfaces);
+  // PL flange plane is always -52mm from sensor
+  const plX = -PL_FFD;
 
-    const fov = computeFovDeg(efl, sensorW, sensorH);
-    const fovTxt = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+  const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
+  const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
-    const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
-    const covMode = "v";
-    const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+  const vCount = traces.filter((t) => t.vignetted).length;
+  const tirCount = traces.filter((t) => t.tir).length;
+  const vigPct = Math.round((vCount / traces.length) * 100);
 
-    const covTxt = !fov
-      ? "COV(V): —"
-      : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+  const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
+  const T = estimateTStopApprox(efl, lens.surfaces);
 
-    if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
-    if (ui.fov) ui.fov.textContent = fovTxt;
-    if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
+  const fov = computeFovDeg(efl, sensorW, sensorH);
+  const fovTxt = !fov
+    ? "FOV: —"
+    : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-    if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.fovTop) ui.fovTop.textContent = fovTxt;
-    if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
+  const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
+  const covMode = "v";
+  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
 
-    if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+  const covTxt = !fov
+    ? "COV(V): —"
+    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
-    if (ui.status) {
-      ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
-    }
-    if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+  // ---- NEW: rear intrusion / clearance relative to PL flange ----
+  const rearVx = lastPhysicalVertexX(lens.surfaces); // last non-IMS vertex X
+  const intrusion = rearVx - plX; // >0 = rear group passes flange toward sensor
+  const rearTxt = (intrusion > 0)
+    ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
+    : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
 
-    resizeCanvasToCSS();
-   const r = canvas.getBoundingClientRect();
-ctx.clearRect(0, 0, r.width, r.height);
+  if (ui.efl) ui.efl.textContent = `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+  if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
+  if (ui.fov) ui.fov.textContent = fovTxt;
+  if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
 
-    const world = makeWorldTransform();
-    drawAxes(world);
-    drawLens(world, lens.surfaces);
-    drawStop(world, lens.surfaces);
-    drawRays(world, traces, sensorX);
-    drawSensor(world, sensorX, halfH);
+  if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+  if (ui.fovTop) ui.fovTop.textContent = fovTxt;
+  if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-    const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
-    const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
-    const tTxt = T == null ? "—" : "T" + T.toFixed(2);
-    drawTitleOverlay(
-      `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • sensorX=${sensorX.toFixed(2)}mm`
-    );
+  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+
+  if (ui.status) {
+    ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
   }
+  if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+
+  resizeCanvasToCSS();
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+
+  const world = makeWorldTransform();
+  drawAxes(world);
+  drawRuler(world, 0, -200);
+  drawPLFlange(world, plX);          // ✅ PL line
+  drawLens(world, lens.surfaces);
+  drawStop(world, lens.surfaces);
+  drawRays(world, traces, sensorX);
+  // PL mount cutout overlay (side profile) for rear clearance checks
+  // Draw AFTER rays so it's always visible on top.
+  drawPLMountCutout(world, plX);
+  drawSensor(world, sensorX, halfH); // sensor line
+
+  const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
+  const bflTxt = bfl == null ? "—" : bfl.toFixed(2) + "mm";
+  const tTxt = T == null ? "—" : "T" + T.toFixed(2);
+
+  drawTitleOverlay(
+    `${lens.name} • EFL ${eflTxt} • BFL ${bflTxt} • ${fovTxt} • ${covTxt} • T≈ ${tTxt} • SENSOR@0 • PL@-52 • ${rearTxt}`
+  );
+}
 
   // -------------------- view controls --------------------
   function bindViewControls() {
@@ -1249,14 +1487,18 @@ ctx.clearRect(0, 0, r.width, r.height);
       renderAll();
     });
 
-    canvas.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      const delta = Math.sign(e.deltaY);
-      const factor = delta > 0 ? 0.92 : 1.08;
-      view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-      renderAll();
-    }, { passive: false });
+   canvas.addEventListener("wheel", (e) => {
+  // ✅ Normaal scrollen toestaan (sidebar/page)
+  // ✅ Alleen zoomen als user een modifier indrukt
+  const wantZoom = e.ctrlKey || e.metaKey || e.altKey;
+  if (!wantZoom) return;
 
+  e.preventDefault();
+  const delta = Math.sign(e.deltaY);
+  const factor = delta > 0 ? 0.92 : 1.08;
+  view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
+  renderAll();
+}, { passive: false });
     canvas.addEventListener("dblclick", () => {
       view.panX = 0; view.panY = 0; view.zoom = 1.0;
       renderAll();
@@ -1307,51 +1549,35 @@ function drawPreviewViewport() {
   const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
   const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
 
-  // background (robust clear)
-pctx.save();
-pctx.setTransform(1, 0, 0, 1, 0, 0);
-pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
-pctx.restore();
+  // clear in device pixels safely
+  pctx.save();
+  pctx.setTransform(1, 0, 0, 1, 0, 0);
+  pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
+  pctx.restore();
 
-pctx.fillStyle = "#000";
-pctx.fillRect(0, 0, Wc, Hc);
+  // bg
+  pctx.fillStyle = "#000";
+  pctx.fillRect(0, 0, Wc, Hc);
 
   if (!preview.worldReady) {
     pctx.fillStyle = "rgba(255,255,255,.65)";
-    pctx.font =
-      "12px " +
-      (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+    pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
     pctx.fillText("Preview: render first", 18, 24);
     return;
   }
 
-  // sensor-rect in pane (fit)
   const sr0 = getSensorRectBaseInPane();
-
-  // apply pan/zoom
   const sr = applyViewToSensorRect(sr0, preview.view);
 
-  // draw world into viewport
   pctx.imageSmoothingEnabled = true;
-  pctx.drawImage(
-    preview.worldCanvas,
-    0,
-    0,
-    preview.worldCanvas.width,
-    preview.worldCanvas.height,
-    sr.x,
-    sr.y,
-    sr.w,
-    sr.h
-  );
+  pctx.drawImage(preview.worldCanvas, 0, 0, preview.worldCanvas.width, preview.worldCanvas.height, sr.x, sr.y, sr.w, sr.h);
 
-  // guides
   pctx.save();
   pctx.strokeStyle = "rgba(255,255,255,.20)";
   pctx.lineWidth = 1;
-  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h); // basis sensor frame
+  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
   pctx.strokeStyle = "rgba(42,110,242,.55)";
-  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h); // huidige view frame
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
   pctx.restore();
 }
 
@@ -1369,13 +1595,14 @@ function bindPreviewViewControls() {
     previewCanvasEl.setPointerCapture(e.pointerId);
   });
 
-  previewCanvasEl.addEventListener("pointerup", () => {
-    preview.view.dragging = false;
-  });
-
-  previewCanvasEl.addEventListener("pointercancel", () => {
-    preview.view.dragging = false;
-  });
+ previewCanvasEl.addEventListener("pointerup", (e) => {
+  preview.view.dragging = false;
+  try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch(_) {}
+});
+ previewCanvasEl.addEventListener("pointercancel", (e) => {
+  preview.view.dragging = false;
+  try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch(_) {}
+});
 
   previewCanvasEl.addEventListener("pointermove", (e) => {
     if (!preview.view.dragging) return;
@@ -1388,17 +1615,18 @@ function bindPreviewViewControls() {
     drawPreviewViewport();
   });
 
-  previewCanvasEl.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      const delta = Math.sign(e.deltaY);
-      const factor = delta > 0 ? 0.92 : 1.08;
-      preview.view.zoom = Math.max(0.12, Math.min(20, preview.view.zoom * factor));
-      drawPreviewViewport();
-    },
-    { passive: false }
-  );
+ previewCanvasEl.addEventListener("wheel", (e) => {
+  // ✅ laat normaal scrollen door de page/sidebar toe
+  // ✅ zoom alleen met modifier (trackpad pinch => vaak ctrlKey=true)
+  const wantZoom = e.ctrlKey || e.metaKey || e.altKey;
+  if (!wantZoom) return;
+
+  e.preventDefault();
+  const delta = Math.sign(e.deltaY);
+  const factor = delta > 0 ? 0.92 : 1.08;
+  preview.view.zoom = Math.max(0.12, Math.min(20, preview.view.zoom * factor));
+  drawPreviewViewport();
+}, { passive: false });
 
   previewCanvasEl.addEventListener("dblclick", () => {
     preview.view.panX = 0;
@@ -1763,8 +1991,9 @@ const sensorHv = sensorH * OV;
 const halfWv = halfW * OV;
 const halfHv = halfH * OV;
      
-    const ims = lens.surfaces[lens.surfaces.length - 1];
-    const sensorX = (ims?.vx ?? 0) + sensorOffset;
+  // Keep exactly the same convention as renderAll():
+const sensorX0 = 0.0;          // IMS is at 0 after computeVertices() shift
+const sensorX  = sensorX0 + sensorOffset;
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
@@ -1891,11 +2120,10 @@ const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
         }
 
         const rObj = lookupROut(r);
-        if (rObj == null) {
-          // vignette / invalid ray -> black
-          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-          continue;
-        }
+       if (rObj == null) {
+  outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 20; outD[idx+3] = 255; // navy
+  continue;
+}
 
         // preserve angle (radial mapping): scale vector by rObj/r
         const k = rObj / r;
@@ -2185,6 +2413,21 @@ drawPreviewViewport();
   if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
 });
 
+    document.addEventListener("fullscreenchange", () => {
+  // ✅ canvas size verandert in fullscreen
+  resizePreviewCanvasToCSS();
+
+  // ✅ als world al gerenderd is: alleen viewport redraw (geen heavy render)
+  if (preview.worldReady) {
+    drawPreviewViewport();
+    return;
+  }
+
+  // ✅ anders: render 1x als er een image is
+  if (preview.ready) renderPreview();
+  else drawPreviewViewport();
+});
+
   if (ui.prevImg) {
     ui.prevImg.addEventListener("change", (e) => {
       const f = e.target.files?.[0];
@@ -2203,7 +2446,8 @@ drawPreviewViewport();
 preview.imgData = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height).data;
 
 preview.ready = true;
-renderPreview();
+preview.worldReady = false;   // ✅ reset world cache
+scheduleRenderPreview();
         URL.revokeObjectURL(url);
       };
       im.src = url;
@@ -2245,10 +2489,10 @@ renderPreview();
 });
 
   // preview numeric controls => rerender preview (only if img loaded)
-  ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
-    on("#" + id, "input", () => { if (preview.ready) renderPreview(); });
-    on("#" + id, "change", () => { if (preview.ready) renderPreview(); });
-  });
+ ["prevObjDist", "prevObjH", "prevRes"].forEach((id) => {
+  on("#" + id, "input", () => scheduleRenderPreview());
+  on("#" + id, "change", () => scheduleRenderPreview());
+});
 
   on("#sensorPreset", "change", (e) => {
     applyPreset(e.target.value);
@@ -2258,14 +2502,14 @@ renderPreview();
   });
 
  window.addEventListener("resize", () => {
-  renderAll();
-  if (preview.ready) renderPreview();
-
-  // reset viewport omdat sr0 (basis frame) verandert bij resize/fullscreen
+  // reset viewport omdat sr0 verandert
   preview.view.panX = 0;
   preview.view.panY = 0;
   preview.view.zoom = 1.0;
-  drawPreviewViewport();
+
+  scheduleRenderAll();
+  if (preview.ready) renderPreview();
+  else drawPreviewViewport();
 });
 
   
