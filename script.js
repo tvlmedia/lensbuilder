@@ -2257,8 +2257,8 @@ if (!hasImg) return [255, 255, 255, 255];    // white if no image
     // LUT: r_sensor -> r_object (stabilized with multi-angle median)
     const rMaxSensor = Math.hypot(halfWv, halfHv);
     const LUT_N = 512;
-    const rObjLUT = new Float32Array(LUT_N);
-    const validLUT = new Uint8Array(LUT_N);
+    const rObjLUT  = new Float32Array(LUT_N);
+const transLUT = new Float32Array(LUT_N); // 0..1 light throughput
 
     const ANG_SAMPLES = 11;              // iets meer samples helpt
 const OK_RATIO = 0.65;               // minstens 65% moet slagen
@@ -2294,30 +2294,29 @@ for (let k = 0; k < LUT_N; k++) {
     vals.push(Math.abs(hitObj.y));
   }
 
-  const ok = okCount >= Math.ceil(ANG_SAMPLES * OK_RATIO);
+  const ratio = okCount / ANG_SAMPLES;       // 0..1
+  transLUT[k] = ratio;
 
-  if (!ok || !vals.length) {
-    rObjLUT[k] = 0;
-    validLUT[k] = 0;
+  if (okCount < 1 || !vals.length) {
+    rObjLUT[k] = 0; // value unused when trans=0
   } else {
     rObjLUT[k] = median(vals);
-    validLUT[k] = 1;
   }
 }
 
-    function lookupROut(r) {
-      const t = Math.max(0, Math.min(1, r / rMaxSensor));
-      const x = t * (LUT_N - 1);
-      const i0 = Math.floor(x);
-      const i1 = Math.min(LUT_N - 1, i0 + 1);
-      const u = x - i0;
+   function lookupROutAndTrans(r) {
+  const t = Math.max(0, Math.min(1, r / rMaxSensor));
+  const x = t * (LUT_N - 1);
+  const i0 = Math.floor(x);
+  const i1 = Math.min(LUT_N - 1, i0 + 1);
+  const u = x - i0;
 
-      const v0 = validLUT[i0], v1 = validLUT[i1];
-      if (!v0 && !v1) return null;
-      if (v0 && !v1) return rObjLUT[i0];
-      if (!v0 && v1) return rObjLUT[i1];
-      return rObjLUT[i0] * (1 - u) + rObjLUT[i1] * u;
-    }
+  const rObj = rObjLUT[i0] * (1 - u) + rObjLUT[i1] * u;
+  const trans = transLUT[i0] * (1 - u) + transLUT[i1] * u;
+
+  // als trans ~0, behandelen we het als volledig donker (maar niet “hard”)
+  return { rObj, trans };
+}
     // ✅ dirty-key: only rerender world if optics/settings changed
     const key = JSON.stringify({
       lensShift: Number(ui.lensFocus?.value || 0),
@@ -2377,24 +2376,36 @@ const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
           continue;
         }
 
-        const rObj = lookupROut(r);
-       if (rObj == null) {
-outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 0; outD[idx+3] = 255; // black vignette
-          continue;
+       const { rObj, trans } = lookupROutAndTrans(r);
+
+// “filmisch” randgedrag: maak falloff wat steiler/softer met een exponent
+const mech = Math.pow(Math.max(0, Math.min(1, trans)), 1.6);
+
+// extra: cos^4 falloff (optioneel maar voelt meteen “echt”)
+const rn = Math.max(0, Math.min(1, r / rMaxSensor));
+const cos4 = Math.pow(1 - rn * rn, 2.0); // simpele benadering; stabiel en snel
+
+const gain = mech * cos4;
+
+// Als gain bijna nul: gewoon zwart
+if (gain < 1e-4) {
+  outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+  continue;
 }
 
-        // preserve angle (radial mapping): scale vector by rObj/r
-        const k = rObj / r;
-        const ox = sx * k;
-        const oy = sy * k;
+// radial mapping blijft hetzelfde
+const kScale = rObj / r;
+const ox = sx * kScale;
+const oy = sy * kScale;
 
-        const { u, v } = objectMmToUV(ox, oy);
-        const c = sample(u, v);
+const { u, v } = objectMmToUV(ox, oy);
+const c = sample(u, v);
 
-        outD[idx] = c[0];
-        outD[idx + 1] = c[1];
-        outD[idx + 2] = c[2];
-        outD[idx + 3] = 255;
+// dim pixel
+outD[idx]     = Math.max(0, Math.min(255, c[0] * gain));
+outD[idx + 1] = Math.max(0, Math.min(255, c[1] * gain));
+outD[idx + 2] = Math.max(0, Math.min(255, c[2] * gain));
+outD[idx + 3] = 255;
       }
     }
 // ... jouw bestaande pixel-loop blijft hetzelfde,
