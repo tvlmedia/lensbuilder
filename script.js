@@ -1209,7 +1209,8 @@ function scheduleRenderAll() {
     if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
     resizeCanvasToCSS();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+   const r = canvas.getBoundingClientRect();
+ctx.clearRect(0, 0, r.width, r.height);
 
     const world = makeWorldTransform();
     drawAxes(world);
@@ -1306,10 +1307,14 @@ function drawPreviewViewport() {
   const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
   const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
 
-  // background
-  pctx.clearRect(0, 0, Wc, Hc);
-  pctx.fillStyle = "#000";
-  pctx.fillRect(0, 0, Wc, Hc);
+  // background (robust clear)
+pctx.save();
+pctx.setTransform(1, 0, 0, 1, 0, 0);
+pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
+pctx.restore();
+
+pctx.fillStyle = "#000";
+pctx.fillRect(0, 0, Wc, Hc);
 
   if (!preview.worldReady) {
     pctx.fillStyle = "rgba(255,255,255,.65)";
@@ -1355,17 +1360,24 @@ function bindPreviewViewControls() {
   if (previewCanvasEl.dataset._pvBound === "1") return;
   previewCanvasEl.dataset._pvBound = "1";
 
-  previewCanvasEl.addEventListener("mousedown", (e) => {
+  previewCanvasEl.style.touchAction = "none"; // belangrijk voor trackpads/touch
+
+  previewCanvasEl.addEventListener("pointerdown", (e) => {
     preview.view.dragging = true;
     preview.view.lastX = e.clientX;
     preview.view.lastY = e.clientY;
+    previewCanvasEl.setPointerCapture(e.pointerId);
   });
 
-  window.addEventListener("mouseup", () => {
+  previewCanvasEl.addEventListener("pointerup", () => {
     preview.view.dragging = false;
   });
 
-  window.addEventListener("mousemove", (e) => {
+  previewCanvasEl.addEventListener("pointercancel", () => {
+    preview.view.dragging = false;
+  });
+
+  previewCanvasEl.addEventListener("pointermove", (e) => {
     if (!preview.view.dragging) return;
     const dx = e.clientX - preview.view.lastX;
     const dy = e.clientY - preview.view.lastY;
