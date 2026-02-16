@@ -2195,6 +2195,9 @@ function renderPreview() {
   if (ui.sensorOffset) ui.sensorOffset.value = "0";
   const sensorX = 0.0;
 
+   // ✅ needed for dirtyKey + OV sizing in preview
+const { w: sensorW, h: sensorH } = getSensorWH();
+
   const stopIdx = findStopSurfaceIndex(lens.surfaces);
   const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
   const xStop = stopSurf.vx;
@@ -2210,15 +2213,13 @@ function renderPreview() {
   // preview res basis (hoogte in px), uit dropdown/slider
   const base = Math.max(64, Number(ui.prevRes?.value || 720));
    
-  const { w: sensorW, h: sensorH } = getSensorWH();
+  
 
    // ✅ dirty-key: only rerender world if optics/settings changed
-const { w: sW, h: sH } = getSensorWH(); // pak alleen wat je echt nodig hebt
-
 const key = JSON.stringify({
-  lensShift: Number(ui.lensFocus?.value || 0),
+  lensShift,
   wave: wavePreset,
-  sensor: [Number(sW.toFixed(4)), Number(sH.toFixed(4))], // ✅ stabiel
+  sensor: [Number(sensorW.toFixed(4)), Number(sensorH.toFixed(4))],
   objDist,
   objH,
   base,
@@ -2226,18 +2227,23 @@ const key = JSON.stringify({
     .map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(","))
     .join("|"),
 });
-    if (preview.worldReady && preview.dirtyKey === key) {
-      drawPreviewViewport();
-      return;
-    }
-    preview.dirtyKey = key;
-    preview.worldReady = false;
+
+if (preview.worldReady && preview.dirtyKey === key) {
+  drawPreviewViewport();
+  return;
+}
+preview.dirtyKey = key;
+preview.worldReady = false;
 
    
-     const { w: sensorW, h: sensorH } = getSensorWH();
-const asp = (sensorW * OV) / (sensorH * OV);
-  const halfWv = sensorWv * 0.5;
-  const halfHv = sensorHv * 0.5;
+    // overscanned sensor size (mm)
+const sensorWv = sensorW * OV;
+const sensorHv = sensorH * OV;
+
+const asp = sensorWv / sensorHv;
+const halfWv = sensorWv * 0.5;
+const halfHv = sensorHv * 0.5;
+   
 
     const aspect = sensorW / sensorH;
 const W = Math.max(64, Math.round(base * aspect));
