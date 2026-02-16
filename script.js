@@ -913,47 +913,7 @@ function autoFocus() {
   renderAll();
 }
 
-  // --- LENS FOCUS (move lens block) ---
-  // Here we must retrace per candidate because surfaces move.
-  const range = 20;      // lens focus typically doesn't need 80mm
-  const coarseStep = 0.25;
-  const fineStep = 0.05;
-
-  const sensorX = 0.0 + currentSensorOff; // cam offset stays as-is
-  let best = { shift: currentLensShift, rms: Infinity, n: 0 };
-
-  function evalShift(shift) {
-    computeVertices(lens.surfaces, shift);
-    const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
-    return spotRmsAtSensorX(traces, sensorX);
-  }
-
-  function scan(center, halfRange, step) {
-    const start = center - halfRange;
-    const end = center + halfRange;
-    for (let sh = start; sh <= end + 1e-9; sh += step) {
-      const { rms, n } = evalShift(sh);
-      if (rms == null) continue;
-      if (rms < best.rms) best = { shift: sh, rms, n };
-    }
-  }
-
-  scan(currentLensShift, range, coarseStep);
-  if (Number.isFinite(best.rms)) scan(best.shift, 2.0, fineStep);
-
-  if (!Number.isFinite(best.rms) || best.n < 5) {
-    if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus (lens) failed (too few valid rays). Try more rays / larger apertures.";
-    // restore original
-    computeVertices(lens.surfaces, currentLensShift);
-    renderAll();
-    return;
-  }
-
-  if (ui.lensFocus) ui.lensFocus.value = best.shift.toFixed(2);
-  if (ui.footerWarn) ui.footerWarn.textContent = `Auto focus (lens): lensFocus=${best.shift.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
-  renderAll();
-}
+ 
 
   // -------------------- drawing --------------------
   let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
@@ -2041,26 +2001,20 @@ function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
 
   const lensShift = Number(ui.lensFocus?.value || 0);
-  computeVertices(lens.surfaces, lensShift);   // ✅ match renderAll()
+  computeVertices(lens.surfaces, lensShift);
 
   applySensorToIMS();
   clampAllApertures(lens.surfaces);
 
   const wavePreset = ui.wavePreset?.value || "d";
-  // ✅ Sensor plane is FIXED at x=0
-if (ui.sensorOffset) ui.sensorOffset.value = "0";
-const sensorX = 0.0;
-   
+  if (ui.sensorOffset) ui.sensorOffset.value = "0";
+  const sensorX = 0.0;
 
-    const stopIdx = findStopSurfaceIndex(lens.surfaces);
-    const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
-
-    const objDist = Math.max(1, Number(ui.prevObjDist?.value || 2000)); // mm
-    const objH = Math.max(1, Number(ui.prevObjH?.value || 500));       // full height in mm
-    const halfObjH = objH * 0.5;
-
-    const base = Number(ui.prevRes?.value || 384);
-    const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+  const { w: sensorW, h: sensorH } = getSensorWH();
+  const sensorWv = sensorW * OV;
+  const sensorHv = sensorH * OV;
+  const halfWv = sensorWv * 0.5;
+  const halfHv = sensorHv * 0.5;
 
     const aspect = sensorW / sensorH;
 const W = Math.max(64, Math.round(base * aspect));
