@@ -1,22 +1,20 @@
-/* Meridional Raytracer (2D) — TVL Lens Builder (final cleaned patch)
-   Patch: Element modal upgraded for achromats + FRONT AIR
-   - Injects "Front air (mm)" into modal UI (no HTML edits)
-   - Adds Achromat (cemented, 3 surfaces) + Achromat (air-spaced, 4 surfaces)
-   - Removes old 0.01mm cemented hack surface
-   - Front air is inserted as an AIR gap surface BEFORE the element chunk
-   - Keeps your current OSLO-ish convention: "glass" = medium AFTER surface
+/* Meridional Raytracer (2D) — TVL Lens Builder (perfected patch)
+   - Element modal: achromats + FRONT AIR injection
+   - Reverse tracing: IMS aperture does NOT vignette
+   - Preview: correct for meridional model via rotational symmetry (radial mapping)
+   - Preview performance: radius->object LUT (precomputed) instead of per-pixel tracing
+   - Keeps OSLO-ish convention: "glass" = medium AFTER surface
 */
 
 (() => {
   // -------------------- tiny helpers --------------------
   const $ = (sel) => document.querySelector(sel);
-  const on = (sel, ev, fn) => {
+  const on = (sel, ev, fn, opts) => {
     const el = $(sel);
-    if (el) el.addEventListener(ev, fn);
+    if (el) el.addEventListener(ev, fn, opts);
     return el;
   };
 
-  // structuredClone fallback
   const clone = (obj) =>
     typeof structuredClone === "function" ? structuredClone(obj) : JSON.parse(JSON.stringify(obj));
 
@@ -95,7 +93,7 @@
   function getSensorWH() {
     const w = Number(ui.sensorW?.value || 36.7);
     const h = Number(ui.sensorH?.value || 25.54);
-    return { w, h, halfH: Math.max(0.1, h * 0.5) };
+    return { w, h, halfH: Math.max(0.1, h * 0.5), halfW: Math.max(0.1, w * 0.5) };
   }
 
   function syncIMSCellApertureToUI() {
@@ -245,7 +243,6 @@
   function loadLens(obj) {
     lens = sanitizeLens(obj);
     selectedIndex = 0;
-
     clampAllApertures(lens.surfaces);
     buildTable();
     applySensorToIMS();
@@ -261,7 +258,6 @@
     lens.surfaces.forEach((s, i) => { if (i !== changedIndex) s.stop = false; });
   }
 
-  // focus preservation while rebuilding table
   let _focusMemo = null;
   function rememberTableFocus() {
     const a = document.activeElement;
@@ -409,8 +405,8 @@
       const t = (vx - ray.p.x) / ray.d.x;
       if (!Number.isFinite(t) || t <= 1e-9) return null;
       const hit = add(ray.p, mul(ray.d, t));
-      if (Math.abs(hit.y) > ap + 1e-9) return { hit, t, vignetted: true, normal: { x: -1, y: 0 } };
-      return { hit, t, vignetted: false, normal: { x: -1, y: 0 } };
+      const vignetted = Math.abs(hit.y) > ap + 1e-9;
+      return { hit, t, vignetted, normal: { x: -1, y: 0 } };
     }
 
     const cx = vx + R;
@@ -542,40 +538,7 @@
   }
 
   // -------------------- tracing --------------------
-  function traceRayThroughLens(ray, surfaces, wavePreset) {
-    const pts = [{ x: ray.p.x, y: ray.p.y }];
-    let vignetted = false;
-    let tir = false;
-    let nBefore = 1.0;
-
-    for (let i = 0; i < surfaces.length; i++) {
-      const s = surfaces[i];
-      const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
-
-      pts.push(hitInfo.hit);
-
-      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
-if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
-
-      const nAfter = glassN(s.glass, wavePreset);
-
-      if (Math.abs(nAfter - nBefore) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        nBefore = nAfter;
-        continue;
-      }
-
-      const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-      if (!newDir) { tir = true; break; }
-
-      ray = { p: hitInfo.hit, d: newDir };
-      nBefore = nAfter;
-    }
-    return { pts, vignetted, tir, endRay: ray };
-  }
-
-  function traceRayThroughLensSkipIMS(ray, surfaces, wavePreset) {
+  function traceRayForward(ray, surfaces, wavePreset, { skipIMS = false } = {}) {
     const pts = [{ x: ray.p.x, y: ray.p.y }];
     let vignetted = false;
     let tir = false;
@@ -584,12 +547,14 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
     for (let i = 0; i < surfaces.length; i++) {
       const s = surfaces[i];
       const isIMS = String(s?.type || "").toUpperCase() === "IMS";
+      if (skipIMS && isIMS) continue;
 
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
 
       pts.push(hitInfo.hit);
 
+      // IMPORTANT: IMS must not clip rays (acts as sensor plane)
       if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
       const nAfter = glassN(s.glass, wavePreset);
@@ -620,11 +585,15 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
     for (let i = surfaces.length - 1; i >= 0; i--) {
       const s = surfaces[i];
+      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
+
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
+
       pts.push(hitInfo.hit);
-      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
-if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+
+      // IMPORTANT: IMS must not clip
+      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
       // medium on the LEFT side of this surface (in forward direction: nBefore)
       const nLeft = (i === 0) ? 1.0 : glassN(surfaces[i - 1].glass, wavePreset);
@@ -651,8 +620,8 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
     return add(ray.p, mul(ray.d, t));
   }
 
-  // Map ONE sensor coordinate (mm) -> object-plane y (mm) using chief-ray through stop center
-  function sensorToObjectY_mm(sensorYmm, sensorX, xStop, xObjPlane, surfaces, wavePreset) {
+  // Map ONE meridional sensor height (mm) -> object-plane height (mm), using chief-ray to stop center
+  function sensorHeightToObjectHeight_mm(sensorYmm, sensorX, xStop, xObjPlane, surfaces, wavePreset) {
     const dir = normalize({ x: xStop - sensorX, y: -sensorYmm });
     const r0 = { p: { x: sensorX, y: sensorYmm }, d: dir };
     const tr = traceRayReverse(r0, surfaces, wavePreset);
@@ -718,7 +687,7 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
     for (let iter = 0; iter < 18; iter++) {
       const mid = (lo + hi) * 0.5;
       const ray = buildChiefRay(surfaces, mid);
-      const tr = traceRayThroughLens(clone(ray), surfaces, wavePreset);
+      const tr = traceRayForward(clone(ray), surfaces, wavePreset);
       if (!tr || tr.vignetted || tr.tir) { hi = mid; continue; }
 
       const y = rayHitYAtX(tr.endRay, sensorX);
@@ -729,7 +698,7 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
     return best;
   }
 
-  // -------------------- EFL/BFL (paraxial) --------------------
+  // -------------------- EFL/BFL (paraxial-ish) --------------------
   function lastPhysicalVertexX(surfaces) {
     if (!surfaces?.length) return 0;
     const last = surfaces[surfaces.length - 1];
@@ -748,7 +717,7 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
     for (const y0 of heights) {
       const ray = { p: { x: xStart, y: y0 }, d: normalize({ x: 1, y: 0 }) };
-      const tr = traceRayThroughLensSkipIMS(clone(ray), surfaces, wavePreset);
+      const tr = traceRayForward(clone(ray), surfaces, wavePreset, { skipIMS: true });
       if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
 
       const er = tr.endRay;
@@ -833,7 +802,7 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
     const wavePreset = ui.wavePreset?.value || "d";
 
     const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayThroughLens(clone(r), lens.surfaces, wavePreset));
+    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
     const ims = lens.surfaces[lens.surfaces.length - 1];
     const baseX = ims?.vx ?? 0;
@@ -1145,7 +1114,7 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
     const sensorX = (ims?.vx ?? 0) + sensorOffset;
 
     const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayThroughLens(clone(r), lens.surfaces, wavePreset));
+    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
     const vCount = traces.filter((t) => t.vignetted).length;
     const tirCount = traces.filter((t) => t.tir).length;
@@ -1329,38 +1298,15 @@ if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
     const oh = $("#overlayHelp");
     if (oh) {
       oh.textContent = isPreview
-        ? "Preview: upload image → set object distance/height → Render Preview • (step 2 = DOF blur)"
+        ? "Preview (radial): upload image → set object distance/height → Render Preview • (DOF blur later)"
         : "Tips: zet stop op “STOP” surface • IMS ap = sensor half-height • “Scale → FL” fixeert focal drift";
     }
   }
 
+  // --------- PREVIEW (correct for meridional model) ----------
+  // We assume rotational symmetry: map sensor radius r -> object radius r_obj using meridional reverse trace.
+  // Then reconstruct object (x_obj,y_obj) by keeping the angle of (x_s,y_s).
   function renderPreview() {
-
-     // ---------- DOF helpers ----------
-function rand01(seedObj) {
-  // simpele LCG (deterministisch)
-  seedObj.v = (seedObj.v * 1664525 + 1013904223) >>> 0;
-  return seedObj.v / 4294967296;
-}
-
-function samplePupilY(stopAp, seedObj) {
-  // 1D pupil sample: uniform in [-stopAp, +stopAp]
-  const u = rand01(seedObj) * 2 - 1;
-  return u * stopAp;
-}
-
-// sensor point -> object-plane y, maar nu door een pupil punt (xStop, pupilY)
-function sensorToObjectY_mm_pupil(sensorYmm, sensorX, xStop, pupilY, xObjPlane, surfaces, wavePreset) {
-  const dir = normalize({ x: xStop - sensorX, y: pupilY - sensorYmm });
-  const r0 = { p: { x: sensorX, y: sensorYmm }, d: dir };
-  const tr = traceRayReverse(r0, surfaces, wavePreset);
-  if (tr.vignetted || tr.tir) return null;
-
-  const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
-  if (!hitObj) return null;
-  return hitObj.y;
-}
-     
     if (!pctx || !previewCanvasEl) return;
 
     computeVertices(lens.surfaces);
@@ -1368,18 +1314,12 @@ function sensorToObjectY_mm_pupil(sensorYmm, sensorX, xStop, pupilY, xObjPlane, 
     const wavePreset = ui.wavePreset?.value || "d";
     const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
-    const { w: sensorW, h: sensorH } = getSensorWH();
+    const { w: sensorW, h: sensorH, halfW, halfH } = getSensorWH();
     const ims = lens.surfaces[lens.surfaces.length - 1];
     const sensorX = (ims?.vx ?? 0) + sensorOffset;
 
     const stopIdx = findStopSurfaceIndex(lens.surfaces);
     const xStop = (stopIdx >= 0 ? lens.surfaces[stopIdx].vx : (lens.surfaces[0]?.vx ?? 0) + 10);
-
-     const stopAp = (stopIdx >= 0) ? Math.max(0.001, Number(lens.surfaces[stopIdx].ap || 0)) : 1.0;
-
-// DOF samples (meer = mooier maar trager)
-const SAMPLES = 16; // probeer 8 / 16 / 32
-const seedBase = 1337; // vaste seed zodat het beeld niet flikkert
 
     const objDist = Math.max(1, Number(elUI.prevObjDist?.value || 2000)); // mm
     const objH = Math.max(1, Number(elUI.prevObjH?.value || 500));       // full height in mm
@@ -1401,75 +1341,97 @@ const seedBase = 1337; // vaste seed zodat het beeld niet flikkert
     const imgH = preview.imgCanvas.height;
     const imgData = hasImg ? preview.imgCtx.getImageData(0, 0, imgW, imgH).data : null;
 
-   function sample(u, v) {
-  // als image niet klaar is -> geel (dus dan weet je dat dit het probleem is)
-  if (!hasImg) return [255, 255, 0, 255];
+    function sample(u, v) {
+      if (!hasImg) return [255, 255, 0, 255];      // not ready -> yellow
+      if (u < 0 || u > 1 || v < 0 || v > 1) return [255, 0, 0, 255]; // out -> red
 
-  // buiten beeld -> rood
-  if (u < 0 || u > 1 || v < 0 || v > 1) return [255, 0, 0, 255];
+      const x = u * (imgW - 1);
+      const y = v * (imgH - 1);
+      const x0 = Math.floor(x), y0 = Math.floor(y);
+      const x1 = Math.min(imgW - 1, x0 + 1);
+      const y1 = Math.min(imgH - 1, y0 + 1);
+      const tx = x - x0, ty = y - y0;
 
-  const x = u * (imgW - 1);
-  const y = v * (imgH - 1);
-  const x0 = Math.floor(x), y0 = Math.floor(y);
-  const x1 = Math.min(imgW - 1, x0 + 1);
-  const y1 = Math.min(imgH - 1, y0 + 1);
-  const tx = x - x0, ty = y - y0;
+      function px(ix, iy) {
+        const o = (iy * imgW + ix) * 4;
+        return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
+      }
 
-  function px(ix, iy) {
-    const o = (iy * imgW + ix) * 4;
-    return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
-  }
+      const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
+      const lerp = (a, b, t) => a + (b - a) * t;
 
-  const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
-  const lerp = (a, b, t) => a + (b - a) * t;
+      const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
+      const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
+      return c0.map((v0, i) => lerp(v0, c1[i], ty));
+    }
 
-  const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
-  const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
-  return c0.map((v0, i) => lerp(v0, c1[i], ty));
-}
+    // --- LUT: r_sensor -> r_object ---
+    const rMaxSensor = Math.hypot(halfW, halfH);
+    const LUT_N = 512;
+    const rObjLUT = new Float32Array(LUT_N);
+    const validLUT = new Uint8Array(LUT_N);
+
+    for (let k = 0; k < LUT_N; k++) {
+      const a = k / (LUT_N - 1);
+      const r = a * rMaxSensor;
+      const rObj = sensorHeightToObjectHeight_mm(r, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
+      if (rObj == null || !Number.isFinite(rObj)) {
+        rObjLUT[k] = 0;
+        validLUT[k] = 0;
+      } else {
+        rObjLUT[k] = rObj;
+        validLUT[k] = 1;
+      }
+    }
+
+    function lookupROut(r) {
+      const t = Math.max(0, Math.min(1, r / rMaxSensor));
+      const x = t * (LUT_N - 1);
+      const i0 = Math.floor(x);
+      const i1 = Math.min(LUT_N - 1, i0 + 1);
+      const u = x - i0;
+
+      const v0 = validLUT[i0], v1 = validLUT[i1];
+      if (!v0 && !v1) return null;
+
+      // if one side invalid, prefer the valid one (prevents ugly NaN bands)
+      if (v0 && !v1) return rObjLUT[i0];
+      if (!v0 && v1) return rObjLUT[i1];
+
+      return rObjLUT[i0] * (1 - u) + rObjLUT[i1] * u;
+    }
 
     const out = pctx.createImageData(W, H);
     const outD = out.data;
 
     for (let j = 0; j < H; j++) {
       const ny = (j / (H - 1)) * 2 - 1;
-      const sensorYmm = ny * (sensorH * 0.5);
+      const yS = ny * halfH;
 
       for (let i = 0; i < W; i++) {
         const nx = (i / (W - 1)) * 2 - 1;
-        const sensorXmm_local = nx * (sensorW * 0.5);
+        const xS = nx * halfW;
 
-       let rAcc = 0, gAcc = 0, bAcc = 0, aAcc = 0;
-let okN = 0;
+        const rS = Math.hypot(xS, yS);
+        const rO = lookupROut(rS);
 
-// deterministische seed per pixel (zodat het stabiel blijft)
-const seedObj = { v: (seedBase ^ ((j + 1) * 73856093) ^ ((i + 1) * 19349663)) >>> 0 };
+        let r = 0, g = 0, b = 0, a = 255;
 
-for (let s = 0; s < SAMPLES; s++) {
-  const pupilY = samplePupilY(stopAp, seedObj);
+        if (rO == null) {
+          // mapping failed -> blue
+          r = 0; g = 120; b = 255; a = 255;
+        } else {
+          // preserve angle
+          const inv = rS > 1e-9 ? (1 / rS) : 0;
+          const xO = xS * inv * rO;
+          const yO = yS * inv * rO;
 
-  // jouw 2D hack: xObj via "zelfde functie" maar dan met sensorXmm_local als y-input
-  const yObj = sensorToObjectY_mm_pupil(sensorYmm, sensorX, xStop, pupilY, xObjPlane, lens.surfaces, wavePreset);
-  const xObj = sensorToObjectY_mm_pupil(sensorXmm_local, sensorX, xStop, pupilY, xObjPlane, lens.surfaces, wavePreset);
+          const u = 0.5 + (xO / (2 * halfObjH));
+          const v = 0.5 - (yO / (2 * halfObjH));
+          const c = sample(u, v);
+          r = c[0]; g = c[1]; b = c[2]; a = c[3];
+        }
 
-  if (yObj == null || xObj == null) continue;
-
-  const u = 0.5 + (xObj / (2 * halfObjH));
-  const v = 0.5 - (yObj / (2 * halfObjH));
-  const c = sample(u, v);
-
-  rAcc += c[0]; gAcc += c[1]; bAcc += c[2]; aAcc += c[3];
-  okN++;
-}
-
-let r = 0, g = 120, b = 255, a = 255; // default blauw als fail
-
-if (okN > 0) {
-  r = Math.round(rAcc / okN);
-  g = Math.round(gAcc / okN);
-  b = Math.round(bAcc / okN);
-  a = Math.round(aAcc / okN);
-}
         const o = (j * W + i) * 4;
         outD[o] = r;
         outD[o + 1] = g;
@@ -1596,7 +1558,6 @@ if (okN > 0) {
 
   // ---- element math helpers ----
   function radiusForSymmetricSinglet(f, n) {
-    // thin-lens-ish starting point for biconvex: R ~ 2(n-1)f
     return 2 * Math.max(0.01, (n - 1)) * Math.max(1e-3, f);
   }
 
@@ -1618,12 +1579,10 @@ if (okN > 0) {
     return chunk;
   }
 
-  // Cemented achromat (3 surfaces)
   function buildAchromatCementedAuto({ f, ap, ct, rearAir, form, glass1, glass2 }) {
     const n1 = GLASS_DB[glass1]?.nd ?? 1.5168;
     const n2 = GLASS_DB[glass2]?.nd ?? 1.62;
 
-    // crude starter split of power
     const f1 = f * 0.85;
     const f2 = -f * 2.6;
 
@@ -1637,10 +1596,9 @@ if (okN > 0) {
     if (form === "weakmeniscus") { R1 *= 0.9; R2 *= 1.05; R3 *= 1.1; }
     if (form === "plano") { R1 = 0.0; R2 = -R1b * 1.35; R3 = +R3b * 1.05; }
 
-    // OSLO-ish: glass = medium AFTER surface
     const chunk = [
       { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
-      { type: "", R: R2, t: ct, ap, glass: glass2, stop: false }, // cemented interface
+      { type: "", R: R2, t: ct, ap, glass: glass2, stop: false },
       { type: "", R: R3, t: rearAir, ap, glass: "AIR", stop: false },
     ];
 
@@ -1648,7 +1606,6 @@ if (okN > 0) {
     return chunk;
   }
 
-  // Air-spaced achromat (4 surfaces)
   function buildAchromatAirSpacedAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
     const n1 = GLASS_DB[glass1]?.nd ?? 1.5168;
     const n2 = GLASS_DB[glass2]?.nd ?? 1.62;
@@ -1782,7 +1739,6 @@ if (okN > 0) {
     renderAll();
   }
 
-  // modal bindings
   if (modalExists()) {
     elUI.cancel.addEventListener("click", (e) => { e.preventDefault(); closeElementModal(); });
     elUI.insert.addEventListener("click", (e) => {
@@ -1897,7 +1853,6 @@ if (okN > 0) {
       const obj = JSON.parse(txt);
       if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
-      // optional glass_note import
       if (obj.glass_note && typeof obj.glass_note === "object") {
         for (const [k, v] of Object.entries(obj.glass_note)) {
           const nd = Number(v?.nd);
@@ -1938,7 +1893,6 @@ if (okN > 0) {
     loadLens(lens);
     bindViewControls();
 
-    // preview tab events
     if (elUI.tabRays) elUI.tabRays.addEventListener("click", () => setRightTab("rays"));
     if (elUI.tabPreview) elUI.tabPreview.addEventListener("click", () => setRightTab("preview"));
 
@@ -1950,19 +1904,19 @@ if (okN > 0) {
         const url = URL.createObjectURL(f);
         const im = new Image();
         im.onload = () => {
-  preview.img = im;
+          preview.img = im;
 
-  preview.imgCanvas.width = im.naturalWidth;
-  preview.imgCanvas.height = im.naturalHeight;
-  preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-  preview.imgCtx.drawImage(im, 0, 0);
+          preview.imgCanvas.width = im.naturalWidth;
+          preview.imgCanvas.height = im.naturalHeight;
+          preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+          preview.imgCtx.drawImage(im, 0, 0);
 
-  preview.ready = true;
-  setRightTab("preview");
-  renderPreview();
+          preview.ready = true;
+          setRightTab("preview");
+          renderPreview();
 
-  URL.revokeObjectURL(url);
-};
+          URL.revokeObjectURL(url);
+        };
         im.src = url;
       });
     }
