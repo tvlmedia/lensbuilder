@@ -102,7 +102,7 @@
           <input id="renderScale" type="range" min="0.6" max="2.6" step="0.05" value="1.25" />
         </div>
 
-        <!-- PREVIEW CONTROLS (STEP 1) -->
+        <!-- PREVIEW CONTROLS -->
         <div class="ctrl two">
           <label>Preview image</label>
           <input id="prevImg" type="file" accept="image/*" />
@@ -189,15 +189,21 @@
       </div>
     </div>
 
-    <!-- NEW: Tabs + dual canvas -->
-    <div class="canvasTabs">
-      <button id="tabRays" class="tabBtn active" type="button">Rays</button>
-      <button id="tabPreview" class="tabBtn" type="button">Preview</button>
-    </div>
-
     <div class="canvasFrame">
-      <canvas id="canvas"></canvas>
-      <canvas id="previewCanvas" class="hiddenCanvas"></canvas>
+      <div class="canvasSplit" id="tvlCanvasSplit">
+        <!-- LEFT: Rays -->
+        <div class="pane">
+          <div class="paneTag">Rays</div>
+          <canvas id="canvas"></canvas>
+        </div>
+
+        <!-- RIGHT: Preview -->
+        <div class="pane" id="previewPane">
+          <div class="paneTag">Preview</div>
+          <button id="btnPreviewFS" class="fsBtn" type="button">Full Screen (P)</button>
+          <canvas id="previewCanvas"></canvas>
+        </div>
+      </div>
 
       <div class="canvasOverlay">
         <div class="overlayHelp" id="overlayHelp">
@@ -208,10 +214,9 @@
   </section>
 </main>
 
-<!-- NEW LENS WIZARD MODAL (FIXED STRUCTURE: sticky top + scroll + sticky bottom) -->
+<!-- MODALS blijven hetzelfde -->
 <div id="newLensModal" class="modal hidden">
   <div class="modalCard">
-    <!-- sticky header -->
     <div class="modalTop">
       <div>
         <div class="modalTitle">New Lens</div>
@@ -220,7 +225,6 @@
       <button id="nlClose" class="modalX" aria-label="Close">✕</button>
     </div>
 
-    <!-- scroll area -->
     <div class="modalScroll">
       <div class="modalGrid">
         <div class="field">
@@ -265,17 +269,14 @@
       </div>
     </div>
 
-    <!-- sticky footer -->
     <div class="modalBottom">
       <button id="nlCreate" class="btnPrimary">Create</button>
     </div>
   </div>
 </div>
 
-<!-- ELEMENT BUILDER MODAL (FIXED STRUCTURE + scroll + sticky bottom) -->
 <div id="elementModal" class="modal hidden">
   <div class="modalCard">
-    <!-- sticky header -->
     <div class="modalTop">
       <div>
         <div class="modalTitle">Add Element</div>
@@ -284,7 +285,6 @@
       <button id="elClose" class="modalX" aria-label="Close">✕</button>
     </div>
 
-    <!-- scroll area -->
     <div class="modalScroll">
       <div class="modalGrid">
         <div class="field">
@@ -355,7 +355,6 @@
         </div>
       </div>
 
-      <!-- CUSTOM AREA -->
       <div id="customBox" class="customBox hidden">
         <div class="modalGrid" style="margin-top:14px;">
           <div class="field">
@@ -394,7 +393,6 @@
       </div>
     </div>
 
-    <!-- sticky footer -->
     <div class="modalBottom">
       <button id="elAdd" class="btnPrimary">Insert</button>
     </div>
