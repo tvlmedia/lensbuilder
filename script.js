@@ -2254,68 +2254,105 @@ if (!hasImg) return [255, 255, 255, 255];    // white if no image
 
 
      
-    // LUT: r_sensor -> r_object (stabilized with multi-angle median)
-    const rMaxSensor = Math.hypot(halfWv, halfHv);
-    const LUT_N = 512;
-    const rObjLUT  = new Float32Array(LUT_N);
-const transLUT = new Float32Array(LUT_N); // 0..1 light throughput
+  // LUT: r_sensor -> r_object + throughput (physically consistent within this model)
+// throughput = fraction of STOP-aperture samples that make it through (mechanical vignetting)
+const rMaxSensor = Math.hypot(halfWv, halfHv);
+const LUT_N = 512;
+const rObjLUT   = new Float32Array(LUT_N);
+const transLUT  = new Float32Array(LUT_N);
+const cos4LUT   = new Float32Array(LUT_N); // optional, from chief ray angle
 
-    const ANG_SAMPLES = 11;              // iets meer samples helpt
-const OK_RATIO = 0.65;               // minstens 65% moet slagen
+const ANG_SAMPLES = 12;   // angular samples around the circle
+const STOP_SAMPLES = 11;  // samples across stop semi-diameter (2D pupil height)
+const epsX = 0.05;
 
-function median(arr){
+function median(arr) {
   const a = arr.slice().sort((x,y)=>x-y);
   return a[(a.length/2)|0];
 }
+
+// sample stop y positions across the aperture (include 0)
+function stopYs(stopAp) {
+  const ys = [];
+  const N = Math.max(3, STOP_SAMPLES|0);
+  for (let i = 0; i < N; i++) {
+    const t = (i/(N-1))*2 - 1; // -1..+1
+    ys.push(t * stopAp);
+  }
+  return ys;
+}
+
+const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
+const yStopSamples = stopYs(stopAp);
 
 for (let k = 0; k < LUT_N; k++) {
   const a = k / (LUT_N - 1);
   const r = a * rMaxSensor;
 
-  const vals = [];
-  let okCount = 0;
+  const rObjVals = [];      // for mapping (chief ray per angle)
+  let transSum = 0;         // average throughput across angles
+  let cos4Sum = 0;          // average cos^4 across angles (from chief ray)
 
   for (let m = 0; m < ANG_SAMPLES; m++) {
     const ang = (m / ANG_SAMPLES) * Math.PI * 2;
+    const sx = Math.cos(ang) * r;
     const sy = Math.sin(ang) * r;
 
-    const epsX = 0.05;
     const startX = sensorX + epsX;
     const startY = sy;
 
-    const dir = normalize({ x: xStop - startX, y: 0 - startY });
-    const tr = traceRayReverse({ p: { x: startX, y: startY }, d: dir }, lens.surfaces, wavePreset);
-    if (tr.vignetted || tr.tir) continue;
+    // --- 1) mapping ray: chief ray goes through stop center (yStop=0) ---
+    {
+      const dirChief = normalize({ x: xStop - startX, y: 0 - startY });
+      const trChief = traceRayReverse({ p: { x: startX, y: startY }, d: dirChief }, lens.surfaces, wavePreset);
+      if (!trChief.vignetted && !trChief.tir) {
+        const hitObj = intersectPlaneX(trChief.endRay, xObjPlane);
+        if (hitObj) rObjVals.push(Math.abs(hitObj.y));
 
-    const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
-    if (!hitObj) continue;
+        // cos^4 based on image-side chief ray angle (dir at sensor side)
+        const cos = Math.max(0, Math.min(1, Math.abs(dirChief.x)));
+        cos4Sum += cos * cos * cos * cos;
+      } else {
+        cos4Sum += 0;
+      }
+    }
 
-    okCount++;
-    vals.push(Math.abs(hitObj.y));
+    // --- 2) throughput: sample across STOP aperture ---
+    let ok = 0;
+    for (let ssi = 0; ssi < yStopSamples.length; ssi++) {
+      const yStop = yStopSamples[ssi];
+      const dir = normalize({ x: xStop - startX, y: yStop - startY });
+
+      const tr = traceRayReverse({ p: { x: startX, y: startY }, d: dir }, lens.surfaces, wavePreset);
+      if (tr.vignetted || tr.tir) continue;
+
+      const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
+      if (!hitObj) continue;
+
+      ok++;
+    }
+
+    transSum += ok / yStopSamples.length;
   }
 
-  const ratio = okCount / ANG_SAMPLES;       // 0..1
-  transLUT[k] = ratio;
-
-  if (okCount < 1 || !vals.length) {
-    rObjLUT[k] = 0; // value unused when trans=0
-  } else {
-    rObjLUT[k] = median(vals);
-  }
+  rObjLUT[k]  = rObjVals.length ? median(rObjVals) : 0;
+  transLUT[k] = transSum / ANG_SAMPLES;
+  cos4LUT[k]  = cos4Sum / ANG_SAMPLES;
 }
 
-   function lookupROutAndTrans(r) {
+// lookup helper
+function lookupROutTransCos4(r) {
   const t = Math.max(0, Math.min(1, r / rMaxSensor));
   const x = t * (LUT_N - 1);
   const i0 = Math.floor(x);
   const i1 = Math.min(LUT_N - 1, i0 + 1);
   const u = x - i0;
 
-  const rObj = rObjLUT[i0] * (1 - u) + rObjLUT[i1] * u;
+  const rObj  = rObjLUT[i0]  * (1 - u) + rObjLUT[i1]  * u;
   const trans = transLUT[i0] * (1 - u) + transLUT[i1] * u;
+  const cos4  = cos4LUT[i0]  * (1 - u) + cos4LUT[i1]  * u;
 
-  // als trans ~0, behandelen we het als volledig donker (maar niet “hard”)
-  return { rObj, trans };
+  return { rObj, trans, cos4 };
 }
     // ✅ dirty-key: only rerender world if optics/settings changed
     const key = JSON.stringify({
@@ -2376,18 +2413,16 @@ const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
           continue;
         }
 
-       const { rObj, trans } = lookupROutAndTrans(r);
+      const { rObj, trans, cos4 } = lookupROutTransCos4(r);
 
-// “filmisch” randgedrag: maak falloff wat steiler/softer met een exponent
-const mech = Math.pow(Math.max(0, Math.min(1, trans)), 1.6);
+// Mechanical vignetting (exit pupil clipping) is already in trans.
+// Do NOT “shape” it too much, keep it physical.
+// If you still want a tiny perceptual tweak, keep exponent close to 1.
+const mech = Math.max(0, Math.min(1, trans));
 
-// extra: cos^4 falloff (optioneel maar voelt meteen “echt”)
-const rn = Math.max(0, Math.min(1, r / rMaxSensor));
-const cos4 = Math.pow(1 - rn * rn, 2.0); // simpele benadering; stabiel en snel
+// Cos^4 from chief ray angle proxy (already averaged per radius/angle)
+const gain = mech * Math.max(0, Math.min(1, cos4));
 
-const gain = mech * cos4;
-
-// Als gain bijna nul: gewoon zwart
 if (gain < 1e-4) {
   outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
   continue;
