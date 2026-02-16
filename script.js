@@ -1218,15 +1218,8 @@ function resizePreviewCanvasToCSS() {
 
  
 
-   const PL_FFD = 52.0; // mm
-
-function drawPLFlange(world, xFlange) {
-  if (!ctx || !canvas) return;
-
-  ctx.save();
-  ctx.lineWidth = 2;
-
-
+   // -------------------- PL flange + ruler + camera overlay --------------------
+const PL_FFD = 52.0; // mm
 
 function getLensTopY(surfaces) {
   let m = 0;
@@ -1256,11 +1249,12 @@ function drawRulerFromSensor(world, sensorX0, yWorld, lenMm = 200, stepMm = 10) 
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
 
-  // ticks
+  // ticks + labels
   const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
   ctx.font = `12px ${mono}`;
   ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.textBaseline = "bottom";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
 
   for (let mm = 0; mm <= lenMm; mm += stepMm) {
     const x = sensorX0 - mm;
@@ -1280,22 +1274,32 @@ function drawRulerFromSensor(world, sensorX0, yWorld, lenMm = 200, stepMm = 10) 
     ctx.lineTo(p1.x, p1.y);
     ctx.stroke();
 
-    // labels every 1 cm (10mm), in centimeters
+    // label every 10mm = 1cm (in cm)
     if (mm % 10 === 0) {
       const cm = (mm / 10) | 0;
-     
+      const tp = worldToScreen(
+        { x, y: yWorld + ((tick + 6) / (world.s || 1)) },
+        world
+      );
+      ctx.fillText(String(cm), tp.x, tp.y);
     }
   }
 
   // "0" marker at sensor
-  const z = worldToScreen({ x: sensorX0, y: yWorld + (28 / (world.s || 1)) }, world);
   ctx.fillStyle = "rgba(0,0,0,.75)";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  const z = worldToScreen({ x: sensorX0, y: yWorld + (28 / (world.s || 1)) }, world);
   ctx.fillText("SENSOR 0", z.x - 28, z.y);
 
   ctx.restore();
 }
-   
-  // ✅ donker i.p.v. wit
+
+function drawPLFlange(world, xFlange) {
+  if (!ctx || !canvas) return;
+
+  ctx.save();
+  ctx.lineWidth = 2;
   ctx.strokeStyle = "rgba(0,0,0,.25)";
   ctx.setLineDash([10, 8]);
 
@@ -1314,56 +1318,7 @@ function drawRulerFromSensor(world, sensorX0, yWorld, lenMm = 200, stepMm = 10) 
   ctx.restore();
 }
 
-function drawCameraOverlay(world, plX) {
-  if (!ctx) return;
-
-  const cam = getCurrentCameraPreset();
-  if (!cam || !cam.body) return;
-
-  const baseX = plX;
-  const body = cam.body;
-
-  // ✅ donker op witte achtergrond
-  const stroke   = "rgba(0,0,0,.22)";
-  const fill     = "rgba(0,0,0,.05)";
-  const bumpFill = "rgba(0,0,0,.035)";
-  const logo     = "rgba(0,0,0,.55)";
-
-  drawRoundedRect(world, baseX + body.x, body.y, body.w, body.h, body.r,
-    { fill, stroke, lineWidth: 2 }
-  );
-
-  for (const b of (cam.bumps || [])) {
-    drawRoundedRect(world, baseX + b.x, b.y, b.w, b.h, b.r,
-      { fill: bumpFill, stroke, lineWidth: 2 }
-    );
-  }
-
-  ctx.save();
-  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-  ctx.font = `12px ${mono}`;
-  ctx.fillStyle = logo;
-  ctx.textBaseline = "top";
-
-  const lp = cam.logoPos || { x: body.x + 10, y: body.y + 10 };
-  const p1 = worldToScreen({ x: baseX + lp.x, y: lp.y }, world);
-  const p2 = worldToScreen({ x: baseX + lp.x, y: lp.y + 14 }, world);
-
-  ctx.fillText(cam.label || "CAM", p1.x, p1.y);
-  ctx.fillText(cam.model || "", p2.x, p2.y);
-  ctx.restore();
-}
-  function drawTitleOverlay(text) {
-    if (!ctx) return;
-    ctx.save();
-    const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
-    ctx.font = "14px " + mono;
-    ctx.fillStyle = "#333";
-    ctx.fillText(text, 14, 20);
-    ctx.restore();
-  }
-
- function roundedRectPath(world, x, y, w, h, r) {
+function roundedRectPath(world, x, y, w, h, r) {
   r = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
 
   const p = (xx, yy) => worldToScreen({ x: xx, y: yy }, world);
@@ -1409,18 +1364,16 @@ function drawCameraOverlay(world, plX) {
   const baseX = plX;
   const body = cam.body;
 
-  // ✅ colors tuned for your dark UI
+  // colors tuned for your dark UI
   const stroke = "rgba(255,255,255,.22)";
   const fill   = "rgba(255,255,255,.06)";
   const bumpFill = "rgba(255,255,255,.04)";
   const logo = "rgba(255,255,255,.55)";
 
-
-  // ✅ SENSOR MARK inside the camera body (should align with world sensor x=0)
+  // SENSOR MARK inside the camera body (should align with world sensor x=0)
   if (cam.sensorMark) {
     const sm = cam.sensorMark;
 
-    // small “sensor box”
     drawRoundedRect(
       world,
       baseX + sm.x - sm.w * 0.5,
@@ -1431,33 +1384,31 @@ function drawCameraOverlay(world, plX) {
       { fill: "rgba(42,110,242,.18)", stroke: "rgba(42,110,242,.75)", lineWidth: 1.5 }
     );
 
-    // crosshair
     ctx.save();
     ctx.strokeStyle = "rgba(42,110,242,.75)";
     ctx.lineWidth = 1;
-    const a = worldToScreen({ x: baseX + sm.x - sm.w*0.5, y: sm.y }, world);
-    const b = worldToScreen({ x: baseX + sm.x + sm.w*0.5, y: sm.y }, world);
-    const c = worldToScreen({ x: baseX + sm.x, y: sm.y - sm.h*0.5 }, world);
-    const d = worldToScreen({ x: baseX + sm.x, y: sm.y + sm.h*0.5 }, world);
+
+    const a = worldToScreen({ x: baseX + sm.x - sm.w * 0.5, y: sm.y }, world);
+    const b = worldToScreen({ x: baseX + sm.x + sm.w * 0.5, y: sm.y }, world);
+    const c = worldToScreen({ x: baseX + sm.x, y: sm.y - sm.h * 0.5 }, world);
+    const d = worldToScreen({ x: baseX + sm.x, y: sm.y + sm.h * 0.5 }, world);
 
     ctx.beginPath();
     ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
     ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y);
     ctx.stroke();
     ctx.restore();
-  }
 
-     if (cam.sensorMark) {
     ctx.save();
     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
     ctx.font = `11px ${mono}`;
     ctx.fillStyle = "rgba(42,110,242,.9)";
     ctx.textBaseline = "bottom";
-    const t = worldToScreen({ x: baseX + cam.sensorMark.x + 10, y: cam.sensorMark.y - 8 }, world);
+    const t = worldToScreen({ x: baseX + sm.x + 10, y: sm.y - 8 }, world);
     ctx.fillText("SENSOR", t.x, t.y);
     ctx.restore();
   }
-   
+
   // BODY
   drawRoundedRect(
     world,
@@ -1489,6 +1440,16 @@ function drawCameraOverlay(world, plX) {
 
   ctx.fillText(cam.label || "CAM", p1.x, p1.y);
   ctx.fillText(cam.model || "", p2.x, p2.y);
+  ctx.restore();
+}
+
+function drawTitleOverlay(text) {
+  if (!ctx) return;
+  ctx.save();
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace";
+  ctx.font = "14px " + mono;
+  ctx.fillStyle = "#333";
+  ctx.fillText(text, 14, 20);
   ctx.restore();
 }
 // -------------------- render scheduler (RAF throttle) --------------------
