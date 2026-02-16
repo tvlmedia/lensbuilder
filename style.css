@@ -545,3 +545,34 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
   min-height:84px;
   max-height:180px;
 }
+/* --- PREVIEW TABS + CANVAS SWITCH --- */
+.canvasTabs{
+  display:flex;
+  gap:8px;
+  padding: 12px 14px 0;
+}
+
+.tabBtn{
+  border:1px solid var(--stroke);
+  background: rgba(0,0,0,.16);
+  color: var(--text);
+  padding:8px 12px;
+  border-radius:999px;
+  font-size:12px;
+  cursor:pointer;
+  user-select:none;
+}
+.tabBtn.active{
+  border-color: rgba(42,110,242,.55);
+  box-shadow: 0 0 0 4px rgba(42,110,242,.12);
+}
+
+#previewCanvas{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  display:block;
+}
+
+.hiddenCanvas{ display:none !important; }
