@@ -1760,8 +1760,9 @@ function drawPreviewViewport() {
   pctx.restore();
 
   // bg
-  pctx.fillStyle = "#000";
-  pctx.fillRect(0, 0, Wc, Hc);
+  const hasImg = !!(preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
+pctx.fillStyle = hasImg ? "#000" : "#fff";
+pctx.fillRect(0, 0, Wc, Hc);
 
   if (!preview.worldReady) {
     pctx.fillStyle = "rgba(255,255,255,.65)";
@@ -2227,8 +2228,8 @@ const imgH = preview.imgCanvas.height;
 const imgData = hasImg ? preview.imgData : null;
 
     function sample(u, v) {
-      if (!hasImg) return [255, 255, 0, 255];      // yellow if no image
-      if (u < 0 || u > 1 || v < 0 || v > 1) return [255, 0, 0, 255]; // red outside
+if (!hasImg) return [255, 255, 255, 255];    // white if no image
+       if (u < 0 || u > 1 || v < 0 || v > 1) return [255, 0, 0, 255]; // red outside
 
       const x = u * (imgW - 1);
       const y = v * (imgH - 1);
@@ -2259,44 +2260,50 @@ const imgData = hasImg ? preview.imgData : null;
     const rObjLUT = new Float32Array(LUT_N);
     const validLUT = new Uint8Array(LUT_N);
 
-    const ANG_SAMPLES = 9; // odd => median
-    function median(arr){
-      const a = arr.slice().sort((x,y)=>x-y);
-      return a[(a.length/2)|0];
-    }
+    const ANG_SAMPLES = 11;              // iets meer samples helpt
+const OK_RATIO = 0.65;               // minstens 65% moet slagen
 
-    for (let k = 0; k < LUT_N; k++) {
-      const a = k / (LUT_N - 1);
-      const r = a * rMaxSensor;
+function median(arr){
+  const a = arr.slice().sort((x,y)=>x-y);
+  return a[(a.length/2)|0];
+}
 
-      const vals = [];
-      for (let m = 0; m < ANG_SAMPLES; m++) {
-        const ang = (m / ANG_SAMPLES) * Math.PI * 2;
-        const sy = Math.sin(ang) * r;
+for (let k = 0; k < LUT_N; k++) {
+  const a = k / (LUT_N - 1);
+  const r = a * rMaxSensor;
 
-        // start ALWAYS just to the sensor side of IMS (x > sensorX)
-        const epsX = 0.05;
-        const startX = sensorX + epsX;
-        const startY = sy;
+  const vals = [];
+  let okCount = 0;
 
-        const dir = normalize({ x: xStop - startX, y: 0 - startY });
-        const tr = traceRayReverse({ p: { x: startX, y: startY }, d: dir }, lens.surfaces, wavePreset);
-        if (tr.vignetted || tr.tir) continue;
+  for (let m = 0; m < ANG_SAMPLES; m++) {
+    const ang = (m / ANG_SAMPLES) * Math.PI * 2;
+    const sy = Math.sin(ang) * r;
 
-        const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
-        if (!hitObj) continue;
+    const epsX = 0.05;
+    const startX = sensorX + epsX;
+    const startY = sy;
 
-        vals.push(Math.abs(hitObj.y));
-      }
+    const dir = normalize({ x: xStop - startX, y: 0 - startY });
+    const tr = traceRayReverse({ p: { x: startX, y: startY }, d: dir }, lens.surfaces, wavePreset);
+    if (tr.vignetted || tr.tir) continue;
 
-      if (!vals.length) {
-        rObjLUT[k] = 0;
-        validLUT[k] = 0;
-      } else {
-        rObjLUT[k] = median(vals);
-        validLUT[k] = 1;
-      }
-    }
+    const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
+    if (!hitObj) continue;
+
+    okCount++;
+    vals.push(Math.abs(hitObj.y));
+  }
+
+  const ok = okCount >= Math.ceil(ANG_SAMPLES * OK_RATIO);
+
+  if (!ok || !vals.length) {
+    rObjLUT[k] = 0;
+    validLUT[k] = 0;
+  } else {
+    rObjLUT[k] = median(vals);
+    validLUT[k] = 1;
+  }
+}
 
     function lookupROut(r) {
       const t = Math.max(0, Math.min(1, r / rMaxSensor));
@@ -2372,8 +2379,8 @@ const sx = ((px + 0.5) / W - 0.5) * sensorWv; // OV
 
         const rObj = lookupROut(r);
        if (rObj == null) {
-  outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 20; outD[idx+3] = 255; // navy
-  continue;
+outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 0; outD[idx+3] = 255; // black vignette
+          continue;
 }
 
         // preserve angle (radial mapping): scale vector by rObj/r
