@@ -1318,6 +1318,82 @@ function drawPLFlange(world, xFlange) {
   ctx.restore();
 }
 
+   function drawPLMountOutline(world, xFlange) {
+  if (!ctx) return;
+
+  // Rough PL mount dimensions (visual only)
+  const outerR = 30;   // outer ring radius (mm-ish)
+  const innerR = 22;   // throat radius
+  const depth  = 10;   // little "tube" depth to the left
+
+  // Place around optical axis at y=0
+  const cx = xFlange;
+
+  const P = (x, y) => worldToScreen({ x, y }, world);
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(0,0,0,.30)";
+  ctx.fillStyle = "rgba(0,0,0,.03)";
+
+  // Outer ring (circle)
+  ctx.beginPath();
+  const c0 = P(cx, 0);
+  ctx.arc(c0.x, c0.y, outerR * world.s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Inner throat (circle)
+  ctx.beginPath();
+  ctx.arc(c0.x, c0.y, innerR * world.s, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Small “tube” to the left (mount depth)
+  const a = P(cx - depth, -innerR);
+  const b = P(cx,        -innerR);
+  const c = P(cx,         innerR);
+  const d = P(cx - depth, innerR);
+
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.lineTo(c.x, c.y);
+  ctx.lineTo(d.x, d.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // 3 tabs (simple)
+  ctx.strokeStyle = "rgba(0,0,0,.35)";
+  ctx.lineWidth = 3;
+
+  const tabAngles = [ -30, 90, 210 ].map(deg => (deg * Math.PI) / 180);
+  for (const ang of tabAngles) {
+    const r1 = outerR * 0.92;
+    const r2 = outerR * 1.05;
+    const x1 = cx + Math.cos(ang) * r1;
+    const y1 = 0  + Math.sin(ang) * r1;
+    const x2 = cx + Math.cos(ang) * r2;
+    const y2 = 0  + Math.sin(ang) * r2;
+
+    const p1 = P(x1, y1);
+    const p2 = P(x2, y2);
+
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  }
+
+  // label
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.font = `12px ${(getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim()}`;
+  const t = P(cx + 6, outerR + 6);
+  ctx.fillText("PL MOUNT", t.x, t.y);
+
+  ctx.restore();
+}
+
 function roundedRectPath(world, x, y, w, h, r) {
   r = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
 
@@ -1364,11 +1440,11 @@ function drawCameraOverlay(world, plX) {
   const baseX = plX;
   const body = cam.body;
 
-  // colors tuned for your dark UI
-  const stroke = "rgba(255,255,255,.22)";
-  const fill   = "rgba(255,255,255,.06)";
-  const bumpFill = "rgba(255,255,255,.04)";
-  const logo = "rgba(255,255,255,.55)";
+    // colors (visible on white canvas)
+  const stroke = "rgba(0,0,0,.25)";
+  const fill   = "rgba(0,0,0,.04)";
+  const bumpFill = "rgba(0,0,0,.03)";
+  const logo = "rgba(0,0,0,.50)";
 
   // SENSOR MARK inside the camera body (should align with world sensor x=0)
   if (cam.sensorMark) {
@@ -1552,8 +1628,9 @@ function renderAll() {
 
   const world = makeWorldTransform();
   drawAxes(world);
-  drawPLFlange(world, plX);          // ✅ PL line
-drawCameraOverlay(world, plX); // ✅ NEW
+  drawPLFlange(world, plX);
+drawPLMountOutline(world, plX); // ✅ mount ring zichtbaar
+drawCameraOverlay(world, plX);  // ✅ camera body zichtbaar
   drawLens(world, lens.surfaces);
   drawStop(world, lens.surfaces);
   drawRays(world, traces, sensorX);
