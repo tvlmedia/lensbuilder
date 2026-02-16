@@ -45,6 +45,7 @@ const preview = {
   worldCanvas: document.createElement("canvas"),
   worldCtx: null,
   worldReady: false,
+     dirtyKey: "",
 
   // NEW: view controls for the SENSOR viewport
   view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
@@ -662,6 +663,12 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
     // OSLO-ish: medium rechts van surface i (tussen i en i+1) = s.glass
     const nRight = isIMS ? 1.0 : glassN(String(s.glass || "AIR"), wavePreset);
 
+         // ✅ IMS is a pure sensor plane: do not refract here
+    if (isIMS) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
+    }
+
     // medium links van surface i (tussen i-1 en i) = surfaces[i-1].glass, of AIR bij i=0
     const nLeft = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
 
@@ -781,12 +788,15 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
   }
 
   // -------------------- EFL/BFL (paraxial-ish) --------------------
-  function lastPhysicalVertexX(surfaces) {
-    if (!surfaces?.length) return 0;
-    const last = surfaces[surfaces.length - 1];
-    const isIMS = String(last?.type || "").toUpperCase() === "IMS";
-    const idx = isIMS ? surfaces.length - 2 : surfaces.length - 1;
-    return surfaces[Math.max(0, idx)]?.vx ?? 0;
+   function lastPhysicalVertexX(surfaces) {
+    let maxX = -Infinity;
+    for (const s of surfaces || []) {
+      const t = String(s?.type || "").toUpperCase();
+      if (t === "IMS") continue;
+      if (!Number.isFinite(s.vx)) continue;
+      maxX = Math.max(maxX, s.vx);
+    }
+    return Number.isFinite(maxX) ? maxX : 0;
   }
 function firstPhysicalVertexX(surfaces) {
   if (!surfaces?.length) return 0;
@@ -2244,25 +2254,49 @@ const imgData = hasImg ? preview.imgData : null;
 
 
      
-    // LUT: r_sensor -> r_object
-const rMaxSensor = Math.hypot(halfWv, halfHv);
-     const LUT_N = 512;
+    // LUT: r_sensor -> r_object (stabilized with multi-angle median)
+    const rMaxSensor = Math.hypot(halfWv, halfHv);
+    const LUT_N = 512;
     const rObjLUT = new Float32Array(LUT_N);
     const validLUT = new Uint8Array(LUT_N);
+
+    const ANG_SAMPLES = 9; // odd => median
+    function median(arr){
+      const a = arr.slice().sort((x,y)=>x-y);
+      return a[(a.length/2)|0];
+    }
 
     for (let k = 0; k < LUT_N; k++) {
       const a = k / (LUT_N - 1);
       const r = a * rMaxSensor;
-     let rObj = sensorHeightToObjectHeight_mm(r, sensorX, xStop, xObjPlane, lens.surfaces, wavePreset);
-if (rObj == null || !Number.isFinite(rObj)) {
-  rObjLUT[k] = 0;
-  validLUT[k] = 0;
-} else {
-  // ✅ radial symmetry: radius must be positive, otherwise you get a 180° flip
-  rObj = Math.abs(rObj);
-  rObjLUT[k] = rObj;
-  validLUT[k] = 1;
-}
+
+      const vals = [];
+      for (let m = 0; m < ANG_SAMPLES; m++) {
+        const ang = (m / ANG_SAMPLES) * Math.PI * 2;
+        const sy = Math.sin(ang) * r;
+
+        // start ALWAYS just to the sensor side of IMS (x > sensorX)
+        const epsX = 0.05;
+        const startX = sensorX + epsX;
+        const startY = sy;
+
+        const dir = normalize({ x: xStop - startX, y: 0 - startY });
+        const tr = traceRayReverse({ p: { x: startX, y: startY }, d: dir }, lens.surfaces, wavePreset);
+        if (tr.vignetted || tr.tir) continue;
+
+        const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
+        if (!hitObj) continue;
+
+        vals.push(Math.abs(hitObj.y));
+      }
+
+      if (!vals.length) {
+        rObjLUT[k] = 0;
+        validLUT[k] = 0;
+      } else {
+        rObjLUT[k] = median(vals);
+        validLUT[k] = 1;
+      }
     }
 
     function lookupROut(r) {
@@ -2278,7 +2312,24 @@ if (rObj == null || !Number.isFinite(rObj)) {
       if (!v0 && v1) return rObjLUT[i1];
       return rObjLUT[i0] * (1 - u) + rObjLUT[i1] * u;
     }
+    // ✅ dirty-key: only rerender world if optics/settings changed
+    const key = JSON.stringify({
+      lensShift: Number(ui.lensFocus?.value || 0),
+      wave: wavePreset,
+      sensor: getSensorWH(),
+      objDist,
+      objH,
+      base,
+      lensHash: lens.surfaces.map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(",")).join("|")
+    });
 
+    if (preview.worldReady && preview.dirtyKey === key) {
+      drawPreviewViewport();
+      return;
+    }
+    preview.dirtyKey = key;
+    preview.worldReady = false;
+   
     // render into OFFSCREEN world buffer
 preview.worldCanvas.width = W;
 preview.worldCanvas.height = H;
