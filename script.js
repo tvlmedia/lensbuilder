@@ -2481,10 +2481,15 @@ for (let j = 0; j < H; j++) {
     const ox = Math.cos(ang) * ro;
     const oy = Math.sin(ang) * ro;
 
-    // object plane is a rectangle: width matches uploaded image aspect
-    // normalize to [0..1]
-    const u = (ox / halfObjH) * 0.5 + 0.5; // using objH as “diameter” basis
-    const v = 0.5 - (oy / halfObjH) * 0.5;
+    const imgAspect = imgW / imgH;
+
+// jij gebruikt objH als "full height in mm"
+const halfObjH = objH * 0.5;
+const halfObjW = halfObjH * imgAspect;
+
+// ...
+const u = (ox / halfObjW) * 0.5 + 0.5;
+const v = 0.5 - (oy / halfObjH) * 0.5;
 
     const c = sample(u, v);
     outD[o] = c[0] | 0;
