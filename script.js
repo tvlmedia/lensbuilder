@@ -143,12 +143,7 @@ preview.worldCtx = preview.worldCanvas.getContext("2d");
     return { w, h, halfH: Math.max(0.1, h * 0.5), halfW: Math.max(0.1, w * 0.5) };
   }
 
-   const OV = 1.6; // overscan factor (1.2..2.0 is nice)
-
-const sensorWv = sensorW * OV;
-const sensorHv = sensorH * OV;
-const halfWv = halfW * OV;
-const halfHv = halfH * OV;
+   const OV = 1.6; // overscan factor
 
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
@@ -1304,7 +1299,45 @@ function applyViewToSensorRect(sr0, v) {
 }
 
 function drawPreviewViewport() {
+  if (!previewCanvasEl || !pctx) return;
 
+  // zorg dat canvas pixel-size klopt met CSS size
+  resizePreviewCanvasToCSS();
+
+  // background
+  const r = previewCanvasEl.getBoundingClientRect();
+  pctx.clearRect(0, 0, r.width, r.height);
+  pctx.fillStyle = "#000";
+  pctx.fillRect(0, 0, r.width, r.height);
+
+  if (!preview.worldReady) {
+    // nog niks gerenderd
+    pctx.fillStyle = "rgba(255,255,255,.65)";
+    pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+    pctx.fillText("Preview: render first", 18, 24);
+    return;
+  }
+
+  // sensor-rect in pane (fit)
+  const sr0 = getSensorRectBaseInPane();
+
+  // apply pan/zoom
+  const sr = applyViewToSensorRect(sr0, preview.view);
+
+  // draw world into viewport
+  // (we tekenen de hele worldCanvas in de sensor-viewport; jouw OV + mapping zit al in renderPreview)
+  pctx.imageSmoothingEnabled = true;
+  pctx.drawImage(preview.worldCanvas, 0, 0, preview.worldCanvas.width, preview.worldCanvas.height, sr.x, sr.y, sr.w, sr.h);
+
+  // outline / guides
+  pctx.save();
+  pctx.strokeStyle = "rgba(255,255,255,.20)";
+  pctx.lineWidth = 1;
+  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h); // basis sensor frame
+  pctx.strokeStyle = "rgba(42,110,242,.55)";
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);     // huidige view frame (pan/zoom)
+  pctx.restore();
+}
 
 function bindPreviewViewControls() {
   if (!previewCanvasEl) return;
@@ -1700,6 +1733,11 @@ function bindPreviewViewControls() {
     const sensorOffset = Number(ui.sensorOffset?.value || 0);
 
     const { w: sensorW, h: sensorH, halfW, halfH } = getSensorWH();
+const sensorWv = sensorW * OV;
+const sensorHv = sensorH * OV;
+const halfWv = halfW * OV;
+const halfHv = halfH * OV;
+     
     const ims = lens.surfaces[lens.surfaces.length - 1];
     const sensorX = (ims?.vx ?? 0) + sensorOffset;
 
