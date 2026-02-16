@@ -2041,16 +2041,20 @@ function bindPreviewViewControls() {
   }
 
   // -------------------- preview rendering (split-view) --------------------
- function renderPreview() {
+function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
 
   const lensShift = Number(ui.lensFocus?.value || 0);
-  computeVertices(lens.surfaces, lensShift);
+  computeVertices(lens.surfaces, lensShift);   // ✅ match renderAll()
 
-    const wavePreset = ui.wavePreset?.value || "d";
-    const sensorOffset = Number(ui.sensorOffset?.value || 0);
+  applySensorToIMS();
+  clampAllApertures(lens.surfaces);
 
-    const { w: sensorW, h: sensorH, halfW, halfH } = getSensorWH();
+  const wavePreset = ui.wavePreset?.value || "d";
+  const sensorOffset = Number(ui.sensorOffset?.value || 0);
+
+  const { w: sensorW, h: sensorH, halfW, halfH } = getSensorWH();
+  
 const sensorWv = sensorW * OV;
 const sensorHv = sensorH * OV;
 const halfWv = halfW * OV;
@@ -2489,8 +2493,15 @@ drawPreviewViewport();
   }
 
   // ✅ anders: render 1x als er een image is
-  if (preview.ready) renderPreview();
-  else drawPreviewViewport();
+window.addEventListener("resize", () => {
+  preview.view.panX = 0;
+  preview.view.panY = 0;
+  preview.view.zoom = 1.0;
+
+  scheduleRenderAll();
+
+  if (preview.worldReady) drawPreviewViewport();
+  else scheduleRenderPreview();
 });
 
   if (ui.prevImg) {
@@ -2547,35 +2558,25 @@ scheduleRenderPreview();
     }
   });
 
- // -------------------- controls -> rerender --------------------
+// -------------------- controls -> rerender --------------------
 ["fieldAngle", "rayCount", "wavePreset", "sensorOffset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"]
   .forEach((id) => {
     on("#" + id, "input", scheduleRenderAll);
     on("#" + id, "change", scheduleRenderAll);
   });
 
-// preview controls => rerender preview (only if img loaded)
-["sensorOffset", "lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"].forEach((id) => {
-  on("#" + id, "input", scheduleRenderPreview);
-  on("#" + id, "change", scheduleRenderPreview);
-});
+// preview-affecting controls (only if img loaded in scheduler)
+["sensorOffset", "lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"]
+  .forEach((id) => {
+    on("#" + id, "input", scheduleRenderPreview);
+    on("#" + id, "change", scheduleRenderPreview);
+  });
 
 on("#sensorPreset", "change", (e) => {
   applyPreset(e.target.value);
   clampAllApertures(lens.surfaces);
-  scheduleRenderAll();        // iets netter dan renderAll() direct
-  scheduleRenderPreview();    // i.p.v. renderPreview() direct
-});
-
-window.addEventListener("resize", () => {
-  // reset viewport omdat sr0 verandert
-  preview.view.panX = 0;
-  preview.view.panY = 0;
-  preview.view.zoom = 1.0;
-
   scheduleRenderAll();
-  if (preview.ready) scheduleRenderPreview();
-  else drawPreviewViewport();
+  scheduleRenderPreview();
 });
   // -------------------- init --------------------
 function init() {
