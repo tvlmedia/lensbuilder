@@ -18,7 +18,7 @@
   --r2:22px;
 
   /* Canvas colors (high contrast) */
-  --canvasBg:#f7f9fe;          /* was dark -> now readable */
+  --canvasBg:#f7f9fe;
   --canvasGrid:rgba(20,25,35,.08);
   --canvasBorder:rgba(0,0,0,.10);
   --canvasText:#111;
@@ -84,7 +84,6 @@ body{
   border-color: rgba(217,91,91,.55);
   background: linear-gradient(180deg, rgba(217,91,91,.26), rgba(217,91,91,.14));
 }
-.btnGhost{ background: transparent; border:1px solid var(--stroke); }
 .fileBtn{ position:relative; overflow:hidden; }
 .fileBtn input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
 
@@ -138,7 +137,6 @@ body{
   border-color: rgba(42,110,242,.55);
   box-shadow: 0 0 0 4px rgba(42,110,242,.14);
 }
-textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); resize:none; }
 
 /* TABLE */
 .tableWrap{ flex:1; overflow:auto; padding:10px 10px 14px; }
@@ -182,7 +180,7 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
 .meta{ color:var(--muted2); font-size:12px; font-family:var(--mono); }
 .warn{ color:rgba(217,91,91,.95); font-size:12px; font-family:var(--mono); }
 
-/* CANVAS AREA */
+/* CANVAS HEADER */
 .canvasHeader{
   display:flex;
   align-items:flex-end;
@@ -204,7 +202,7 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
   color:var(--text);
 }
 
-/* BIG FIX: canvas is LIGHT so the design is readable */
+/* MAIN CANVAS FRAME */
 .canvasFrame{
   position:relative;
   flex:1;
@@ -231,8 +229,67 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
   pointer-events:none;
 }
 
-#canvas{ position:relative; width:100%; height:100%; display:block; }
+/* NEW: split layout */
+.canvasSplit{
+  position:relative;
+  height:100%;
+  width:100%;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:12px;
+  padding:12px;
+}
 
+.pane{
+  position:relative;
+  border-radius: 18px;
+  border:1px solid rgba(0,0,0,.10);
+  overflow:hidden;
+  background: rgba(255,255,255,.45);
+}
+
+.paneTag{
+  position:absolute;
+  left:10px;
+  top:10px;
+  z-index:5;
+  padding:6px 10px;
+  border-radius:999px;
+  border:1px solid rgba(0,0,0,.10);
+  background: rgba(255,255,255,.72);
+  color: rgba(0,0,0,.65);
+  font-family: var(--mono);
+  font-size:12px;
+}
+
+/* canvases fill pane */
+#canvas, #previewCanvas{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  display:block;
+}
+
+/* Fullscreen button for preview */
+.fsBtn{
+  position:absolute;
+  right:10px;
+  top:10px;
+  z-index:6;
+  border:1px solid rgba(0,0,0,.12);
+  background: rgba(255,255,255,.80);
+  color: rgba(0,0,0,.70);
+  padding:7px 10px;
+  border-radius: 12px;
+  font-size:12px;
+  cursor:pointer;
+  font-family: var(--mono);
+}
+.fsBtn:hover{ filter: brightness(1.03); transform: translateY(-1px); }
+.fsBtn:active{ transform: translateY(0px); }
+
+/* overlay text */
 .canvasOverlay{
   position:absolute;
   left:12px; right:12px; bottom:10px;
@@ -250,7 +307,7 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
   font-family:var(--mono);
 }
 
-/* Modals: keep dark + consistent (no conflicting white modal CSS) */
+/* MODALS */
 .modal{
   position:fixed;
   inset:0;
@@ -264,315 +321,11 @@ textarea.noteBox{ min-height:74px; font-family:var(--mono); color:var(--muted); 
 }
 .hidden{ display:none !important; }
 
-.modalCard{
-  width:min(980px, 96vw);
-  max-height: min(820px, calc(100vh - 24px));
-  border-radius: 22px;
-  border:1px solid rgba(255,255,255,.14);
-  background: linear-gradient(180deg, rgba(15,22,36,.98), rgba(10,14,22,.92));
-  box-shadow: 0 24px 70px rgba(0,0,0,.55);
-  overflow:hidden;
-}
-.modalCard.wide{ width:min(1100px, 98vw); }
-
-.modalHeader{
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap:12px;
-  padding:14px 14px 10px;
-  border-bottom:1px solid rgba(255,255,255,.10);
-}
-.modalTitle{ font-weight:800; color:var(--text); }
-.modalHint{ color:var(--muted); font-size:12px; margin-top:4px; }
-
-.modalGrid{ padding:14px; display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-.modalActions{ padding:14px; border-top:1px solid rgba(255,255,255,.10); display:flex; justify-content:flex-end; }
-.modalFoot{ padding:0 14px 14px; }
-.muted{ color:var(--muted); font-size:12px; }
-
-.customBox{ padding:0 14px 14px; }
-.customHead{ display:flex; gap:12px; padding-bottom:10px; }
-.modalTable{ max-height: 280px; }
-
-/* responsive */
 @media (max-width: 1100px){
   .layout{ grid-template-columns: 480px 1fr; }
 }
 @media (max-width: 980px){
   .layout{ grid-template-columns: 1fr; height: auto; }
   .left{ min-width: 0; }
+  .canvasSplit{ grid-template-columns: 1fr; }
 }
-
-
-
-
-/* ===== MODAL FORM: make it not ugly ===== */
-.modalCard{
-  color: var(--text);
-}
-
-/* label styling */
-.modalCard label{
-  display:block;
-  font-size:12px;
-  color: var(--muted);
-  margin-bottom:6px;
-}
-
-/* universal control styling in modal (fixes white inputs like "Glass note") */
-.modalCard input,
-.modalCard select,
-.modalCard textarea{
-  width:100%;
-  border-radius:14px;
-  border:1px solid rgba(255,255,255,.12);
-  background: rgba(0,0,0,.28);
-  color: var(--text);
-  padding:10px 12px;
-  outline:none;
-  font-family: var(--sans);
-  font-size:13px;
-}
-
-.modalCard textarea{
-  min-height:84px;
-  resize: vertical;
-  font-family: var(--mono);
-  color: rgba(255,255,255,.82);
-}
-
-/* focus */
-.modalCard input:focus,
-.modalCard select:focus,
-.modalCard textarea:focus{
-  border-color: rgba(42,110,242,.60);
-  box-shadow: 0 0 0 4px rgba(42,110,242,.16);
-}
-
-/* nicer selects on mac */
-.modalCard select{
-  appearance: none;
-  background-image:
-    linear-gradient(45deg, transparent 50%, rgba(255,255,255,.65) 50%),
-    linear-gradient(135deg, rgba(255,255,255,.65) 50%, transparent 50%);
-  background-position:
-    calc(100% - 18px) 50%,
-    calc(100% - 12px) 50%;
-  background-size: 6px 6px, 6px 6px;
-  background-repeat: no-repeat;
-  padding-right: 34px;
-}
-
-/* groups / rows inside modal */
-.modalGrid{
-  padding:16px;
-  gap:14px;
-}
-.modalGrid > div{
-  padding:12px;
-  border:1px solid rgba(255,255,255,.08);
-  border-radius:16px;
-  background: rgba(0,0,0,.14);
-}
-
-/* header close button (if it's just a button/link) */
-.modalHeader button,
-.modalHeader .closeBtn{
-  border:1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.06);
-  color: var(--text);
-  width:34px;
-  height:34px;
-  border-radius:12px;
-  cursor:pointer;
-}
-.modalHeader button:hover,
-.modalHeader .closeBtn:hover{
-  border-color: rgba(255,255,255,.22);
-  transform: translateY(-1px);
-}
-
-/* actions row - make "Insert" actually look like a primary action */
-.modalActions{
-  padding:14px 16px;
-  gap:10px;
-  display:flex;
-  justify-content:flex-end;
-  border-top:1px solid rgba(255,255,255,.10);
-  background: linear-gradient(180deg, rgba(0,0,0,.00), rgba(0,0,0,.18));
-}
-
-.modalActions .btn,
-.modalActions button{
-  border:1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.06);
-  color: var(--text);
-  padding:10px 12px;
-  border-radius:14px;
-  font-size:12px;
-  cursor:pointer;
-}
-
-.modalActions .btnPrimary{
-  border-color: rgba(42,110,242,.55);
-  background: linear-gradient(180deg, rgba(42,110,242,.42), rgba(42,110,242,.20));
-}
-
-
-
-
-
-/* ===== MODAL HEADER TYPO + BUTTONS (fix weird look) ===== */
-
-/* Header spacing + type */
-.modalHeader{
-  padding:16px 18px 12px;
-  border-bottom:1px solid rgba(255,255,255,.10);
-}
-
-.modalTitle{
-  font-size:16px;
-  line-height:1.15;
-  font-weight:850;
-  letter-spacing:.2px;
-}
-
-.modalHint{
-  margin-top:6px;
-  font-size:12px;
-  line-height:1.35;
-  color: rgba(255,255,255,.58);
-}
-
-/* Make the close button not a random white square */
-#elClose,
-.modalHeader button{
-  appearance:none;
-  border:1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.06);
-  color: rgba(255,255,255,.90);
-  width:34px;
-  height:34px;
-  border-radius:12px;
-  cursor:pointer;
-  display:grid;
-  place-items:center;
-  padding:0;
-  font-size:16px;
-  line-height:1;
-  transition: transform .08s ease, border-color .12s ease, background .12s ease;
-}
-#elClose:hover,
-.modalHeader button:hover{
-  border-color: rgba(255,255,255,.22);
-  background: rgba(255,255,255,.09);
-  transform: translateY(-1px);
-}
-#elClose:active,
-.modalHeader button:active{
-  transform: translateY(0px);
-}
-
-/* Give the modal content a consistent "field group" look */
-.modalGrid{
-  padding:16px 18px;
-  gap:14px;
-}
-.modalGrid > *{
-  padding:12px;
-  border-radius:16px;
-  border:1px solid rgba(255,255,255,.08);
-  background: rgba(0,0,0,.14);
-}
-
-/* Inputs in modal: slightly more premium */
-.modalCard input,
-.modalCard select,
-.modalCard textarea{
-  border-radius:14px;
-  border:1px solid rgba(255,255,255,.12);
-  background: rgba(0,0,0,.26);
-}
-.modalCard input:focus,
-.modalCard select:focus,
-.modalCard textarea:focus{
-  border-color: rgba(42,110,242,.62);
-  box-shadow: 0 0 0 4px rgba(42,110,242,.18);
-}
-
-/* ===== INSERT BUTTON FIX =====
-   In jouw screenshot lijkt 'Insert' niet in .modalActions te zitten.
-   Dus: style #elAdd hard + zet 'm op de juiste plek. */
-#elAdd{
-  appearance:none;
-  border:1px solid rgba(42,110,242,.55);
-  background: linear-gradient(180deg, rgba(42,110,242,.42), rgba(42,110,242,.20));
-  color: rgba(255,255,255,.95);
-  padding:10px 14px;
-  border-radius:14px;
-  font-size:12px;
-  font-weight:750;
-  cursor:pointer;
-  transition: transform .08s ease, filter .12s ease, border-color .12s ease;
-}
-#elAdd:hover{ transform: translateY(-1px); filter: brightness(1.05); }
-#elAdd:active{ transform: translateY(0px); }
-
-/* If you DO have .modalActions: force it to be the action bar */
-.modalActions{
-  padding:14px 18px;
-  border-top:1px solid rgba(255,255,255,.10);
-  background: linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.18));
-  display:flex;
-  justify-content:flex-end;
-  gap:10px;
-}
-
-/* If Insert isn't inside .modalActions, this makes it still sit bottom-right */
-.modalCard{
-  position:relative;
-}
-.modalCard #elAdd{
-  position:absolute;
-  right:18px;
-  bottom:16px;
-}
-
-/* Give textarea ("Glass note") correct height + avoid ugly huge box */
-#elGlassNote,
-.modalCard textarea{
-  min-height:84px;
-  max-height:180px;
-}
-/* --- PREVIEW TABS + CANVAS SWITCH --- */
-.canvasTabs{
-  display:flex;
-  gap:8px;
-  padding: 12px 14px 0;
-}
-
-.tabBtn{
-  border:1px solid var(--stroke);
-  background: rgba(0,0,0,.16);
-  color: var(--text);
-  padding:8px 12px;
-  border-radius:999px;
-  font-size:12px;
-  cursor:pointer;
-  user-select:none;
-}
-.tabBtn.active{
-  border-color: rgba(42,110,242,.55);
-  box-shadow: 0 0 0 4px rgba(42,110,242,.12);
-}
-
-#previewCanvas{
-  position:absolute;
-  inset:0;
-  width:100%;
-  height:100%;
-  display:block;
-}
-
-.hiddenCanvas{ display:none !important; }
