@@ -1019,7 +1019,13 @@ function resizePreviewCanvasToCSS() {
   }
  function makeWorldTransform() {
   const r = canvas.getBoundingClientRect();
-  const base = Number(ui.renderScale?.value || 1.25) * 3.2;
+
+  // IMPORTANT: don't use Number(input.value) directly here.
+  // If the user temporarily clears the field (""), Number("") becomes 0,
+  // collapsing the world scale and making everything look like it vanished.
+  // Use num() with a fallback so the base scale stays stable.
+  const base = num(ui.renderScale?.value, 1.25) * 3.2;
+
   const zoom = Number.isFinite(view.zoom) ? view.zoom : 1.0;
   const s = base * zoom;
 
