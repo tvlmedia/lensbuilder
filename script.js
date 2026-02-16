@@ -1684,13 +1684,41 @@ drawCameraOverlayImage(world);
     scheduleRenderAll();
   });
 
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const delta = Math.sign(e.deltaY);
-    const factor = delta > 0 ? 0.92 : 1.08;
-    view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-    scheduleRenderAll();
-  }, { passive: false });
+ canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+
+  // 1) world transform vóór zoom
+  const world0 = makeWorldTransform();
+
+  // cursor positie in canvas pixels (CSS px)
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  // cursor -> world coord vóór zoom
+  const wx0 = (mx - world0.cx) / world0.s;
+  const wy0 = (world0.cy - my) / world0.s;
+
+  // 2) update zoom
+  const delta = Math.sign(e.deltaY);
+  const factor = delta > 0 ? 0.92 : 1.08;
+  const zNew = Math.max(0.12, Math.min(12, view.zoom * factor));
+  if (zNew === view.zoom) return;
+  view.zoom = zNew;
+
+  // 3) world transform ná zoom
+  const world1 = makeWorldTransform();
+
+  // cursor -> screen coord ná zoom (zonder pan-correctie)
+  const mx1 = world1.cx + wx0 * world1.s;
+  const my1 = world1.cy - wy0 * world1.s;
+
+  // 4) pan corrigeren zodat cursor "locked" blijft
+  view.panX += (mx - mx1);
+  view.panY += (my - my1);
+
+  scheduleRenderAll();
+}, { passive: false });
 
   canvas.addEventListener("dblclick", () => {
     view.panX = 0; view.panY = 0; view.zoom = 1.0;
