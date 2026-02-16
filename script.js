@@ -722,11 +722,23 @@ if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
 }
   // -------------------- ray bundles --------------------
   function getRayReferencePlane(surfaces) {
-    let refIdx = 1;
-    if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") refIdx = 0;
-    const s = surfaces[refIdx] || surfaces[0];
-    return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10)), refIdx };
+  // Prefer STOP as the fill plane (physically meaningful)
+  const stopIdx = findStopSurfaceIndex(surfaces);
+  if (stopIdx >= 0) {
+    const s = surfaces[stopIdx];
+    return {
+      xRef: s.vx,
+      apRef: Math.max(1e-3, Number(s.ap || 10) * 0.98),
+      refIdx: stopIdx
+    };
   }
+
+  // fallback: surface 1 (or 0 if needed)
+  let refIdx = 1;
+  if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") refIdx = 0;
+  const s = surfaces[refIdx] || surfaces[0];
+  return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10) * 0.98), refIdx };
+}
 
   function buildRays(surfaces, fieldAngleDeg, count) {
     const n = Math.max(3, Math.min(101, count | 0));
