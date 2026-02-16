@@ -1623,7 +1623,6 @@ const title1 = `${lens.name} • ${lenTxt} • EFL ${eflTxt} • T≈ ${tTxt}`;
 const title2 = `${rearTxt} • LENSFOCUS ${lensOff.toFixed(2)}mm • PL@-52 • SENSOR@0`;
 
 drawTitleOverlay(`${title1} • ${title2}`);
-   );
 }
 
   // -------------------- view controls --------------------
