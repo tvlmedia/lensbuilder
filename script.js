@@ -555,7 +555,8 @@
 
       pts.push(hitInfo.hit);
 
-      if (hitInfo.vignetted) { vignetted = true; break; }
+      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
+if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
       const nAfter = glassN(s.glass, wavePreset);
 
@@ -1367,29 +1368,32 @@
     const imgH = preview.imgCanvas.height;
     const imgData = hasImg ? preview.imgCtx.getImageData(0, 0, imgW, imgH).data : null;
 
-    function sample(u, v) {
-      if (!hasImg) return [20, 20, 20, 255];
-      if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
+   function sample(u, v) {
+  // als image niet klaar is -> geel (dus dan weet je dat dit het probleem is)
+  if (!hasImg) return [255, 255, 0, 255];
 
-      const x = u * (imgW - 1);
-      const y = v * (imgH - 1);
-      const x0 = Math.floor(x), y0 = Math.floor(y);
-      const x1 = Math.min(imgW - 1, x0 + 1);
-      const y1 = Math.min(imgH - 1, y0 + 1);
-      const tx = x - x0, ty = y - y0;
+  // buiten beeld -> rood
+  if (u < 0 || u > 1 || v < 0 || v > 1) return [255, 0, 0, 255];
 
-      function px(ix, iy) {
-        const o = (iy * imgW + ix) * 4;
-        return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
-      }
+  const x = u * (imgW - 1);
+  const y = v * (imgH - 1);
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x1 = Math.min(imgW - 1, x0 + 1);
+  const y1 = Math.min(imgH - 1, y0 + 1);
+  const tx = x - x0, ty = y - y0;
 
-      const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
-      const lerp = (a, b, t) => a + (b - a) * t;
+  function px(ix, iy) {
+    const o = (iy * imgW + ix) * 4;
+    return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
+  }
 
-      const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
-      const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
-      return c0.map((v0, i) => lerp(v0, c1[i], ty));
-    }
+  const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
+  const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
+  return c0.map((v0, i) => lerp(v0, c1[i], ty));
+}
 
     const out = pctx.createImageData(W, H);
     const outD = out.data;
@@ -1407,15 +1411,15 @@
 
         let r = 0, g = 0, b = 0, a = 255;
 
-        if (yObj == null || xObj == null) {
-          r = g = b = 0;
-        } else {
-          const u = 0.5 + (xObj / (2 * halfObjH));
-          const v = 0.5 - (yObj / (2 * halfObjH));
-          const c = sample(u, v);
-          r = c[0]; g = c[1]; b = c[2]; a = c[3];
-        }
-
+       if (yObj == null || xObj == null) {
+  // mapping faalt -> blauw
+  r = 0; g = 120; b = 255; a = 255;
+} else {
+  const u = 0.5 + (xObj / (2 * halfObjH));
+  const v = 0.5 - (yObj / (2 * halfObjH));
+  const c = sample(u, v);
+  r = c[0]; g = c[1]; b = c[2]; a = c[3];
+}
         const o = (j * W + i) * 4;
         outD[o] = r;
         outD[o + 1] = g;
@@ -1896,16 +1900,19 @@
         const url = URL.createObjectURL(f);
         const im = new Image();
         im.onload = () => {
-          preview.img = im;
+  preview.img = im;
 
-          preview.imgCanvas.width = im.naturalWidth;
-          preview.imgCanvas.height = im.naturalHeight;
-          preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-          preview.imgCtx.drawImage(im, 0, 0);
+  preview.imgCanvas.width = im.naturalWidth;
+  preview.imgCanvas.height = im.naturalHeight;
+  preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+  preview.imgCtx.drawImage(im, 0, 0);
 
-          preview.ready = true;
-          URL.revokeObjectURL(url);
-        };
+  preview.ready = true;
+  setRightTab("preview");
+  renderPreview();
+
+  URL.revokeObjectURL(url);
+};
         im.src = url;
       });
     }
