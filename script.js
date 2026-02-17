@@ -58,8 +58,8 @@ if (cssW < 10 || cssH < 10) {
  requestAnimationFrame(() => {
   resizeCanvasToCSS();               // ✅ retry rays canvas
   resizePreviewCanvasToCSS();        // ✅ retry preview canvas
-  renderAll();                       // ✅ redraw rays view zodra sizes terug zijn
-  if (preview.worldReady) drawPreviewViewport();
+scheduleRenderAll();
+    if (preview.worldReady) drawPreviewViewport();
 });
 return;
 }
