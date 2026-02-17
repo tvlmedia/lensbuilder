@@ -2460,11 +2460,15 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
     return Math.pow(cosT, 4);
   }
 
-  // === FAST PATH (your current LUT approach) ===
+   // === FAST PATH (LUT) + optional CA (no blur, per-channel mapping) ===
   function renderFastLUT(){
     const LUT_N = 900;
-    const rObjLUT  = new Float32Array(LUT_N);
-    const transLUT = new Float32Array(LUT_N);
+
+    // If CA on: build 3 LUT sets for (R,G,B) = (c,d,g)
+    const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
+
+    const rObjLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+    const transLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
     const naturalLUT = new Float32Array(LUT_N);
 
     const epsX = 0.05;
@@ -2485,19 +2489,20 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
       return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
     }
 
-    function lookup(absR){
+    function lookup(ch, absR){
       const t = clamp(absR / rMaxSensor, 0, 1);
       const x = t * (LUT_N - 1);
       const i0 = Math.floor(x);
       const i1 = Math.min(LUT_N - 1, i0 + 1);
       const u = x - i0;
       return {
-        rObj:  rObjLUT[i0]*(1-u) + rObjLUT[i1]*u,
-        trans: transLUT[i0]*(1-u) + transLUT[i1]*u,
+        rObj:  rObjLUT[ch][i0]*(1-u) + rObjLUT[ch][i1]*u,
+        trans: transLUT[ch][i0]*(1-u) + transLUT[ch][i1]*u,
         nat:   naturalLUT[i0]*(1-u) + naturalLUT[i1]*u,
       };
     }
 
+    // Build LUTs
     for (let k = 0; k < LUT_N; k++){
       const a = k / (LUT_N - 1);
       const rS = a * rMaxSensor;
@@ -2505,44 +2510,47 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
 
       naturalLUT[k] = naturalCos4(rS);
 
-      // chief mapping
-      {
-        const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
-        const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wavePreset);
-        if (!trC.vignetted && !trC.tir){
-          const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
-          rObjLUT[k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
-        } else rObjLUT[k] = 0;
-      }
+      for (let ch = 0; ch < 3; ch++){
+        const wave = WAVES[ch];
 
-      // mechanical throughput (monte carlo in LUT)
-      let ok = 0, total = 0;
-      for (let iy = 0; iy < lutPupilSqrt; iy++){
-        for (let ix = 0; ix < lutPupilSqrt; ix++){
-          const u = (ix + Math.random()) / lutPupilSqrt;
-          const v = (iy + Math.random()) / lutPupilSqrt;
-
-          const pp = samplePupilDisk(u, v);
-          const target = { x: xStop, y: pp.y, z: pp.z };
-          const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
-
-          const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wavePreset);
-          if (tr.vignetted || tr.tir){ total++; continue; }
-
-          const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-          if (!hitObj){ total++; continue; }
-
-          ok++; total++;
+        // chief mapping for this wavelength
+        {
+          const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
+          const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wave);
+          if (!trC.vignetted && !trC.tir){
+            const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
+            rObjLUT[ch][k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
+          } else rObjLUT[ch][k] = 0;
         }
+
+        // throughput for this wavelength (MC)
+        let ok = 0, total = 0;
+        for (let iy = 0; iy < lutPupilSqrt; iy++){
+          for (let ix = 0; ix < lutPupilSqrt; ix++){
+            const uu = (ix + Math.random()) / lutPupilSqrt;
+            const vv = (iy + Math.random()) / lutPupilSqrt;
+
+            const pp = samplePupilDisk(uu, vv);
+            const target = { x: xStop, y: pp.y, z: pp.z };
+            const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
+
+            const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wave);
+            if (tr.vignetted || tr.tir){ total++; continue; }
+
+            const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+            if (!hitObj){ total++; continue; }
+
+            ok++; total++;
+          }
+        }
+        transLUT[ch][k] = total ? (ok/total) : 0;
       }
-      transLUT[k] = total ? (ok/total) : 0;
     }
 
+    // Render
     preview.worldCanvas.width = W;
     preview.worldCanvas.height = H;
     const wctx = preview.worldCtx;
-    wctx.imageSmoothingEnabled = true;
-    wctx.imageSmoothingQuality = "high";
 
     const out = wctx.createImageData(W, H);
     const outD = out.data;
@@ -2554,25 +2562,52 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
         const sx = ((px + 0.5) / W - 0.5) * sensorWv;
         const rS = Math.hypot(sx, sy);
 
-        const L = lookup(rS);
-        const g = clamp(L.trans * L.nat, 0, 1);
-
         const idx = (py * W + px) * 4;
-        if (g < 1e-4) { outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255; continue; }
 
-        let ox = 0, oy = 0;
-        if (rS > 1e-9) {
-          const s = L.rObj / rS;
-          ox = sx * s;
-          oy = sy * s;
+        // If no CA: just ch=1 (green) and replicate
+        if (!doCA) {
+          const L = lookup(1, rS);
+          const g = clamp(L.trans * L.nat, 0, 1);
+          if (g < 1e-4) { outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255; continue; }
+
+          let ox=0, oy=0;
+          if (rS > 1e-9) { const s = L.rObj / rS; ox = sx * s; oy = sy * s; }
+          const uv = objectMmToUV(ox, oy);
+          const c = sample(uv.u, uv.v);
+
+          outD[idx]   = clamp(c[0] * g, 0, 255);
+          outD[idx+1] = clamp(c[1] * g, 0, 255);
+          outD[idx+2] = clamp(c[2] * g, 0, 255);
+          outD[idx+3] = 255;
+          continue;
         }
 
-        const { u, v } = objectMmToUV(ox, oy);
-        const c = sample(u, v);
+        // CA: per-channel mapping + throughput
+        const Lr = lookup(0, rS);
+        const Lg = lookup(1, rS);
+        const Lb = lookup(2, rS);
 
-        outD[idx]   = clamp(c[0] * g, 0, 255);
-        outD[idx+1] = clamp(c[1] * g, 0, 255);
-        outD[idx+2] = clamp(c[2] * g, 0, 255);
+        const gr = clamp(Lr.trans * Lr.nat, 0, 1);
+        const gg = clamp(Lg.trans * Lg.nat, 0, 1);
+        const gb = clamp(Lb.trans * Lb.nat, 0, 1);
+
+        if (gr < 1e-4 && gg < 1e-4 && gb < 1e-4) {
+          outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255; continue;
+        }
+
+        function objXY(L){
+          if (rS <= 1e-9) return { ox:0, oy:0 };
+          const s = L.rObj / rS;
+          return { ox: sx * s, oy: sy * s };
+        }
+
+        const pr = objXY(Lr); const uvr = objectMmToUV(pr.ox, pr.oy); const cr = sample(uvr.u, uvr.v);
+        const pg = objXY(Lg); const uvg = objectMmToUV(pg.ox, pg.oy); const cg = sample(uvg.u, uvg.v);
+        const pb = objXY(Lb); const uvb = objectMmToUV(pb.ox, pb.oy); const cb = sample(uvb.u, uvb.v);
+
+        outD[idx]   = clamp(cr[0] * gr, 0, 255);
+        outD[idx+1] = clamp(cg[1] * gg, 0, 255);
+        outD[idx+2] = clamp(cb[2] * gb, 0, 255);
         outD[idx+3] = 255;
       }
     }
