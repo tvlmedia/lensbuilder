@@ -312,15 +312,15 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
 
   let lens = sanitizeLens(omit50ConceptV1());
 
-function loadLens(obj) {
-  lens = sanitizeLens(obj);
-  selectedIndex = 0;
-  sanitizeAllApertures(lens.surfaces);   // ✅ alleen minimum/plane-cap
-  buildTable();
-  applySensorToIMS();
-  renderAll();
-  if (preview.ready) scheduleRenderPreview();
-}
+  function loadLens(obj) {
+    lens = sanitizeLens(obj);
+    selectedIndex = 0;
+    clampAllApertures(lens.surfaces);
+    buildTable();
+    applySensorToIMS();
+    renderAll();
+    if (preview.ready) scheduleRenderPreview();
+  }
 
   // -------------------- table helpers --------------------
   function clampSelected() {
@@ -460,10 +460,11 @@ function loadLens(obj) {
     else if (k === "type") s.type = el.value;
     else s[k] = num(el.value, s[k] ?? 0);
 
-   applySensorToIMS();
-buildTable();
-renderAll();
-scheduleRenderPreview();
+    applySensorToIMS();
+    clampAllApertures(lens.surfaces);
+    buildTable();
+    renderAll();
+    scheduleRenderPreview();
   }
 
   // -------------------- math helpers --------------------
@@ -491,7 +492,7 @@ scheduleRenderPreview();
   function intersectSurface(ray, surf) {
     const vx = surf.vx;
     const R = surf.R;
-    const ap = apEff(surf);
+    const ap = Math.max(0, surf.ap);
 
     if (Math.abs(R) < 1e-9) {
       if (Math.abs(ray.d.x) < 1e-12) return null;
@@ -597,7 +598,7 @@ function refract3(I, N, n1, n2){
 function intersectSurface3D(ray, surf){
   const vx = surf.vx;
   const R = Number(surf.R || 0);
-  const ap = apEff(surf);
+  const ap = Math.max(0, Number(surf.ap || 0));
 
   // Special: MECH/BAFFLE = plane clip only, no refraction (handled in tracer via nBefore=nAfter)
   // But geometry is identical to plane.
@@ -664,21 +665,20 @@ function traceRayReverse3D(ray, surfaces, wavePreset){
     const s = surfaces[i];
     const type = String(s?.type || "").toUpperCase();
     const isIMS  = type === "IMS";
-    const isOBJ  = type === "OBJ";
     const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
     const hitInfo = intersectSurface3D(ray, s);
     if (!hitInfo){ vignetted = true; break; }
 
-    // ✅ OBJ + IMS mogen niet clippen
-    if (!isIMS && !isOBJ && hitInfo.vignetted){ vignetted = true; break; }
+    if (!isIMS && hitInfo.vignetted){ vignetted = true; break; }
 
-    // ✅ OBJ + IMS + MECH: geen refractie
-    if (isIMS || isOBJ || isMECH){
+    // IMS and MECH don't refract
+    if (isIMS || isMECH){
       ray = { p: hitInfo.hit, d: ray.d };
       continue;
     }
 
+    // n on right side (after surface) vs left side (before surface) in reverse
     const nRight = glassN(String(s.glass || "AIR"), wavePreset);
     const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
 
@@ -714,42 +714,21 @@ function intersectPlaneX3D(ray, xPlane){
     return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
   }
 
-function apEff(s){
-  if (!s) return AP_MIN;
-  const t = String(s.type || "").toUpperCase();
-  const ap = Math.max(0, Number(s.ap || 0));
+  function clampSurfaceAp(s) {
+    if (!s) return;
 
-  // OBJ/IMS nooit clampen (zoals je al wilde)
-  if (t === "IMS" || t === "OBJ") return ap;
+    const t = String(s.type || "").toUpperCase();
+    if (t === "IMS" || t === "OBJ") return; // don't clamp
 
-  // MECH/BAFFLE/HOUSING: ook gewoon laten clippen, maar wél eff beperken
-  const lim = maxApForSurface(s);
-  return Math.max(AP_MIN, Math.min(ap, lim));
-}
-   
-function sanitizeSurfaceAp(s){
-  if (!s) return;
-  const t = String(s.type || "").toUpperCase();
-  if (t === "IMS" || t === "OBJ") return;
+    const lim = maxApForSurface(s);
+    const ap = Number(s.ap || 0);
+    s.ap = Math.max(AP_MIN, Math.min(ap, lim));
+  }
 
-  let ap = Number(s.ap);
-  if (!Number.isFinite(ap)) ap = 0;
-
-  // minimum altijd
-  ap = Math.max(AP_MIN, ap);
-
-  // plane-cap ALLEEN voor mechanical planes, NIET voor STOP
-  const isPlane = Math.abs(Number(s.R || 0)) < 1e-9;
-  const isMech  = (t === "MECH" || t === "BAFFLE" || t === "HOUSING");
-  if (isPlane && isMech) ap = Math.min(ap, AP_MAX_PLANE);
-
-  s.ap = ap;
-}
-
-function sanitizeAllApertures(surfaces){
-  if (!Array.isArray(surfaces)) return;
-  for (const s of surfaces) sanitizeSurfaceAp(s);
-}
+  function clampAllApertures(surfaces) {
+    if (!Array.isArray(surfaces)) return;
+    for (const s of surfaces) clampSurfaceAp(s);
+  }
 
   function surfaceXatY(s, y) {
     const vx = s.vx;
@@ -765,7 +744,7 @@ function sanitizeAllApertures(surfaces){
   }
 
   function maxNonOverlappingSemiDiameter(sFront, sBack, minCT = 0.10) {
-    const apGuess = Math.max(0.01, Math.min(apEff(sFront), apEff(sBack)));
+    const apGuess = Math.max(0.01, Math.min(Number(sFront.ap || 0), Number(sBack.ap || 0)));
     function gapAt(y) {
       const xf = surfaceXatY(sFront, y);
       const xb = surfaceXatY(sBack, y);
@@ -792,13 +771,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   let vignetted = false;
   let tir = false;
 
+  // medium vóór de 1e surface = AIR
   let nBefore = 1.0;
 
   for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i];
     const type = String(s?.type || "").toUpperCase();
-    const isIMS  = type === "IMS";
-    const isOBJ  = type === "OBJ";
+    const isIMS = type === "IMS";
     const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
     if (skipIMS && isIMS) continue;
@@ -808,15 +787,17 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     pts.push(hitInfo.hit);
 
-    // ✅ OBJ + IMS mogen niet vignetten
-    if (!isIMS && !isOBJ && hitInfo.vignetted) { vignetted = true; break; }
+    // IMS (sensor plane) mag niet vignetten
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-    // ✅ OBJ + IMS + MECH = geen refractie
-    if (isIMS || isOBJ || isMECH) {
+    // IMS + MECH = géén refractie (alleen doorlaten / clippen)
+    if (isIMS || isMECH) {
       ray = { p: hitInfo.hit, d: ray.d };
+      // nBefore blijft gelijk
       continue;
     }
 
+    // OSLO-ish: glass = medium AFTER surface
     const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
 
     if (Math.abs(nAfter - nBefore) < 1e-9) {
@@ -843,8 +824,7 @@ function traceRayReverse(ray, surfaces, wavePreset) {
   for (let i = surfaces.length - 1; i >= 0; i--) {
     const s = surfaces[i];
     const type = String(s?.type || "").toUpperCase();
-    const isIMS  = type === "IMS";
-    const isOBJ  = type === "OBJ";
+    const isIMS = type === "IMS";
     const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
     const hitInfo = intersectSurface(ray, s);
@@ -852,15 +832,16 @@ function traceRayReverse(ray, surfaces, wavePreset) {
 
     pts.push(hitInfo.hit);
 
-    // ✅ OBJ + IMS mogen niet vignetten
-    if (!isIMS && !isOBJ && hitInfo.vignetted) { vignetted = true; break; }
+    // IMS (sensor plane) mag niet vignetten
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-    // ✅ OBJ + IMS + MECH = geen refractie
-    if (isIMS || isOBJ || isMECH) {
+    // IMS + MECH = géén refractie
+    if (isIMS || isMECH) {
       ray = { p: hitInfo.hit, d: ray.d };
       continue;
     }
 
+    // Reverse: rechts = medium AFTER surface, links = medium BEFORE surface
     const nRight = glassN(String(s.glass || "AIR"), wavePreset);
     const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
 
@@ -1259,9 +1240,12 @@ function drawBackgroundCSS(w, h) {
       const medium = String(sA.glass || "AIR").toUpperCase();
       if (medium === "AIR") continue;
 
-    const apA = apEff(sA);
-const apB = apEff(sB);
-let apRegion = Math.max(0.01, Math.min(apA, apB));
+      const apA = Math.max(0, Number(sA.ap || 0));
+      const apB = Math.max(0, Number(sB.ap || 0));
+      const limA = maxApForSurface(sA);
+      const limB = maxApForSurface(sB);
+
+      let apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
 
       if (Math.abs(sA.R) > 1e-9 && Math.abs(sB.R) > 1e-9) {
         const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
@@ -1285,7 +1269,7 @@ let apRegion = Math.max(0.01, Math.min(apA, apB));
 ctx.strokeStyle = "rgba(255,255,255,.22)";
      
     const vx = s.vx;
-   const ap = apEff(s);
+    const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
 
     if (Math.abs(s.R) < 1e-9) {
       const a = worldToScreen({ x: vx, y: -ap }, world);
@@ -1718,23 +1702,6 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     const lensShift = Number(ui.lensFocus?.value || 0);
     computeVertices(lens.surfaces, lensShift);
     clampSelected();
-
-     // --- apEff clamp warning (UI only, does NOT mutate) ---
-let clampWarn = null;
-for (let i = 0; i < lens.surfaces.length; i++){
-  const s = lens.surfaces[i];
-  const t = String(s.type || "").toUpperCase();
-  if (t === "OBJ" || t === "IMS") continue;
-
-  const lim = maxApForSurface(s);
-  const ap = Number(s.ap || 0);
-
-  if (Number.isFinite(ap) && ap > lim + 1e-6){
-    clampWarn = `AP clamp (surface ${i}): ap=${ap.toFixed(2)}mm > max≈${lim.toFixed(2)}mm (R=${Number(s.R||0).toFixed(2)})`;
-    break;
-  }
-}
-if (clampWarn && ui.footerWarn) ui.footerWarn.textContent = clampWarn;
 
     const { w: sensorW, h: sensorH, halfH } = getSensorWH();
     const fieldAngle = Number(ui.fieldAngle?.value || 0);
@@ -2171,8 +2138,8 @@ pctx.restore();
       { type: "", R: R1, t: ct, ap, glass: glass1, stop: false },
       { type: "", R: R2, t: rearAir, ap, glass: "AIR", stop: false },
     ];
-   sanitizeAllApertures(chunk);
-return chunk;
+    clampAllApertures(chunk);
+    return chunk;
   }
 
   function buildAchromatCementedAuto({ f, ap, ct, rearAir, form, glass1, glass2 }) {
@@ -2197,8 +2164,8 @@ return chunk;
       { type: "", R: R2, t: ct, ap, glass: glass2, stop: false },
       { type: "", R: R3, t: rearAir, ap, glass: "AIR", stop: false },
     ];
-    sanitizeAllApertures(chunk);
-return chunk;
+    clampAllApertures(chunk);
+    return chunk;
   }
 
   function buildAchromatAirSpacedAuto({ f, ap, ct, gap, rearAir, form, glass1, glass2 }) {
@@ -2227,8 +2194,8 @@ return chunk;
       { type: "", R: R3, t: ct, ap, glass: glass2, stop: false },
       { type: "", R: R4, t: rearAir, ap, glass: "AIR", stop: false },
     ];
-   sanitizeAllApertures(chunk);
-return chunk;
+    clampAllApertures(chunk);
+    return chunk;
   }
 
   function readElementModalValues() {
@@ -2339,7 +2306,7 @@ function renderPreview() {
   computeVertices(lens.surfaces, lensShift);
 
   applySensorToIMS();
-sanitizeAllApertures(lens.surfaces);
+  clampAllApertures(lens.surfaces);
 
   const wavePreset = ui.wavePreset?.value || "d";
   if (ui.sensorOffset) ui.sensorOffset.value = "0";
@@ -2425,18 +2392,19 @@ sanitizeAllApertures(lens.surfaces);
     return c0.map((v0, i) => lerp(v0, c1[i], ty));
   }
 
-  // -------------------- FOCUS-AWARE render (pupil sampling per pixel) --------------------
- // Dynamische SPP (houd ray-budget onder controle)
-const pxCount = W * H;
-const targetRays = 8_000_000; // tweak: 4M sneller, 12M mooier
-const PREVIEW_SPP = Math.max(2, Math.min(24, Math.floor(targetRays / Math.max(1, pxCount))));
+  // -------------------- LUTs (radial mapping + throughput + natural cos^4) --------------------
+  const LUT_N = 900;
+  const rObjLUT  = new Float32Array(LUT_N);
+  const transLUT = new Float32Array(LUT_N);
+  const naturalLUT = new Float32Array(LUT_N);
 
+  const PUPIL_SQRT = 14; // 196 samples
   const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 
   function clamp(x, a, b){ return x < a ? a : (x > b ? b : x); }
 
-  // concentric square->disk mapping (zelfde als je al had)
   function samplePupilDisk(u, v){
+    // concentric square->disk mapping
     const a = (u * 2 - 1);
     const b = (v * 2 - 1);
 
@@ -2454,18 +2422,80 @@ const PREVIEW_SPP = Math.max(2, Math.min(24, Math.floor(targetRays / Math.max(1,
     return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
   }
 
-  // simpele deterministische "random" per pixel/sample (zodat het niet flikkert)
-  function hash01(a, b, c){
-    // integer hash -> 0..1
-    let x = (a * 73856093) ^ (b * 19349663) ^ (c * 83492791);
-    x = (x << 13) ^ x;
-    const t = (x * (x * x * 15731 + 789221) + 1376312589) >>> 0;
-    return (t & 0xfffffff) / 0xfffffff;
+  function lookupNatural(absR){
+    const t = clamp(absR / rMaxSensor, 0, 1);
+    const x = t * (LUT_N - 1);
+    const i0 = Math.floor(x);
+    const i1 = Math.min(LUT_N - 1, i0 + 1);
+    const u = x - i0;
+    return naturalLUT[i0] * (1 - u) + naturalLUT[i1] * u;
   }
 
-  function naturalCos4ForRayDir(dir){
-    const cosT = clamp(Math.abs(dir.x), 0, 1);
-    return Math.pow(cosT, 4);
+  function lookupRadial(absR){
+    const t = clamp(absR / rMaxSensor, 0, 1);
+    const x = t * (LUT_N - 1);
+    const i0 = Math.floor(x);
+    const i1 = Math.min(LUT_N - 1, i0 + 1);
+    const u = x - i0;
+
+    const rObj  = rObjLUT[i0]  * (1 - u) + rObjLUT[i1]  * u;
+    const trans = transLUT[i0] * (1 - u) + transLUT[i1] * u;
+    return { rObj, trans };
+  }
+
+  for (let k = 0; k < LUT_N; k++){
+    const a = k / (LUT_N - 1);
+    const rS = a * rMaxSensor;
+
+    const pS = { x: startX, y: rS, z: 0 };
+
+    // natural cos^4 (chief direction to stop axis)
+    {
+      const dirChief0 = normalize3({ x: xStop - startX, y: -rS, z: 0 });
+      const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
+      naturalLUT[k] = Math.pow(cosT, 4);
+    }
+
+    // chief mapping rS -> rObj
+    {
+      const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
+      const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wavePreset);
+
+      if (!trC.vignetted && !trC.tir){
+        const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
+        rObjLUT[k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
+      } else {
+        rObjLUT[k] = 0;
+      }
+    }
+
+    // mechanical throughput (pupil disk sampling)
+    let ok = 0, total = 0;
+
+    for (let iy = 0; iy < PUPIL_SQRT; iy++){
+      for (let ix = 0; ix < PUPIL_SQRT; ix++){
+        const u = (ix + Math.random()) / PUPIL_SQRT;
+        const v = (iy + Math.random()) / PUPIL_SQRT;
+
+        const pp = samplePupilDisk(u, v);
+        const target = { x: xStop, y: pp.y, z: pp.z };
+        const dir = normalize3({
+          x: target.x - pS.x,
+          y: target.y - pS.y,
+          z: target.z - pS.z
+        });
+
+        const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wavePreset);
+        if (tr.vignetted || tr.tir){ total++; continue; }
+
+        const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+        if (!hitObj){ total++; continue; }
+
+        ok++; total++;
+      }
+    }
+
+    transLUT[k] = total > 0 ? (ok / total) : 0;
   }
 
   // -------------------- render to world canvas --------------------
@@ -2488,71 +2518,37 @@ const PREVIEW_SPP = Math.max(2, Math.min(24, Math.floor(targetRays / Math.max(1,
     return { u, v };
   }
 
-    for (let py = 0; py < H; py++) {
+  for (let py = 0; py < H; py++) {
     const sy = (0.5 - (py + 0.5) / H) * sensorHv;
 
     for (let px = 0; px < W; px++) {
       const sx = ((px + 0.5) / W - 0.5) * sensorWv;
+      const rS = Math.hypot(sx, sy);
+
+      const { rObj, trans } = lookupRadial(rS);
+      const g = clamp(trans * lookupNatural(rS), 0, 1);
 
       const idx = (py * W + px) * 4;
 
-      // Sensor punt in 3D (z=0 lijn is meridional center; we gaan pupil-samplen in y/z)
-      const pS = { x: startX, y: sy, z: sx }; 
-      // LET OP: we stoppen sx in z en sy in y zodat je echt 2D sensorvlak gebruikt.
-      // (maakt r = sqrt(y^2+z^2) correct voor vignette)
-
-      let accR = 0, accG = 0, accB = 0;
-      let hits = 0;
-
-      // Monte Carlo door pupil
-      for (let s = 0; s < PREVIEW_SPP; s++){
-        const ru = hash01(px, py, s * 2 + 1);
-        const rv = hash01(px, py, s * 2 + 2);
-
-        const pp = samplePupilDisk(ru, rv);
-
-        // target op het stop vlak (xStop) met pupil offset
-        const target = { x: xStop, y: pp.y, z: pp.z };
-
-        const dir = normalize3({
-          x: target.x - pS.x,
-          y: target.y - pS.y,
-          z: target.z - pS.z
-        });
-
-        // trace reverse door lens
-        const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wavePreset);
-        if (tr.vignetted || tr.tir) continue;
-
-        // snij object plane
-        const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-        if (!hitObj) continue;
-
-        // object coords in mm (we gebruiken y/z als object plane axes)
-        const ox = hitObj.z; // komt van sensor sx
-        const oy = hitObj.y; // komt van sensor sy
-
-        const { u, v } = objectMmToUV(ox, oy);
-        const c = sample(u, v);
-
-        // natuurlijke cos^4 (per sample) -> helpt edge falloff
-        const nat = naturalCos4ForRayDir(dir);
-
-        accR += c[0] * nat;
-        accG += c[1] * nat;
-        accB += c[2] * nat;
-        hits++;
-      }
-
-      if (hits <= 0){
+      if (g < 1e-4) {
         outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 0; outD[idx+3] = 255;
         continue;
       }
 
-      const inv = 1 / hits;
-      outD[idx]     = clamp(accR * inv, 0, 255);
-      outD[idx + 1] = clamp(accG * inv, 0, 255);
-      outD[idx + 2] = clamp(accB * inv, 0, 255);
+      // map sensor vector -> object vector via radial scale
+      let ox = 0, oy = 0;
+      if (rS > 1e-9) {
+        const s = rObj / rS;
+        ox = sx * s;
+        oy = sy * s;
+      }
+
+      const { u, v } = objectMmToUV(ox, oy);
+      const c = sample(u, v);
+
+      outD[idx]     = clamp(c[0] * g, 0, 255);
+      outD[idx + 1] = clamp(c[1] * g, 0, 255);
+      outD[idx + 2] = clamp(c[2] * g, 0, 255);
       outD[idx + 3] = 255;
     }
   }
@@ -2584,8 +2580,8 @@ const PREVIEW_SPP = Math.max(2, Math.min(24, Math.floor(targetRays / Math.max(1,
     }
 
     computeVertices(lens.surfaces);
-sanitizeAllApertures(lens.surfaces);
-     buildTable();
+    clampAllApertures(lens.surfaces);
+    buildTable();
     renderAll();
     scheduleRenderPreview();
 
@@ -2613,8 +2609,8 @@ sanitizeAllApertures(lens.surfaces);
     const newAp = efl / (2 * targetT);
     lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
 
-sanitizeAllApertures(lens.surfaces);
-     buildTable();
+    clampAllApertures(lens.surfaces);
+    buildTable();
     renderAll();
     scheduleRenderPreview();
 
@@ -2707,8 +2703,8 @@ sanitizeAllApertures(lens.surfaces);
       }
     }
 
-sanitizeAllApertures(lens.surfaces);
-     buildTable();
+    clampAllApertures(lens.surfaces);
+    buildTable();
     renderAll();
     scheduleRenderPreview();
     closeNewLensModal();
@@ -3036,11 +3032,12 @@ if (obj.glass_note && typeof obj.glass_note === "object") {
   bindPreviewViewControls();
   bindControlRerenders();
 
- // force preview res default
-if (ui.prevRes) {
-  ui.prevRes.value = "720";
-  ui.prevRes.dispatchEvent(new Event("change", { bubbles: true }));
-}
+  // force preview res default
+  if (ui.prevRes) {
+    ui.prevRes.value = "1920";
+    ui.prevRes.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
 
   renderAll();
