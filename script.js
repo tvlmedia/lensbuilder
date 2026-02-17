@@ -2447,422 +2447,410 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     return Math.round(v*255);
   }
 
- function renderPreview() {
-  if (!pctx || !previewCanvasEl) return;
-  if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
+  function renderPreview() {
+    if (!pctx || !previewCanvasEl) return;
+    if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
 
-  const doDOF = !!document.getElementById("optDOF")?.checked;
-  const doCA  = !!document.getElementById("optCA")?.checked;
-  const q     = String(document.getElementById("renderQuality")?.value || "normal");
+    const doDOF = !!document.getElementById("optDOF")?.checked;
+    const doCA  = !!document.getElementById("optCA")?.checked;
+    const q     = String(document.getElementById("renderQuality")?.value || "normal");
 
-  const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;
-  const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));
+    const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;
+    const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));
 
-  const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
-  const sensorX   = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
-  const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0.0;
+    const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
+    const sensorX   = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+    const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0.0;
 
-  computeVertices(lens.surfaces, lensShift, sensorX);
+    computeVertices(lens.surfaces, lensShift, sensorX);
 
-  const wavePreset = ui.wavePreset?.value || "d";
-  const { w: sensorW, h: sensorH } = getSensorWH();
+    const wavePreset = ui.wavePreset?.value || "d";
+    const { w: sensorW, h: sensorH } = getSensorWH();
 
-  const stopIdx = findStopSurfaceIndex(lens.surfaces);
-  const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
-  const xStop = stopSurf.vx;
-  const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
+    const stopIdx = findStopSurfaceIndex(lens.surfaces);
+    const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
+    const xStop = stopSurf.vx;
+    const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 
-  const objDist   = Number(ui.prevObjDist?.value || 2000);
-  const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+    const objDist   = Number(ui.prevObjDist?.value || 2000);
+    const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
-  const objH      = Number(ui.prevObjH?.value || 1650);
-  const halfObjH  = Math.max(1e-3, objH * 0.5);
+    const objH      = Number(ui.prevObjH?.value || 1650);
+    const halfObjH  = Math.max(1e-3, objH * 0.5);
 
-  const base = Math.max(64, Number(ui.prevRes?.value || 720));
-  const aspect = sensorW / sensorH;
-  const W = Math.max(64, Math.round(base * aspect));
-  const H = Math.max(64, base);
+    const base = Math.max(64, Number(ui.prevRes?.value || 720));
+    const aspect = sensorW / sensorH;
+    const W = Math.max(64, Math.round(base * aspect));
+    const H = Math.max(64, base);
 
-  const sensorWv = sensorW * OV;
-  const sensorHv = sensorH * OV;
-  const halfWv = sensorWv * 0.5;
-  const halfHv = sensorHv * 0.5;
-  const rMaxSensor = Math.hypot(halfWv, halfHv);
+    const sensorWv = sensorW * OV;
+    const sensorHv = sensorH * OV;
+    const halfWv = sensorWv * 0.5;
+    const halfHv = sensorHv * 0.5;
+    const rMaxSensor = Math.hypot(halfWv, halfHv);
 
-  const hasImg = !!(preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
-  const imgW = preview.imgCanvas.width;
-  const imgH = preview.imgCanvas.height;
-  const imgData = hasImg ? preview.imgData : null;
+    const hasImg = !!(preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
+    const imgW = preview.imgCanvas.width;
+    const imgH = preview.imgCanvas.height;
+    const imgData = hasImg ? preview.imgData : null;
 
-  function sample(u, v) {
-    if (!hasImg) return [255, 255, 255, 255];
-    if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
+    function sample(u, v) {
+      if (!hasImg) return [255, 255, 255, 255];
+      if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
 
-    const x = u * (imgW - 1);
-    const y = v * (imgH - 1);
-    const x0 = Math.floor(x), y0 = Math.floor(y);
-    const x1 = Math.min(imgW - 1, x0 + 1);
-    const y1 = Math.min(imgH - 1, y0 + 1);
-    const tx = x - x0, ty = y - y0;
+      const x = u * (imgW - 1);
+      const y = v * (imgH - 1);
+      const x0 = Math.floor(x), y0 = Math.floor(y);
+      const x1 = Math.min(imgW - 1, x0 + 1);
+      const y1 = Math.min(imgH - 1, y0 + 1);
+      const tx = x - x0, ty = y - y0;
 
-    function px(ix, iy) {
-      const o = (iy * imgW + ix) * 4;
-      return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
+      function px(ix, iy) {
+        const o = (iy * imgW + ix) * 4;
+        return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
+      }
+
+      const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
+      const lerp = (a, b, t) => a + (b - a) * t;
+
+      const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
+      const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
+      return c0.map((v0, i) => lerp(v0, c1[i], ty));
     }
 
-    const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
-    const lerp = (a, b, t) => a + (b - a) * t;
+    const imgAsp = hasImg ? (imgW / imgH) : (16/9);
+    const halfObjW = halfObjH * imgAsp;
+    function objectMmToUV(xmm, ymm) {
+      const u = 0.5 + (xmm / (2 * halfObjW));
+      const v = 0.5 - (ymm / (2 * halfObjH));
+      return { u, v };
+    }
 
-    const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
-    const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
-    return c0.map((v0, i) => lerp(v0, c1[i], ty));
-  }
+    function naturalCos4(rS){
+      const dirChief0 = normalize3({ x: xStop - (sensorX + 0.05), y: -rS, z: 0 });
+      const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
+      return Math.pow(cosT, 4);
+    }
 
-  const imgAsp = hasImg ? (imgW / imgH) : (16 / 9);
-  const halfObjW = halfObjH * imgAsp;
+  function renderFastLUT(){
+  const LUT_N = 900;
+  const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
-  function objectMmToUV(xmm, ymm) {
-    const u = 0.5 + (xmm / (2 * halfObjW));
-    const v = 0.5 - (ymm / (2 * halfObjH));
-    return { u, v };
-  }
+  const rObjLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+  const transLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+  const naturalLUT = new Float32Array(LUT_N);
+  const sigmaLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
 
-  function naturalCos4(rS) {
-    const dirChief0 = normalize3({ x: xStop - (sensorX + 0.05), y: -rS, z: 0 });
-    const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
-    return Math.pow(cosT, 4);
-  }
+  const epsX = 0.05;
+  const startX = sensorX + epsX;
 
-  function samplePupilDisk(u, v) {
-    // Shirley/Chiu concentric mapping
+  function samplePupilDisk(u, v){
     const a = (u * 2 - 1);
     const b = (v * 2 - 1);
     let r, phi;
-    if (a === 0 && b === 0) { r = 0; phi = 0; }
-    else if (Math.abs(a) > Math.abs(b)) { r = a; phi = (Math.PI / 4) * (b / a); }
-    else { r = b; phi = (Math.PI / 2) - (Math.PI / 4) * (a / b); }
-
-    const rr = Math.abs(r) * stopAp; // stopAp = semi-diameter
+    if (a === 0 && b === 0){ r = 0; phi = 0; }
+    else if (Math.abs(a) > Math.abs(b)){
+      r = a; phi = (Math.PI/4) * (b/a);
+    } else {
+      r = b; phi = (Math.PI/2) - (Math.PI/4) * (a/b);
+    }
+    const rr = Math.abs(r) * stopAp;
     return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
   }
 
+  function lookup(ch, absR){
+    const t = clamp(absR / rMaxSensor, 0, 1);
+    const x = t * (LUT_N - 1);
+    const i0 = Math.floor(x);
+    const i1 = Math.min(LUT_N - 1, i0 + 1);
+    const u = x - i0;
+    return {
+      rObj:  rObjLUT[ch][i0]*(1-u) + rObjLUT[ch][i1]*u,
+      trans: transLUT[ch][i0]*(1-u) + transLUT[ch][i1]*u,
+      nat:   naturalLUT[i0]*(1-u) + naturalLUT[i1]*u,
+      sigma: sigmaLUT[ch][i0]*(1-u) + sigmaLUT[ch][i1]*u,
+    };
+  }
+
+  // --- build LUTs ---
+  for (let k = 0; k < LUT_N; k++){
+    const a = k / (LUT_N - 1);
+    const rS = a * rMaxSensor;
+    const pS = { x: startX, y: rS, z: 0 };
+
+    naturalLUT[k] = naturalCos4(rS);
+
+    for (let ch = 0; ch < 3; ch++){
+      const wave = WAVES[ch];
+
+      // chief ray → object radius
+      {
+        const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
+        const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wave);
+        if (!trC.vignetted && !trC.tir){
+          const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
+          rObjLUT[ch][k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
+        } else {
+          rObjLUT[ch][k] = 0;
+        }
+      }
+
+      // pupil sampling → transmission + defocus sigma on object plane
+      let ok = 0, total = 0;
+      let sumY = 0, sumZ = 0;
+      let sumYY = 0, sumZZ = 0;
+
+      for (let iy = 0; iy < lutPupilSqrt; iy++){
+        for (let ix = 0; ix < lutPupilSqrt; ix++){
+          const uu = (ix + Math.random()) / lutPupilSqrt;
+          const vv = (iy + Math.random()) / lutPupilSqrt;
+
+          const pp = samplePupilDisk(uu, vv);
+          const target = { x: xStop, y: pp.y, z: pp.z };
+          const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
+
+          const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wave);
+          total++;
+          if (tr.vignetted || tr.tir) continue;
+
+          const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+          if (!hitObj) continue;
+
+          ok++;
+          sumY  += hitObj.y; sumZ  += hitObj.z;
+          sumYY += hitObj.y * hitObj.y;
+          sumZZ += hitObj.z * hitObj.z;
+        }
+      }
+
+      transLUT[ch][k] = total ? (ok / total) : 0;
+
+      if (ok > 2){
+        const my = sumY / ok, mz = sumZ / ok;
+        const varY = Math.max(0, sumYY / ok - my*my);
+        const varZ = Math.max(0, sumZZ / ok - mz*mz);
+        sigmaLUT[ch][k] = Math.sqrt(varY + varZ); // mm on object plane
+      } else {
+        sigmaLUT[ch][k] = 0;
+      }
+    }
+  }
+
+  // --- allocate world canvas (IMPORTANT: width/height resets context state) ---
+  preview.worldCanvas.width = W;
+  preview.worldCanvas.height = H;
+  preview.worldCtx = preview.worldCanvas.getContext("2d", { willReadFrequently: true });
+const wctx = preview.worldCtx;
+
+  const out = wctx.createImageData(W, H);
+  const outD = out.data;
+
   const taps = [[0,0],[0.55,0.15],[-0.48,0.36],[0.25,-0.58],[-0.28,-0.18]];
 
-  function renderFastLUT() {
-    const LUT_N = 900;
-    const WAVES = doCA ? ["c", "d", "g"] : [wavePreset, wavePreset, wavePreset];
+  function objXY(L, sx, sy, rS){
+    if (rS <= 1e-9) return { ox:0, oy:0 };
+    const s = L.rObj / rS;
+    return { ox: sx * s, oy: sy * s };
+  }
 
-    const rObjLUT   = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
-    const transLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
-    const sigmaLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
-    const naturalLUT = new Float32Array(LUT_N);
+  for (let py = 0; py < H; py++) {
+    const sy = (0.5 - (py + 0.5) / H) * sensorHv;
 
-    const epsX = 0.05;
-    const startX = sensorX + epsX;
+    for (let px = 0; px < W; px++) {
+      const sx = ((px + 0.5) / W - 0.5) * sensorWv;
+      const rS = Math.hypot(sx, sy);
+      const idx = (py * W + px) * 4;
 
-    function lookup(ch, absR) {
-      const t = clamp(absR / rMaxSensor, 0, 1);
-      const x = t * (LUT_N - 1);
-      const i0 = Math.floor(x);
-      const i1 = Math.min(LUT_N - 1, i0 + 1);
-      const u = x - i0;
-      return {
-        rObj:   rObjLUT[ch][i0]   * (1 - u) + rObjLUT[ch][i1]   * u,
-        trans:  transLUT[ch][i0]  * (1 - u) + transLUT[ch][i1]  * u,
-        sigma:  sigmaLUT[ch][i0]  * (1 - u) + sigmaLUT[ch][i1]  * u,
-        nat:    naturalLUT[i0]    * (1 - u) + naturalLUT[i1]    * u,
-      };
-    }
+      if (!doCA) {
+        const L = lookup(1, rS); // green channel basis
+        const gain = clamp(L.trans * L.nat, 0, 1);
 
-    // Build LUT in chunks (prevents freezing)
-    let k = 0;
-    const kPerFrame = (q === "hq") ? 18 : (q === "draft" ? 40 : 26);
-
-    function buildStep() {
-      const end = Math.min(LUT_N, k + kPerFrame);
-      setPreviewProgress(k / LUT_N, `LUT ${Math.round((k / LUT_N) * 100)}%`);
-
-      for (; k < end; k++) {
-        const a = k / (LUT_N - 1);
-        const rS = a * rMaxSensor;
-        const pS = { x: startX, y: rS, z: 0 };
-
-        naturalLUT[k] = naturalCos4(rS);
-
-        for (let ch = 0; ch < 3; ch++) {
-          const wave = WAVES[ch];
-
-          // chief ray -> object radius
-          {
-            const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
-            const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wave);
-            if (!trC.vignetted && !trC.tir) {
-              const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
-              rObjLUT[ch][k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
-            } else {
-              rObjLUT[ch][k] = 0;
-            }
-          }
-
-          // pupil sampling -> transmission + sigma
-          let ok = 0, total = 0;
-          let sumY = 0, sumZ = 0, sumYY = 0, sumZZ = 0;
-
-          for (let iy = 0; iy < lutPupilSqrt; iy++) {
-            for (let ix = 0; ix < lutPupilSqrt; ix++) {
-              const uu = (ix + Math.random()) / lutPupilSqrt;
-              const vv = (iy + Math.random()) / lutPupilSqrt;
-
-              const pp = samplePupilDisk(uu, vv);
-              const target = { x: xStop, y: pp.y, z: pp.z };
-              const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
-
-              const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wave);
-              total++;
-              if (tr.vignetted || tr.tir) continue;
-
-              const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-              if (!hitObj) continue;
-
-              ok++;
-              sumY += hitObj.y; sumZ += hitObj.z;
-              sumYY += hitObj.y * hitObj.y;
-              sumZZ += hitObj.z * hitObj.z;
-            }
-          }
-
-          transLUT[ch][k] = total ? (ok / total) : 0;
-
-          if (ok > 2) {
-            const my = sumY / ok, mz = sumZ / ok;
-            const varY = Math.max(0, sumYY / ok - my * my);
-            const varZ = Math.max(0, sumZZ / ok - mz * mz);
-            sigmaLUT[ch][k] = Math.sqrt(varY + varZ);
-          } else {
-            sigmaLUT[ch][k] = 0;
-          }
+        if (gain < 1e-4) {
+          outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
+          continue;
         }
+
+        const p = objXY(L, sx, sy, rS);
+        const uv0 = objectMmToUV(p.ox, p.oy);
+
+        // sigma mm -> uv radius (object plane blur footprint)
+        const su = (L.sigma * 0.85) / (2 * halfObjW);
+        const sv = (L.sigma * 0.85) / (2 * halfObjH);
+
+        if (su < 1e-4 && sv < 1e-4) {
+          const c = sample(uv0.u, uv0.v);
+          outD[idx]   = clamp(c[0] * gain, 0, 255);
+          outD[idx+1] = clamp(c[1] * gain, 0, 255);
+          outD[idx+2] = clamp(c[2] * gain, 0, 255);
+          outD[idx+3] = 255;
+        } else {
+          let r=0,g=0,b=0;
+          for (let t=0; t<taps.length; t++){
+            const o = taps[t];
+            const c = sample(uv0.u + o[0]*su, uv0.v + o[1]*sv);
+            r += c[0]; g += c[1]; b += c[2];
+          }
+          const inv = 1 / taps.length;
+          outD[idx]   = clamp(r*inv*gain, 0, 255);
+          outD[idx+1] = clamp(g*inv*gain, 0, 255);
+          outD[idx+2] = clamp(b*inv*gain, 0, 255);
+          outD[idx+3] = 255;
+        }
+        continue;
       }
 
-      if (k < LUT_N) {
-        requestAnimationFrame(buildStep);
-        return;
+      // --- CA path: 3x mapping (no blur here; you can extend same sigma trick per channel) ---
+      const Lr = lookup(0, rS);
+      const Lg = lookup(1, rS);
+      const Lb = lookup(2, rS);
+
+      const gr = clamp(Lr.trans * Lr.nat, 0, 1);
+      const gg2 = clamp(Lg.trans * Lg.nat, 0, 1);
+      const gb = clamp(Lb.trans * Lb.nat, 0, 1);
+
+      if (gr < 1e-4 && gg2 < 1e-4 && gb < 1e-4) {
+        outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
+        continue;
       }
 
-      // Allocate world canvas AFTER LUT is ready
+      const pr = objXY(Lr, sx, sy, rS); const uvr = objectMmToUV(pr.ox, pr.oy); const cr = sample(uvr.u, uvr.v);
+      const pg = objXY(Lg, sx, sy, rS); const uvg = objectMmToUV(pg.ox, pg.oy); const cg = sample(uvg.u, uvg.v);
+      const pb = objXY(Lb, sx, sy, rS); const uvb = objectMmToUV(pb.ox, pb.oy); const cb = sample(uvb.u, uvb.v);
+
+      outD[idx]   = clamp(cr[0] * gr, 0, 255);
+      outD[idx+1] = clamp(cg[1] * gg2, 0, 255);
+      outD[idx+2] = clamp(cb[2] * gb, 0, 255);
+      outD[idx+3] = 255;
+    }
+  }
+
+  wctx.putImageData(out, 0, 0);
+  preview.worldReady = true;
+  drawPreviewViewport();
+}
+
+    function renderDOFPath(){
       preview.worldCanvas.width = W;
-      preview.worldCanvas.height = H;
-      preview.worldCtx = preview.worldCanvas.getContext("2d", { willReadFrequently: true });
-      const wctx = preview.worldCtx;
-
-      const out = wctx.createImageData(W, H);
+preview.worldCanvas.height = H;
+preview.worldCtx = preview.worldCanvas.getContext("2d", { willReadFrequently: true });
+const wctx = preview.worldCtx;
+       
       const outD = out.data;
 
-      function objXY(L, sx, sy, rS) {
-        if (rS <= 1e-9) return { ox: 0, oy: 0 };
-        const s = L.rObj / rS;
-        return { ox: sx * s, oy: sy * s };
+      const epsX = 0.05;
+      const startX = sensorX + epsX;
+
+      function samplePupilDisk(u, v){
+        const a = (u * 2 - 1);
+        const b = (v * 2 - 1);
+        let r, phi;
+        if (a === 0 && b === 0){ r = 0; phi = 0; }
+        else if (Math.abs(a) > Math.abs(b)){
+          r = a; phi = (Math.PI/4) * (b/a);
+        } else {
+          r = b; phi = (Math.PI/2) - (Math.PI/4) * (a/b);
+        }
+        const rr = Math.abs(r) * stopAp;
+        return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
       }
 
-      for (let py = 0; py < H; py++) {
-        const sy = (0.5 - (py + 0.5) / H) * sensorHv;
+      const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
-        for (let px = 0; px < W; px++) {
-          const sx = ((px + 0.5) / W - 0.5) * sensorWv;
-          const rS = Math.hypot(sx, sy);
-          const idx = (py * W + px) * 4;
+      let y = 0;
+      const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 24 : 16);
 
-          if (!doCA) {
-            const L = lookup(1, rS); // green basis
-            const gain = clamp(L.trans * L.nat, 0, 1);
+      function step(){
+        const yEnd = Math.min(H, y + rowsPerChunk);
+        setPreviewProgress(y / H, `DOF ${Math.round((y/H)*100)}%`);
 
-            if (gain < 1e-4) {
-              outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-              continue;
-            }
+        for (; y < yEnd; y++){
+          const sy = (0.5 - (y + 0.5) / H) * sensorHv;
 
-            const p = objXY(L, sx, sy, rS);
-            const uv0 = objectMmToUV(p.ox, p.oy);
+          for (let x = 0; x < W; x++){
+            const sx = ((x + 0.5) / W - 0.5) * sensorWv;
+            const rS = Math.hypot(sx, sy);
 
-            const su = (L.sigma * 0.85) / (2 * halfObjW);
-            const sv = (L.sigma * 0.85) / (2 * halfObjH);
+            const nat = naturalCos4(rS);
 
-            if (su < 1e-4 && sv < 1e-4) {
-              const c = sample(uv0.u, uv0.v);
-              outD[idx]     = clamp(c[0] * gain, 0, 255);
-              outD[idx + 1] = clamp(c[1] * gain, 0, 255);
-              outD[idx + 2] = clamp(c[2] * gain, 0, 255);
-              outD[idx + 3] = 255;
-            } else {
-              let r = 0, g = 0, b = 0;
-              for (let t = 0; t < taps.length; t++) {
-                const o = taps[t];
-                const c = sample(uv0.u + o[0] * su, uv0.v + o[1] * sv);
-                r += c[0]; g += c[1]; b += c[2];
+            let accR = 0, accG = 0, accB = 0;
+            let wSum = 0;
+
+            for (let s = 0; s < spp; s++){
+              const jx = (Math.random() - 0.5) * (sensorWv / W) * 0.6;
+              const jy = (Math.random() - 0.5) * (sensorHv / H) * 0.6;
+              const pSj = { x: startX, y: sx + jx, z: sy + jy };
+
+              const pp = samplePupilDisk(Math.random(), Math.random());
+              const target = { x: xStop, y: pp.y, z: pp.z };
+              const dir0 = normalize3({ x: target.x - pSj.x, y: target.y - pSj.y, z: target.z - pSj.z });
+
+              let colLin = [0,0,0];
+              let okAny = false;
+
+              for (let ch = 0; ch < 3; ch++){
+                const wave = WAVES[ch];
+                const tr = traceRayReverse3D({ p: pSj, d: dir0 }, lens.surfaces, wave);
+                if (tr.vignetted || tr.tir) continue;
+
+                const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+                if (!hitObj) continue;
+
+                const { u, v } = objectMmToUV(hitObj.y, hitObj.z);
+                const c = sample(u, v);
+
+                colLin[ch] = srgbToLin(c[ch]);
+                okAny = true;
               }
-              const inv = 1 / taps.length;
-              outD[idx]     = clamp(r * inv * gain, 0, 255);
-              outD[idx + 1] = clamp(g * inv * gain, 0, 255);
-              outD[idx + 2] = clamp(b * inv * gain, 0, 255);
-              outD[idx + 3] = 255;
-            }
-            continue;
-          }
 
-          // CA path (with sigma blur per channel)
-          const Lr = lookup(0, rS);
-          const Lg = lookup(1, rS);
-          const Lb = lookup(2, rS);
+              if (!okAny) continue;
 
-          const gr = clamp(Lr.trans * Lr.nat, 0, 1);
-          const gg = clamp(Lg.trans * Lg.nat, 0, 1);
-          const gb = clamp(Lb.trans * Lb.nat, 0, 1);
-
-          if (gr < 1e-4 && gg < 1e-4 && gb < 1e-4) {
-            outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-            continue;
-          }
-
-          function chanSample(L, sx, sy, rS, chGain, chIndex){
-            const p = objXY(L, sx, sy, rS);
-            const uv0 = objectMmToUV(p.ox, p.oy);
-
-            const su = (L.sigma * 0.85) / (2 * halfObjW);
-            const sv = (L.sigma * 0.85) / (2 * halfObjH);
-
-            if (su < 1e-4 && sv < 1e-4) {
-              const c = sample(uv0.u, uv0.v);
-              return clamp(c[chIndex] * chGain, 0, 255);
+              const w = nat;
+              accR += colLin[0] * w;
+              accG += colLin[1] * w;
+              accB += colLin[2] * w;
+              wSum += w;
             }
 
-            let acc = 0;
-            for (let t = 0; t < taps.length; t++){
-              const o = taps[t];
-              const c = sample(uv0.u + o[0]*su, uv0.v + o[1]*sv);
-              acc += c[chIndex];
+            const idx = (y * W + x) * 4;
+            if (wSum <= 1e-9){
+              outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
+            } else {
+              const r = accR / wSum;
+              const g = accG / wSum;
+              const b = accB / wSum;
+              outD[idx]   = linToSrgb(r);
+              outD[idx+1] = linToSrgb(g);
+              outD[idx+2] = linToSrgb(b);
+              outD[idx+3] = 255;
             }
-            return clamp((acc / taps.length) * chGain, 0, 255);
           }
-
-          outD[idx]     = chanSample(Lr, sx, sy, rS, gr, 0);
-          outD[idx + 1] = chanSample(Lg, sx, sy, rS, gg, 1);
-          outD[idx + 2] = chanSample(Lb, sx, sy, rS, gb, 2);
-          outD[idx + 3] = 255;
         }
+
+        wctx.putImageData(out, 0, 0);
+        preview.worldReady = true;
+        drawPreviewViewport();
+
+        if (y < H) requestAnimationFrame(step);
+        else { hidePreviewProgress(); }
       }
 
-      wctx.putImageData(out, 0, 0);
-      preview.worldReady = true;
+      requestAnimationFrame(step);
+    }
+
+    preview.worldReady = false;
+
+    if (!doDOF) {
       hidePreviewProgress();
-      drawPreviewViewport();
-    }
-
-    requestAnimationFrame(buildStep);
-  }
-
-  function renderDOFPath() {
-    // allocate render target
-    preview.worldCanvas.width  = W;
-    preview.worldCanvas.height = H;
-    const wctx = preview.worldCanvas.getContext("2d", { willReadFrequently: true });
-    preview.worldCtx = wctx;
-
-    const out  = wctx.createImageData(W, H);
-    const outD = out.data;
-
-    const epsX   = 0.05;
-    const startX = sensorX + epsX;
-
-    const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
-
-    let row = 0;
-    const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 24 : 16);
-
-    function step() {
-      const yEnd = Math.min(H, row + rowsPerChunk);
-      setPreviewProgress(row / H, `DOF ${Math.round((row / H) * 100)}%`);
-
-      for (; row < yEnd; row++) {
-        const sy = (0.5 - (row + 0.5) / H) * sensorHv;
-
-        for (let col = 0; col < W; col++) {
-          const sx = ((col + 0.5) / W - 0.5) * sensorWv;
-          const rS = Math.hypot(sx, sy);
-
-          const nat = naturalCos4(rS);
-
-          let accR = 0, accG = 0, accB = 0;
-          let wSum = 0;
-
-          for (let s = 0; s < spp; s++) {
-            const jx = (Math.random() - 0.5) * (sensorWv / W) * 0.6;
-            const jy = (Math.random() - 0.5) * (sensorHv / H) * 0.6;
-
-            const pS = { x: startX, y: sx + jx, z: sy + jy };
-
-            const pp = samplePupilDisk(Math.random(), Math.random());
-            const target = { x: xStop, y: pp.y, z: pp.z };
-            const dir0 = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
-
-            let colLin = [0, 0, 0];
-            let okAny = false;
-
-            for (let ch = 0; ch < 3; ch++) {
-              const wave = WAVES[ch];
-              const tr = traceRayReverse3D({ p: pS, d: dir0 }, lens.surfaces, wave);
-              if (tr.vignetted || tr.tir) continue;
-
-              const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-              if (!hitObj) continue;
-
-              const uv = objectMmToUV(hitObj.y, hitObj.z);
-              const c  = sample(uv.u, uv.v);
-
-              colLin[ch] = srgbToLin(c[ch]);
-              okAny = true;
-            }
-
-            if (!okAny) continue;
-
-            const w = nat;
-            accR += colLin[0] * w;
-            accG += colLin[1] * w;
-            accB += colLin[2] * w;
-            wSum += w;
-          }
-
-          const idx = (row * W + col) * 4;
-          if (wSum <= 1e-9) {
-            outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-          } else {
-            outD[idx]     = linToSrgb(accR / wSum);
-            outD[idx + 1] = linToSrgb(accG / wSum);
-            outD[idx + 2] = linToSrgb(accB / wSum);
-            outD[idx + 3] = 255;
-          }
-        }
-      }
-
-      wctx.putImageData(out, 0, 0);
-      preview.worldReady = true;
-      drawPreviewViewport();
-
-      if (row < H) requestAnimationFrame(step);
-      else hidePreviewProgress();
-    }
-
-    requestAnimationFrame(step);
-  }
-
-  // --- run ---
-  preview.worldReady = false;
-
-  if (!doDOF) {
-    renderFastLUT();
-  } else {
-    renderDOFPath();
-  }
+      renderFastLUT();
+    } else {
+     if (!doDOF) {
+  hidePreviewProgress();
+  renderFastLUT();
+} else {
+  renderDOFPath(); // altijd
 }
+    }
+  }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
