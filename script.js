@@ -1597,121 +1597,126 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     });
   }
 
-  function renderAll() {
-    if (!canvas || !ctx) return;
-    if (ui.footerWarn) ui.footerWarn.textContent = "";
+ function renderAll() {
+  if (!canvas || !ctx) return;
+  if (ui.footerWarn) ui.footerWarn.textContent = "";
 
   const lensShift = Number(ui.lensFocus?.value || 0);
 
-// eerst sensor->IMS syncen voordat we trace-surfaces bouwen
-applySensorToIMS();
+  // 0) sync sensor -> IMS
+  applySensorToIMS();
 
-// 1) maak trace-surfaces met barrel apertures
-const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
+  // 1) TRACE surfaces (met BAR)
+  const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
+  computeVertices(surfacesTrace, lensShift);
 
-// 2) vertices op trace-surfaces
-computeVertices(surfacesTrace, lensShift);
-    clampSelected();
+  // 2) DRAW surfaces (zonder BAR, maar mét correcte vx)
+  const surfacesDraw = surfacesTrace.filter(s => String(s.type || "").toUpperCase() !== "BAR");
 
-    const { w: sensorW, h: sensorH, halfH } = getSensorWH();
-    const fieldAngle = Number(ui.fieldAngle?.value || 0);
-    const rayCount = Number(ui.rayCount?.value || 31);
-    const wavePreset = ui.wavePreset?.value || "d";
+  const { w: sensorW, h: sensorH, halfH } = getSensorWH();
+  const fieldAngle = Number(ui.fieldAngle?.value || 0);
+  const rayCount = Number(ui.rayCount?.value || 31);
+  const wavePreset = ui.wavePreset?.value || "d";
 
-    if (ui.sensorOffset) ui.sensorOffset.value = "0";
-    const sensorX = 0.0;
+  if (ui.sensorOffset) ui.sensorOffset.value = "0";
+  const sensorX = 0.0;
 
-    const plX = -PL_FFD;
+  const plX = -PL_FFD;
 
-    const frontVx = firstPhysicalVertexX(lens.surfaces);
-    const lenToFlange = plX - frontVx;
-    const totalLen = lenToFlange + PL_LENS_LIP;
-    const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
-      ? `LEN≈ ${totalLen.toFixed(1)}mm (front→PL + mount)`
-      : `LEN≈ —`;
+  // --- gebruik DRAW set voor geometrie-metrics ---
+  const frontVx = firstPhysicalVertexX(surfacesDraw);
+  const rearVx  = lastPhysicalVertexX(surfacesDraw);
 
-    const rays = buildRays(surfacesTrace, fieldAngle, rayCount);
-const traces = rays.map((r) => traceRayForward(clone(r), surfacesTrace, wavePreset));
+  const lenToFlange = plX - frontVx;
+  const totalLen = lenToFlange + PL_LENS_LIP;
+  const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
+    ? `LEN≈ ${totalLen.toFixed(1)}mm (front→PL + mount)`
+    : `LEN≈ —`;
 
-    const vCount = traces.filter((t) => t.vignetted).length;
-    const tirCount = traces.filter((t) => t.tir).length;
-    const vigPct = Math.round((vCount / traces.length) * 100);
+  const intrusion = rearVx - plX;
+  const rearTxt = (intrusion > 0)
+    ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
+    : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
 
-    const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-    const T = estimateTStopApprox(efl, lens.surfaces);
+  // --- rays op TRACE set ---
+  const rays = buildRays(surfacesTrace, fieldAngle, rayCount);
+  const traces = rays.map(r => traceRayForward(clone(r), surfacesTrace, wavePreset));
 
-    const fov = computeFovDeg(efl, sensorW, sensorH);
-    const fovTxt = !fov
-      ? "FOV: —"
-      : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+  const vCount = traces.filter(t => t.vignetted).length;
+  const tirCount = traces.filter(t => t.tir).length;
+  const vigPct = Math.round((vCount / traces.length) * 100);
 
-    const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
-    const covMode = "v";
-    const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+  // --- EFL/BFL/T: ook op DRAW of TRACE, maar kies er 1 consistent ---
+  // Ik zou DRAW pakken (zonder BAR), want BAR is mechanische clip, geen optisch oppervlak.
+  const { efl, bfl } = estimateEflBflParaxial(surfacesDraw, wavePreset);
+  const T = estimateTStopApprox(efl, surfacesDraw);
 
-    const covTxt = !fov
-      ? "COV(V): —"
-      : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+  const fov = computeFovDeg(efl, sensorW, sensorH);
+  const fovTxt = !fov
+    ? "FOV: —"
+    : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-    const rearVx = lastPhysicalVertexX(lens.surfaces);
-    const intrusion = rearVx - plX;
-    const rearTxt = (intrusion > 0)
-      ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
-      : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
+  const maxField = coverageTestMaxFieldDeg(surfacesTrace, wavePreset, sensorX, halfH);
+  const covMode = "v";
+  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
 
-    if (ui.efl) ui.efl.textContent = `Focal Length: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
-    if (ui.fov) ui.fov.textContent = fovTxt;
-    if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
+  const covTxt = !fov
+    ? "COV(V): —"
+    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
-    if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.fovTop) ui.fovTop.textContent = fovTxt;
-    if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
+  // badges...
+  if (ui.efl) ui.efl.textContent = `Focal Length: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+  if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
+  if (ui.fov) ui.fov.textContent = fovTxt;
+  if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
 
-    if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
-    if (ui.status) {
-      ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
-    }
-    if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
-
-    resizeCanvasToCSS();
-const r = canvas.getBoundingClientRect();
-drawBackgroundCSS(r.width, r.height);
-     
-const world = makeWorldTransform();
-drawAxes(world);
-
-    drawRuler(world, 0, -200);
-
-    const xMinPL = Math.min(frontVx - 20, plX - 20);
-    drawRulerFrom(world, plX, xMinPL, null, "", +12);
-
-    drawPLFlange(world, plX);
-    drawLens(world, lens.surfaces);
-    drawStop(world, lens.surfaces);
-    drawRays(world, traces, sensorX);
-    drawPLMountCutout(world, plX);
-    drawSensor(world, sensorX, halfH);
-
-    const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
-    const tTxt = T == null ? "—" : "T" + T.toFixed(2);
-    const lensOff = Number(ui.lensFocus?.value || 0);
-
-    const titleParts = [
-      lens.name,
-      lenTxt,
-      `EFL ${eflTxt}`,
-      `T≈ ${tTxt}`,
-      rearTxt,
-      `Focus ${lensOff.toFixed(2)}mm`,
-    ];
-    drawTitleOverlay(titleParts);
+  if (ui.status) {
+    ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
   }
+  if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+
+  // --- draw ---
+  resizeCanvasToCSS();
+  const r = canvas.getBoundingClientRect();
+  drawBackgroundCSS(r.width, r.height);
+
+  const world = makeWorldTransform();
+  drawAxes(world);
+
+  drawRuler(world, 0, -200);
+
+  const xMinPL = Math.min(frontVx - 20, plX - 20);
+  drawRulerFrom(world, plX, xMinPL, null, "", +12);
+
+  drawPLFlange(world, plX);
+
+  // lens/stop op DRAW set (consistent met vx)
+  drawLens(world, surfacesDraw);
+  drawStop(world, surfacesDraw);
+
+  // rays op TRACE set
+  drawRays(world, traces, sensorX);
+
+  drawPLMountCutout(world, plX);
+  drawSensor(world, sensorX, halfH);
+
+  const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
+  const tTxt = T == null ? "—" : "T" + T.toFixed(2);
+  const lensOff = Number(ui.lensFocus?.value || 0);
+
+  drawTitleOverlay([
+    lens.name,
+    lenTxt,
+    `EFL ${eflTxt}`,
+    `T≈ ${tTxt}`,
+    rearTxt,
+    `Focus ${lensOff.toFixed(2)}mm`,
+  ]);
+}
 
   // -------------------- view controls (RAYS canvas) --------------------
   function bindViewControls() {
@@ -2208,34 +2213,37 @@ drawAxes(world);
   }
 
   // -------------------- preview rendering (split-view) --------------------
-  function renderPreview() {
-    if (!pctx || !previewCanvasEl) return;
-     
-const lensShift = Number(ui.lensFocus?.value || 0);
+ function renderPreview() {
+  if (!pctx || !previewCanvasEl) return;
 
-// eerst sensor->IMS syncen voordat we trace-surfaces bouwen
-applySensorToIMS();
+  const lensShift = Number(ui.lensFocus?.value || 0);
 
-// 1) maak trace-surfaces met barrel apertures
-const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
+  // 0) eerst alles syncen & clamped houden op de echte lens data
+  applySensorToIMS();
+  clampAllApertures(lens.surfaces);
 
-// 2) vertices op trace-surfaces
-computeVertices(surfacesTrace, lensShift);
-    applySensorToIMS();
-    clampAllApertures(lens.surfaces);
+  // 1) daarna pas trace-surfaces bouwen (met BAR) op basis van de actuele lens
+  const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
 
-    const wavePreset = ui.wavePreset?.value || "d";
-    if (ui.sensorOffset) ui.sensorOffset.value = "0";
-    const sensorX = 0.0;
+  // 2) vertices op trace-surfaces
+  computeVertices(surfacesTrace, lensShift);
 
-    const { w: sensorW, h: sensorH } = getSensorWH();
+  const wavePreset = ui.wavePreset?.value || "d";
+  if (ui.sensorOffset) ui.sensorOffset.value = "0";
+  const sensorX = 0.0;
 
-    const stopIdx = findStopSurfaceIndex(surfacesTrace);
-const stopSurf = stopIdx >= 0 ? surfacesTrace[stopIdx] : surfacesTrace[0];
-const xStop = stopSurf.vx;
+  const { w: sensorW, h: sensorH } = getSensorWH();
 
-    const objDist = Number(ui.prevObjDist?.value || 2000);
-    const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+  const stopIdx = findStopSurfaceIndex(surfacesTrace);
+  const stopSurf = stopIdx >= 0 ? surfacesTrace[stopIdx] : surfacesTrace[0];
+  const xStop = stopSurf.vx;
+
+  const objDist = Number(ui.prevObjDist?.value || 2000);
+
+  // ✅ BUGFIX: object plane gebaseerd op dezelfde surfaces die vx hebben
+  const xObjPlane = (surfacesTrace[0]?.vx ?? 0) - objDist;
+
+
 
     const objH = Number(ui.prevObjH?.value || 200);
     const halfObjH = Math.max(1e-3, objH * 0.5);
