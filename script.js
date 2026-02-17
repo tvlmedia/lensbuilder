@@ -2979,3 +2979,4 @@ async function init() {
 init().catch((e) => {
   if (ui.footerWarn) ui.footerWarn.textContent = `Init failed: ${e.message}`;
 });
+})();
