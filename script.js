@@ -2812,9 +2812,10 @@ function setPreviewImage(im) {
 async function loadPreviewFromUrl(url) {
   try {
     // haal 'm op als blob (CORS), dan wordt het objectURL same-origin
-    const res = await fetch(url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(), { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
+    const res = await fetch(
+  url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(),
+  { cache: "no-store", mode: "cors" }
+);
     const blob = await res.blob();
     const objUrl = URL.createObjectURL(blob);
 
@@ -2945,10 +2946,15 @@ async function loadDefaultLensFromUrl(url) {
     return false;
   }
 }
-  async function init() {
+ async function init() {
   populateSensorPresetsSelect();
   if (ui.sensorPreset) ui.sensorPreset.value = "Fuji GFX (MF)";
   applyPreset("Fuji GFX (MF)");
+
+  // ✅ preview defaults eerst zetten (BELANGRIJK)
+  if (ui.prevObjDist) ui.prevObjDist.value = "2000";
+  if (ui.prevObjH)    ui.prevObjH.value    = "1900";
+  if (ui.prevRes)     ui.prevRes.value     = "1920";
 
   await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
 
@@ -2956,12 +2962,10 @@ async function loadDefaultLensFromUrl(url) {
   bindPreviewViewControls();
   bindControlRerenders();
 
-  // force preview res default
-  if (ui.prevRes) {
-    ui.prevRes.value = "1920";
-    ui.prevRes.dispatchEvent(new Event("change", { bubbles: true }));
-  }
+  // ✅ force rerender nadat defaults staan
+  scheduleRenderAll();
 
+  // ✅ chart load (onload => setPreviewImage => renderPreview())
   loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
 
   renderAll();
