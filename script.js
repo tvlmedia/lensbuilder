@@ -763,79 +763,101 @@ function intersectPlaneX3D(ray, xPlane){
     return Math.max(0.01, lo);
   }
 
-  // -------------------- tracing --------------------
-  function traceRayForward(ray, surfaces, wavePreset, { skipIMS = false } = {}) {
-    const pts = [{ x: ray.p.x, y: ray.p.y }];
-    let vignetted = false;
-    let tir = false;
-    let nBefore = 1.0;
+ // -------------------- tracing --------------------
+function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
+  const skipIMS = !!opts.skipIMS;
 
-    for (let i = 0; i < surfaces.length; i++) {
-      const s = surfaces[i];
-      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
-      if (skipIMS && isIMS) continue;
+  let pts = [];
+  let vignetted = false;
+  let tir = false;
 
-      const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
+  // medium vóór de 1e surface = AIR
+  let nBefore = 1.0;
 
-      pts.push(hitInfo.hit);
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i];
+    const type = String(s?.type || "").toUpperCase();
+    const isIMS = type === "IMS";
+    const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
-      // IMS doesn't clip (sensor plane)
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+    if (skipIMS && isIMS) continue;
 
-      const nAfter = glassN(s.glass, wavePreset);
+    const hitInfo = intersectSurface(ray, s);
+    if (!hitInfo) { vignetted = true; break; }
 
-      if (Math.abs(nAfter - nBefore) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        nBefore = nAfter;
-        continue;
-      }
+    pts.push(hitInfo.hit);
 
-      const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-      if (!newDir) { tir = true; break; }
+    // IMS (sensor plane) mag niet vignetten
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-      ray = { p: hitInfo.hit, d: newDir };
+    // IMS + MECH = géén refractie (alleen doorlaten / clippen)
+    if (isIMS || isMECH) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      // nBefore blijft gelijk
+      continue;
+    }
+
+    // OSLO-ish: glass = medium AFTER surface
+    const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
+
+    if (Math.abs(nAfter - nBefore) < 1e-9) {
+      ray = { p: hitInfo.hit, d: ray.d };
       nBefore = nAfter;
-    }
-    return { pts, vignetted, tir, endRay: ray };
-  }
-
-  function traceRayReverse(ray, surfaces, wavePreset) {
-    const pts = [{ x: ray.p.x, y: ray.p.y }];
-    let vignetted = false;
-    let tir = false;
-
-    for (let i = surfaces.length - 1; i >= 0; i--) {
-      const s = surfaces[i];
-      const isIMS = String(s?.type || "").toUpperCase() === "IMS";
-
-      const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
-
-      pts.push(hitInfo.hit);
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
-
-      if (isIMS) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
-
-      const nRight = glassN(String(s.glass || "AIR"), wavePreset);
-      const nLeft = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
-
-      if (Math.abs(nLeft - nRight) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
-
-      const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
-      if (!newDir) { tir = true; break; }
-
-      ray = { p: hitInfo.hit, d: newDir };
+      continue;
     }
 
-    return { pts, vignetted, tir, endRay: ray };
+    const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
+    if (!newDir) { tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
+    nBefore = nAfter;
   }
+
+  return { pts, vignetted, tir, endRay: ray };
+}
+
+function traceRayReverse(ray, surfaces, wavePreset) {
+  let pts = [];
+  let vignetted = false;
+  let tir = false;
+
+  for (let i = surfaces.length - 1; i >= 0; i--) {
+    const s = surfaces[i];
+    const type = String(s?.type || "").toUpperCase();
+    const isIMS = type === "IMS";
+    const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+
+    const hitInfo = intersectSurface(ray, s);
+    if (!hitInfo) { vignetted = true; break; }
+
+    pts.push(hitInfo.hit);
+
+    // IMS (sensor plane) mag niet vignetten
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+
+    // IMS + MECH = géén refractie
+    if (isIMS || isMECH) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
+    }
+
+    // Reverse: rechts = medium AFTER surface, links = medium BEFORE surface
+    const nRight = glassN(String(s.glass || "AIR"), wavePreset);
+    const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
+
+    if (Math.abs(nLeft - nRight) < 1e-9) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
+    }
+
+    const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
+    if (!newDir) { tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
+  }
+
+  return { pts, vignetted, tir, endRay: ray };
+}
 
   function intersectPlaneX(ray, xPlane) {
     if (Math.abs(ray.d.x) < 1e-12) return null;
