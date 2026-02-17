@@ -2857,7 +2857,7 @@ on("#sensorPreset", "change", (e) => {
 // ✅ Zet deze 2 naar jouw echte bestandsnamen (zelfde folder als index.html)
 
 // 1) Lens JSON in je repo (LET OP: spaties moeten URL-encoded zijn)
-const DEFAULT_LENS_URL = "./Bijna%20goed%20.json";   // <-- PAS AAN indien anders
+const DEFAULT_LENS_URL = "./bijna-goed.json";
 
 // 2) Jouw chart in je repo
 const DEFAULT_CHART_URL = "./TVL_Focus_Distortion_Chart_3x2.png";
