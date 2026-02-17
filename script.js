@@ -1524,11 +1524,9 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
 
   // tick density based on zoom
   const pxPerMm = world.s;
-  const stepMm =
-    pxPerMm < 0.8 ? 50 :
-    pxPerMm < 1.6 ? 20 :
-    pxPerMm < 3.0 ? 10 :
-    5;
+  const stepMm = 10;     // elke 1cm een tick
+const majorMm = 50;    // elke 5cm “major”
+const midMm = 10;      // elke 1cm “mid” (dus label altijd mogelijk)
 
   const majorMm = 50;
   const midMm = 20;
@@ -1536,7 +1534,7 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
   for (let x = originX; x >= xMin - 1e-6; x -= stepMm) {
     const distMm = originX - x;
     const isMajor = (Math.round(distMm) % majorMm) === 0;
-    const isMid = !isMajor && (Math.round(distMm) % midMm) === 0;
+const isMid   = !isMajor && (Math.round(distMm) % midMm) === 0;
 
     const tLen = isMajor ? 12 : isMid ? 8 : 5;
 
@@ -1546,7 +1544,7 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
     ctx.lineTo(p.x, p.y + tLen);
     ctx.stroke();
 
-    const shouldLabel = isMajor || (isMid && pxPerMm >= 1.6);
+   const shouldLabel = isMajor || isMid;
     if (shouldLabel) {
       const cm = Math.round(distMm / 10);
       const txt = `${cm}cm`;
@@ -2541,7 +2539,7 @@ for (let py = 0; py < H; py++) {
 wctx.putImageData(out, 0, 0);
 preview.worldReady = true;
 drawPreviewViewport();
-
+} // <-- DIT toevoegen: sluit renderPreview()
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
@@ -2847,7 +2845,7 @@ function setPreviewImage(im) {
 
   preview.ready = true;
   preview.worldReady = false;
-
+preview.dirtyKey = ""; // <-- toevoegen
   scheduleRenderPreview();
   toast("Preview image loaded");
 }
@@ -2983,6 +2981,18 @@ async function loadDefaultLensFromUrl(url) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const obj = await res.json();
     if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid lens JSON");
+
+if (obj.glass_note && typeof obj.glass_note === "object") {
+  for (const [k, v] of Object.entries(obj.glass_note)) {
+    const nd = Number(v?.nd);
+    if (Number.isFinite(nd)) {
+      GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
+      GLASS_DB[k].nd = nd;
+      if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
+    }
+  }
+}
+     
     loadLens(obj);
     toast("Loaded default lens JSON");
     return true;
