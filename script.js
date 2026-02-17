@@ -1448,7 +1448,177 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
       if (preview.ready) renderPreview();
     });
   }
+// -------------------- CORE DRAW (prevents crashes) --------------------
 
+// world transform based on current "view" + canvas size
+function makeWorldTransform() {
+  const r = canvas?.getBoundingClientRect?.() || { width: 800, height: 500 };
+  const s = 4.0 * (view?.zoom || 1);           // px per mm
+  const ox = (r.width * 0.5) + (view?.panX || 0);
+  const oy = (r.height * 0.5) + (view?.panY || 0);
+  return { s, ox, oy, w: r.width, h: r.height };
+}
+
+function worldToScreen(p, world) {
+  // +x to right, +y up
+  return {
+    x: world.ox + p.x * world.s,
+    y: world.oy - p.y * world.s,
+  };
+}
+
+// polyline of a spherical/plane surface (front view) over +/- ap
+function buildSurfacePolyline(s, ap, steps = 80) {
+  const out = [];
+  const a = Math.max(0.01, Number(ap ?? s?.ap ?? 0));
+  const n = Math.max(8, steps | 0);
+
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n) * 2 - 1; // -1..+1
+    const y = t * a;
+    const x = surfaceXatY(s, y);
+    if (x == null) continue;
+    out.push({ x, y });
+  }
+  return out;
+}
+
+function drawAxes(world) {
+  if (!ctx) return;
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(255,255,255,.12)";
+
+  // X axis
+  ctx.beginPath();
+  ctx.moveTo(0, world.oy);
+  ctx.lineTo(world.w, world.oy);
+  ctx.stroke();
+
+  // Y axis
+  ctx.beginPath();
+  ctx.moveTo(world.ox, 0);
+  ctx.lineTo(world.ox, world.h);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawLens(world, surfaces) {
+  if (!ctx || !Array.isArray(surfaces)) return;
+
+  // draw each refracting surface outline
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(235,245,255,0.55)";
+
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i];
+    const t = String(s?.type || "").toUpperCase();
+    if (t === "OBJ" || t === "IMS") continue;
+
+    const poly = buildSurfacePolyline(s, s.ap, 90);
+    if (poly.length < 2) continue;
+
+    ctx.beginPath();
+    const p0 = worldToScreen(poly[0], world);
+    ctx.moveTo(p0.x, p0.y);
+    for (let k = 1; k < poly.length; k++) {
+      const pk = worldToScreen(poly[k], world);
+      ctx.lineTo(pk.x, pk.y);
+    }
+    ctx.stroke();
+  }
+
+  // fill glass bodies (between consecutive surfaces where medium-after is not AIR)
+  for (let i = 0; i < surfaces.length - 1; i++) {
+    const a = surfaces[i];
+    const b = surfaces[i + 1];
+    const ta = String(a?.type || "").toUpperCase();
+    const tb = String(b?.type || "").toUpperCase();
+    if (ta === "OBJ" || ta === "IMS") continue;
+    if (tb === "IMS") continue;
+
+    const mediumAfter = String(a?.glass || "AIR").toUpperCase();
+    if (mediumAfter === "AIR") continue;
+
+    // avoid nonsense if vertices missing
+    if (!Number.isFinite(a.vx) || !Number.isFinite(b.vx)) continue;
+
+    // find safe aperture region to avoid overlap artifacts
+    const apRegion = Math.max(0.01, Math.min(Number(a.ap || 0), Number(b.ap || 0)));
+    drawElementBody(world, a, b, apRegion);
+  }
+
+  ctx.restore();
+}
+
+function drawStop(world, surfaces) {
+  if (!ctx || !Array.isArray(surfaces)) return;
+  const i = surfaces.findIndex(s => !!s.stop);
+  if (i < 0) return;
+  const s = surfaces[i];
+  const ap = Math.max(0.01, Number(s.ap || 0));
+
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(42,110,242,.85)";
+
+  const a = worldToScreen({ x: s.vx, y: -ap }, world);
+  const b = worldToScreen({ x: s.vx, y:  ap }, world);
+
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawRays(world, traces, sensorX) {
+  if (!ctx || !Array.isArray(traces)) return;
+
+  ctx.save();
+  ctx.lineWidth = 1.25;
+
+  for (const tr of traces) {
+    if (!tr?.pts?.length) continue;
+    ctx.strokeStyle = (tr.vignetted || tr.tir)
+      ? "rgba(255,120,120,.45)"
+      : "rgba(120,190,255,.55)";
+
+    ctx.beginPath();
+    const p0 = worldToScreen(tr.pts[0], world);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < tr.pts.length; i++) {
+      const p = worldToScreen(tr.pts[i], world);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawSensor(world, sensorX, halfH) {
+  if (!ctx) return;
+  const h = Math.max(0.01, Number(halfH || 0));
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
+
+  const a = worldToScreen({ x: sensorX, y: -h }, world);
+  const b = worldToScreen({ x: sensorX, y:  h }, world);
+
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  ctx.restore();
+}
+// ----------------------------------------------------------------------
  function renderAll() {
   if (!canvas || !ctx) return;
   if (ui.footerWarn) ui.footerWarn.textContent = "";
