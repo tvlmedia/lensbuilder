@@ -2315,46 +2315,17 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
 
     // -------------------- RADIAL VIGNETTE / MAPPING LUT (aspect-correct) --------------------
 const LUT_N = 768;
-const rObjLUT = new Float32Array(LUT_N);   // object-space radius at object plane for chief ray
-const transLUT = new Float32Array(LUT_N);  // mechanical throughput at that field radius
-const cos4LUT  = new Float32Array(LUT_N);  // cos^4 approx (chief)
+const rObjLUT = new Float32Array(LUT_N);
+const transLUT = new Float32Array(LUT_N);
+const cos4LUT  = new Float32Array(LUT_N);
 
-const STOP_SAMPLES = 21; // mechanical vignet sampling
-const epsX = 0.05;
-const startX = sensorX + epsX;
-
-function stopYs(stopAp) {
-  const ys = [];
-  const N = Math.max(7, STOP_SAMPLES | 0);
-  for (let i = 0; i < N; i++) {
-    const t = (i / (N - 1)) * 2 - 1;
-    ys.push(t * stopAp);
-  }
-  return ys;
-}
-
-function median(arr) {
-  const a = arr.slice().sort((x, y) => x - y);
-  return a[(a.length / 2) | 0];
-}
-
-// Elliptisch genormaliseerde radius (0..1) voor sensor aspect
-// rNorm = 1 op "corner" van jouw (overscan) sensor rect.
-
-
-const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
-const yStopSamples = stopYs(stopAp);
-
-const rMax = Math.hypot(halfWv, halfHv);   // ✅ diag/2
+const rMax = Math.hypot(halfWv, halfHv); // diag/2 in mm (met OV)
 
 for (let k = 0; k < LUT_N; k++) {
-  const rNorm = k / (LUT_N - 1);
+  const r = (k / (LUT_N - 1)) * rMax; // ✅ radius in mm
+  const y = Math.min(r, halfHv);      // ✅ clamp naar top-edge (belangrijk!)
 
-  const r = rNorm * rMax;                  // ✅ radiale mm
-  const y = r;
-
-  
-  // Chief ray door stop center (yStop=0)
+  // Chief ray door stop center
   let rObjVals = [];
   let cos4Sum = 0;
 
@@ -2363,20 +2334,18 @@ for (let k = 0; k < LUT_N; k++) {
     const trChief = traceRayReverse({ p: { x: startX, y }, d: dirChief }, surfacesTrace, wavePreset);
     if (!trChief.vignetted && !trChief.tir) {
       const hitObj = intersectPlaneX(trChief.endRay, xObjPlane);
-      if (hitObj) rObjVals.push(Math.abs(hitObj.y)); // meridional radius≈|y|
+      if (hitObj) rObjVals.push(Math.abs(hitObj.y));
       const cos = Math.max(0, Math.min(1, Math.abs(dirChief.x)));
-      cos4Sum += cos ** 4;
+      cos4Sum = cos ** 4;
     } else {
-      cos4Sum += 0;
+      cos4Sum = 0;
     }
   }
 
-  // Mechanical throughput: sample rays across stop at this field radius
   let ok = 0;
   for (let ssi = 0; ssi < yStopSamples.length; ssi++) {
     const yStop = yStopSamples[ssi];
     const dir = normalize({ x: xStop - startX, y: yStop - y });
-
     const tr = traceRayReverse({ p: { x: startX, y }, d: dir }, surfacesTrace, wavePreset);
     if (tr.vignetted || tr.tir) continue;
     const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
@@ -2389,9 +2358,9 @@ for (let k = 0; k < LUT_N; k++) {
   cos4LUT[k]  = cos4Sum;
 }
 
-function lookupRadial(rNorm) {
-  const t = Math.max(0, Math.min(1, rNorm));
-  const x = t * (LUT_N - 1);
+function lookupRadialByR(rSensorMm) {
+  const rClamped = Math.max(0, Math.min(rMax, rSensorMm));
+  const x = (rClamped / rMax) * (LUT_N - 1);
   const i0 = Math.floor(x);
   const i1 = Math.min(LUT_N - 1, i0 + 1);
   const u = x - i0;
@@ -2451,11 +2420,8 @@ for (let py = 0; py < H; py++) {
 
     // aspect-correct radial coordinate (0..1 at corner)
 const rSensor = Math.hypot(sx, sy);
-const rMax = Math.hypot(halfWv, halfHv);      // diag/2 (met OV)
-const rNorm = (rMax > 1e-9) ? (rSensor / rMax) : 0;
+const { rObj, trans, cos4 } = lookupRadialByR(rSensor);
      
-    const { rObj, trans, cos4 } = lookupRadial(rNorm);
-
     const mech = Math.max(0, Math.min(1, trans));
     const g = mech * Math.max(0, Math.min(1, cos4));
 
