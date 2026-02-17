@@ -2345,17 +2345,15 @@ function median(arr) {
 const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 const yStopSamples = stopYs(stopAp);
 
-// We bouwen LUT over rNorm van 0..1.
-// Voor de meridional tracer kunnen we alleen in 2D samplen -> we nemen punten langs Y-richting,
-// maar maken de CORNER-sterkte correct door rNorm te gebruiken + later per-pixel rNorm lookup.
+const rMax = Math.hypot(halfWv, halfHv);   // ✅ diag/2
+
 for (let k = 0; k < LUT_N; k++) {
-  const a = k / (LUT_N - 1);
-  const rNorm = a;
+  const rNorm = k / (LUT_N - 1);
 
-  // representatieve sensor-Y op deze rNorm (langs de verticale as)
-  const sy = rNorm * halfHv; // mm
-  const y = sy;
+  const r = rNorm * rMax;                  // ✅ radiale mm
+  const y = r;
 
+  
   // Chief ray door stop center (yStop=0)
   let rObjVals = [];
   let cos4Sum = 0;
@@ -2452,8 +2450,10 @@ for (let py = 0; py < H; py++) {
     const idx = (py * W + px) * 4;
 
     // aspect-correct radial coordinate (0..1 at corner)
-    const rNorm = Math.hypot(sx / halfWv, sy / halfHv);
-
+const rSensor = Math.hypot(sx, sy);
+const rMax = Math.hypot(halfWv, halfHv);      // diag/2 (met OV)
+const rNorm = (rMax > 1e-9) ? (rSensor / rMax) : 0;
+     
     const { rObj, trans, cos4 } = lookupRadial(rNorm);
 
     const mech = Math.max(0, Math.min(1, trans));
