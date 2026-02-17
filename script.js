@@ -1221,24 +1221,6 @@ function drawLens(world, surfaces) {
     ctx.restore();
   }
 
-  // -------------------- render scheduler (RAF throttle) --------------------
-  let _rafAll = 0;
-  function scheduleRenderAll() {
-    if (_rafAll) return;
-    _rafAll = requestAnimationFrame(() => {
-      _rafAll = 0;
-      renderAll();
-    });
-  }
-
-  let _rafPrev = 0;
-  function scheduleRenderPreview() {
-    if (_rafPrev) return;
-    _rafPrev = requestAnimationFrame(() => {
-      _rafPrev = 0;
-      if (preview.ready) renderPreview();
-    });
-  }
 
   // -------------------- misc helpers --------------------
   function getIMSIndex() {
