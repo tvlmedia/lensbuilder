@@ -2392,48 +2392,7 @@ wctx.putImageData(out, 0, 0);
 preview.worldReady = true;
 drawPreviewViewport();
 
-        // soft edge fade
-        const edge = 1.0 - smoothstep(rFade0, rFade1, r);
-
-        if (r < 1e-9) {
-          const { u, v } = objectMmToUV(0, 0);
-          const c = sample(u, v);
-          outD[idx] = c[0]; outD[idx + 1] = c[1]; outD[idx + 2] = c[2]; outD[idx + 3] = 255;
-          continue;
-        }
-
-        const { rObj, trans, cos4 } = lookupROutTransCos4(r);
-        const mech = Math.max(0, Math.min(1, trans));
-        const gain = mech * Math.max(0, Math.min(1, cos4)) * edge;
-
-        if (gain < 1e-4) {
-          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-          continue;
-        }
-
-        const kScale = rObj / r;
-        const ox = sx * kScale;
-        const oy = sy * kScale;
-
-        const { u, v } = objectMmToUV(ox, oy);
-
-        if (u <= 0 || u >= 1 || v <= 0 || v >= 1) {
-          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-          continue;
-        }
-
-        const c = sample(u, v);
-
-        outD[idx] = Math.max(0, Math.min(255, c[0] * gain));
-        outD[idx + 1] = Math.max(0, Math.min(255, c[1] * gain));
-        outD[idx + 2] = Math.max(0, Math.min(255, c[2] * gain));
-        outD[idx + 3] = 255;
-      }
-    }
-
-    wctx.putImageData(out, 0, 0);
-    preview.worldReady = true;
-    drawPreviewViewport();
+      
   }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
@@ -2812,8 +2771,8 @@ if (ui.prevImg) {
     }
   });
 
-  // -------------------- sensor UI bindings --------------------
-  function function resetPreviewView() {
+// -------------------- sensor UI bindings --------------------
+function resetPreviewView() {
   preview.view.panX = 0;
   preview.view.panY = 0;
   preview.view.zoom = 1.0;
@@ -2830,7 +2789,7 @@ function bindControlRerenders() {
       const isSensor = (el === ui.sensorW || el === ui.sensorH);
       if (isSensor) {
         applySensorToIMS();
-        resetPreviewView();         // ✅ belangrijk
+        resetPreviewView();
       }
       scheduleRenderAll();
       scheduleRenderPreview();
@@ -2839,56 +2798,37 @@ function bindControlRerenders() {
     el.addEventListener("change", () => {
       if (el === ui.sensorPreset) {
         applyPreset(ui.sensorPreset.value);
-        resetPreviewView();         // ✅ belangrijk
+        resetPreviewView();
       }
+
       const isSensor = (el === ui.sensorW || el === ui.sensorH);
       if (isSensor) {
         applySensorToIMS();
-        resetPreviewView();         // ✅ belangrijk
+        resetPreviewView();
       }
+
       scheduleRenderAll();
       scheduleRenderPreview();
     });
   }
 
-  // preview controls unchanged...
-}() {
-    const all = [
-      ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.lensFocus, ui.renderScale,
-      ui.sensorW, ui.sensorH, ui.sensorPreset,
-    ].filter(Boolean);
-
-    for (const el of all) {
-      el.addEventListener("input", () => {
-        if (el === ui.sensorW || el === ui.sensorH) applySensorToIMS();
-        scheduleRenderAll();
-        scheduleRenderPreview();
-      });
-      el.addEventListener("change", () => {
-        if (el === ui.sensorPreset) applyPreset(ui.sensorPreset.value);
-        if (el === ui.sensorW || el === ui.sensorH) applySensorToIMS();
-        scheduleRenderAll();
-        scheduleRenderPreview();
-      });
-    }
-
-    // preview controls: only rerender preview
-    const prev = [ui.prevObjDist, ui.prevObjH, ui.prevRes].filter(Boolean);
-    for (const el of prev) {
-      el.addEventListener("input", () => scheduleRenderPreview());
-      el.addEventListener("change", () => scheduleRenderPreview());
-    }
-
-    // focusMode: we keep sensorOffset forced to 0 in this build
-    if (ui.focusMode) {
-      ui.focusMode.addEventListener("change", () => {
-        if (ui.focusMode.value === "cam") {
-          toast("Cam focus is disabled in this build (sensor plane fixed). Use Lens focus.");
-          ui.focusMode.value = "lens";
-        }
-      });
-    }
+  // preview controls: only rerender preview
+  const prev = [ui.prevObjDist, ui.prevObjH, ui.prevRes].filter(Boolean);
+  for (const el of prev) {
+    el.addEventListener("input", () => scheduleRenderPreview());
+    el.addEventListener("change", () => scheduleRenderPreview());
   }
+
+  // focusMode: cam focus disabled here
+  if (ui.focusMode) {
+    ui.focusMode.addEventListener("change", () => {
+      if (ui.focusMode.value === "cam") {
+        toast("Cam focus is disabled in this build (sensor plane fixed). Use Lens focus.");
+        ui.focusMode.value = "lens";
+      }
+    });
+  }
+}
 async function loadDefaultLensFromUrl(url) {
   try {
     const res = await fetch(url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(), { cache: "no-store" });
