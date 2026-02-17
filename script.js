@@ -1492,6 +1492,7 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
  function drawRulerFrom(world, originX, xMin, yWorld = null, label = "", yOffsetMm = 0) {
   if (!ctx) return;
 
+  // bepaal een logische y-positie (onder de lens)
   let maxAp = 0;
   if (lens?.surfaces?.length) {
     for (const s of lens.surfaces) maxAp = Math.max(maxAp, Math.abs(Number(s.ap || 0)));
@@ -1515,32 +1516,37 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
   ctx.textBaseline = "top";
 
   // base line
-  const a = P(xMin, y);
-  const b = P(originX, y);
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
+  {
+    const a = P(xMin, y);
+    const b = P(originX, y);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
 
-  // tick density based on zoom
-  const pxPerMm = world.s;
-  const stepMm  = 10;   // 1cm
-const majorMm = 50;   // 5cm “major”
-const midMm   = 10;   // 1cm “mid”
+  // tick settings
+  const stepMm  = 10; // 1 cm ticks
+  const majorMm = 50; // 5 cm major ticks
+  const tLenMajor = 14;
+  const tLenMid   = 10; // 1 cm ticks (we label them too)
+  const tLenMinor = 7;
 
+  // ticks from origin down to xMin
   for (let x = originX; x >= xMin - 1e-6; x -= stepMm) {
     const distMm = originX - x;
     const isMajor = (Math.round(distMm) % majorMm) === 0;
-const isMid   = !isMajor && (Math.round(distMm) % midMm) === 0;
-const shouldLabel = isMajor || isMid;
-     
+    const isMid   = !isMajor; // elke 1cm is mid (want stepMm=10)
+    const shouldLabel = true; // jij wilde labels per 1cm
+
+    const tLen = isMajor ? tLenMajor : (isMid ? tLenMid : tLenMinor);
+
     const p = P(x, y);
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
     ctx.lineTo(p.x, p.y + tLen);
     ctx.stroke();
 
-   const shouldLabel = isMajor || isMid;
     if (shouldLabel) {
       const cm = Math.round(distMm / 10);
       const txt = `${cm}cm`;
@@ -1566,16 +1572,21 @@ const shouldLabel = isMajor || isMid;
     }
   }
 
+  // optional origin label
   if (label) {
     const p0 = P(originX, y);
     const txt = `${label} 0`;
+
     ctx.save();
     ctx.font = `${fontMajor}px ${mono}`;
-    ctx.fillStyle = "rgba(0,0,0,.78)";
     const padX = 7, padY = 4;
+
     const w = ctx.measureText(txt).width + padX * 2;
     const h = fontMajor + padY * 2;
+
+    ctx.fillStyle = "rgba(0,0,0,.78)";
     ctx.fillRect(p0.x - w / 2, p0.y + 14, w, h);
+
     ctx.fillStyle = "rgba(255,255,255,.95)";
     ctx.shadowColor = "rgba(0,0,0,.75)";
     ctx.shadowBlur = 6;
