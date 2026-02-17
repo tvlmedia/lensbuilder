@@ -2313,6 +2313,32 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     const halfWv = sensorWv * 0.5;
     const halfHv = sensorHv * 0.5;
 
+    // startX = sensor plane x (we trace reverse from sensor side)
+const startX = sensorX;
+
+// stop sampling (how many rays across the stop for transmission estimate)
+const yStopSamples = (() => {
+  const stopIdx2 = findStopSurfaceIndex(surfacesTrace);
+  const stopS = stopIdx2 >= 0 ? surfacesTrace[stopIdx2] : surfacesTrace[0];
+  const apStop = Math.max(0.001, Number(stopS.ap || 1));
+
+  const N = 25; // 25 samples across stop (odd is nice)
+  const arr = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const a = (i / (N - 1)) * 2 - 1;     // -1..+1
+    arr[i] = a * apStop * 0.98;          // inside stop
+  }
+  return arr;
+})();
+
+// robust median helper
+function median(values) {
+  if (!values || values.length === 0) return 0;
+  const a = values.slice().sort((x, y) => x - y);
+  const m = a.length >> 1;
+  return (a.length % 2) ? a[m] : 0.5 * (a[m - 1] + a[m]);
+}
+    
     // -------------------- RADIAL VIGNETTE / MAPPING LUT (aspect-correct) --------------------
 const LUT_N = 768;
 const rObjLUT = new Float32Array(LUT_N);
@@ -2421,19 +2447,16 @@ for (let py = 0; py < H; py++) {
     // aspect-correct radial coordinate (0..1 at corner)
 const rSensor = Math.hypot(sx, sy);
 const { rObj, trans, cos4 } = lookupRadialByR(rSensor);
-     
-    const mech = Math.max(0, Math.min(1, trans));
-    const g = mech * Math.max(0, Math.min(1, cos4));
 
-    if (g < 1e-4) {
-      outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-      continue;
-    }
+const mech = Math.max(0, Math.min(1, trans));
+const g = mech * Math.max(0, Math.min(1, cos4));
 
-    // radial magnification mapping (chart blijft consistent)
-    // rObj is meridional object radius; scale r -> rObj.
-    const rSensor = Math.hypot(sx, sy);
-    const kScaleR = (rSensor > 1e-9) ? (rObj / rSensor) : 0;
+if (g < 1e-4) { ...continue; }
+
+// radial magnification mapping
+const kScaleR = (rSensor > 1e-9) ? (rObj / rSensor) : 0;
+const ox = sx * kScaleR;
+const oy = sy * kScaleR;
 
     const ox = sx * kScaleR;
     const oy = sy * kScaleR;
