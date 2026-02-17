@@ -2378,8 +2378,13 @@ function renderPreview() {
 const doCA  = !!document.getElementById("optCA")?.checked;
 const q     = String(document.getElementById("renderQuality")?.value || "normal");
    
-  const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;   // samples per pixel (only for DOF path)
-  const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));      // LUT throughput sampling (fast path)
+  // IMPORTANT: performance sane defaults
+  // - DOF path cost is ~W*H*spp*channels*surfaceCount
+  // - LUT path cost is ~LUT_N*(1 + lutPupilSqrt^2)*channels*surfaceCount + W*H
+  // Keep these numbers modest so preview stays interactive.
+  const spp = doDOF ? (q === "hq" ? 24 : (q === "draft" ? 6 : 12)) : 1;     // samples per pixel (only for DOF path)
+  const lutPupilSqrt = (q === "hq" ? 12 : (q === "draft" ? 6 : 9));         // LUT throughput sampling (fast path)
+  const LUT_N = (q === "hq" ? 900 : (q === "draft" ? 240 : 420));           // radial LUT samples
 
   const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
   const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
@@ -2461,15 +2466,52 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
   }
 
    // === FAST PATH (LUT) + optional CA (no blur, per-channel mapping) ===
+  // tiny stable hash (FNV-1a) for caching
+  function fnv1a(str){
+    let h = 2166136261;
+    for (let i=0;i<str.length;i++){
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h>>>0).toString(16);
+  }
+
+  // Cache LUTs across renders (massive speed win)
+  if (!preview._lutCache) preview._lutCache = new Map();
+
   function renderFastLUT(){
-    const LUT_N = 900;
 
     // If CA on: build 3 LUT sets for (R,G,B) = (c,d,g)
     const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
-    const rObjLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
-    const transLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
-    const naturalLUT = new Float32Array(LUT_N);
+    // Build a cache key that changes ONLY when optics/preview params change
+    const surfKey = JSON.stringify((lens.surfaces||[]).map(s=>[
+      String(s?.type||""),
+      +s.vx||0,
+      +s.r||0,
+      +s.ap||0,
+      String(s?.glass||""),
+      +s.n||0,
+      +s.vd||0,
+    ]));
+    const key = fnv1a(JSON.stringify({
+      q, doCA, wavePreset,
+      sensorX, lensShift,
+      xStop, stopAp,
+      xObjPlane, objH,
+      LUT_N, lutPupilSqrt,
+      surfKey,
+    }));
+
+    const cached = preview._lutCache.get(key);
+    let rObjLUT, transLUT, naturalLUT;
+    if (cached){
+      ({ rObjLUT, transLUT, naturalLUT } = cached);
+    } else {
+      rObjLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+      transLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+      naturalLUT = new Float32Array(LUT_N);
+    }
 
     const epsX = 0.05;
     const startX = sensorX + epsX;
@@ -2502,8 +2544,14 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
       };
     }
 
-    // Build LUTs
-    for (let k = 0; k < LUT_N; k++){
+    // Build LUTs only if we don't have them cached
+    if (!cached){
+      // Pre-jitter for stratified pupil sampling (avoids Math.random in hot loops)
+      const jitter = new Float32Array(lutPupilSqrt * lutPupilSqrt * 2);
+      for (let i=0;i<jitter.length;i++) jitter[i] = Math.random();
+      let ji = 0;
+
+      for (let k = 0; k < LUT_N; k++){
       const a = k / (LUT_N - 1);
       const rS = a * rMaxSensor;
       const pS = { x: startX, y: rS, z: 0 };
@@ -2527,8 +2575,9 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
         let ok = 0, total = 0;
         for (let iy = 0; iy < lutPupilSqrt; iy++){
           for (let ix = 0; ix < lutPupilSqrt; ix++){
-            const uu = (ix + Math.random()) / lutPupilSqrt;
-            const vv = (iy + Math.random()) / lutPupilSqrt;
+            const uu = (ix + jitter[ji++]) / lutPupilSqrt;
+            const vv = (iy + jitter[ji++]) / lutPupilSqrt;
+            if (ji >= jitter.length) ji = 0;
 
             const pp = samplePupilDisk(uu, vv);
             const target = { x: xStop, y: pp.y, z: pp.z };
@@ -2544,6 +2593,15 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
           }
         }
         transLUT[ch][k] = total ? (ok/total) : 0;
+      }
+      }
+
+      // store in cache
+      preview._lutCache.set(key, { rObjLUT, transLUT, naturalLUT });
+      // keep cache bounded (simple LRU-ish: delete oldest)
+      if (preview._lutCache.size > 8){
+        const firstKey = preview._lutCache.keys().next().value;
+        preview._lutCache.delete(firstKey);
       }
     }
 
@@ -2648,9 +2706,21 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
     const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
     let y = 0;
-    const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 24 : 16);
+    const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 28 : 18);
+
+    // Pre-generate randoms for this render (cuts Math.random pressure a lot)
+    // Each sample needs: 2 for pupil + 2 for pixel jitter.
+    const randStride = 4;
+    const randBuf = new Float32Array(Math.max(1024, W * rowsPerChunk * spp * randStride));
+    let rptr = 0;
+    function refillRand(){
+      for (let i=0;i<randBuf.length;i++) randBuf[i] = Math.random();
+      rptr = 0;
+    }
+    refillRand();
 
     function step(){
+      const y0 = y;
       const yEnd = Math.min(H, y + rowsPerChunk);
       setPreviewProgress(y / H, `DOF ${Math.round((y/H)*100)}%`);
 
@@ -2671,11 +2741,12 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
 
           for (let s = 0; s < spp; s++){
             // jitter inside pixel slightly helps noise
-            const jx = (Math.random() - 0.5) * (sensorWv / W) * 0.6;
-            const jy = (Math.random() - 0.5) * (sensorHv / H) * 0.6;
+            if (rptr + randStride >= randBuf.length) refillRand();
+            const jx = (randBuf[rptr++] - 0.5) * (sensorWv / W) * 0.6;
+            const jy = (randBuf[rptr++] - 0.5) * (sensorHv / H) * 0.6;
             const pSj = { x: startX, y: sx + jx, z: sy + jy };
 
-            const pp = samplePupilDisk(Math.random(), Math.random());
+            const pp = samplePupilDisk(randBuf[rptr++], randBuf[rptr++]);
             const target = { x: xStop, y: pp.y, z: pp.z };
             const dir0 = normalize3({ x: target.x - pSj.x, y: target.y - pSj.y, z: target.z - pSj.z });
 
@@ -2723,7 +2794,8 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
       }
 
       // partial update (progressive)
-      wctx.putImageData(out, 0, 0);
+      // Don't upload the full buffer each chunk; only upload the rows we just computed.
+      wctx.putImageData(out, 0, 0, 0, y0, W, yEnd - y0);
       preview.worldReady = true;
       drawPreviewViewport();
 
