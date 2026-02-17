@@ -2451,17 +2451,17 @@ const { rObj, trans, cos4 } = lookupRadialByR(rSensor);
 const mech = Math.max(0, Math.min(1, trans));
 const g = mech * Math.max(0, Math.min(1, cos4));
 
-if (g < 1e-4) { ...continue; }
+if (g < 1e-4) {
+  outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+  continue;
+}
 
 // radial magnification mapping
 const kScaleR = (rSensor > 1e-9) ? (rObj / rSensor) : 0;
 const ox = sx * kScaleR;
 const oy = sy * kScaleR;
 
-    const ox = sx * kScaleR;
-    const oy = sy * kScaleR;
-
-    const uv = objectMmToUVContain(ox, oy);
+const uv = objectMmToUVContain(ox, oy);
 if (!uv) {
   outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
   continue;
@@ -2469,10 +2469,10 @@ if (!uv) {
 
 const c = sample(uv.u, uv.v);
 
-    outD[idx]     = Math.max(0, Math.min(255, c[0] * g));
-    outD[idx + 1] = Math.max(0, Math.min(255, c[1] * g));
-    outD[idx + 2] = Math.max(0, Math.min(255, c[2] * g));
-    outD[idx + 3] = 255;
+outD[idx]     = Math.max(0, Math.min(255, c[0] * g));
+outD[idx + 1] = Math.max(0, Math.min(255, c[1] * g));
+outD[idx + 2] = Math.max(0, Math.min(255, c[2] * g));
+outD[idx + 3] = 255;
   }
 }
 
