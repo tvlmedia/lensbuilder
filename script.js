@@ -1887,21 +1887,25 @@ drawAxes(world);
   const sr0 = getSensorRectBaseInPane();
   const sr = applyViewToSensorRect(sr0, preview.view);
 
-  pctx.imageSmoothingEnabled = true;
-  pctx.drawImage(
-    preview.worldCanvas,
-    0, 0, preview.worldCanvas.width, preview.worldCanvas.height,
-    sr.x, sr.y, sr.w, sr.h
-  );
+ pctx.imageSmoothingEnabled = true;
+pctx.imageSmoothingQuality = "high";
 
-  pctx.save();
-  pctx.strokeStyle = "rgba(255,255,255,.20)";
-  pctx.lineWidth = 1;
-  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
+pctx.drawImage(
+  preview.worldCanvas,
+  0, 0, preview.worldCanvas.width, preview.worldCanvas.height,
+  sr.x, sr.y, sr.w, sr.h
+);
 
-  pctx.strokeStyle = "rgba(42,110,242,.55)";
-  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
-  pctx.restore();
+pctx.save();
+pctx.lineWidth = 1;
+
+pctx.strokeStyle = "rgba(255,255,255,.20)";
+pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
+
+pctx.strokeStyle = "rgba(42,110,242,.55)";
+pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+
+pctx.restore();
 }
 
   function bindPreviewViewControls() {
@@ -2474,6 +2478,8 @@ preview.worldCanvas.width = W;
 preview.worldCanvas.height = H;
 
 const wctx = preview.worldCtx;
+wctx.imageSmoothingEnabled = true;
+wctx.imageSmoothingQuality = "high";
 const out = wctx.createImageData(W, H);
 const outD = out.data;
 
@@ -2535,6 +2541,7 @@ for (let py = 0; py < H; py++) {
 wctx.putImageData(out, 0, 0);
 preview.worldReady = true;
 drawPreviewViewport();
+} // END renderPreview
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
