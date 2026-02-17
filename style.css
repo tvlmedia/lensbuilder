@@ -450,3 +450,26 @@ canvas{
   line-height:1;
   padding:10px 12px;
 }
+.chk{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  user-select:none;
+  font-size:13px;
+  color:var(--text);
+}
+.chk input{ transform: translateY(1px); }
+
+.rowBtns{
+  display:flex;
+  gap:10px;
+  justify-content:flex-start;
+  align-items:center;
+}
+
+.btnGhost{
+  background:transparent;
+  border:1px solid var(--stroke2);
+  color:var(--text);
+}
+.btnGhost:hover{ border-color:rgba(255,255,255,.28); }
