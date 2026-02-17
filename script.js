@@ -846,12 +846,13 @@
     drawBackgroundCSS(r.width, r.height);
 
     const world = makeWorldTransform();
-    drawAxes(world);
+   drawAxes(world);
+} // <-- DEZE ontbrak (sluit de eerste renderAll af)
 
-   function drawLens(world, surfaces) {
-    drawElementsClosed(world, surfaces);
-    for (const s of surfaces) drawSurface(world, s);
-  }
+function drawLens(world, surfaces) {
+  drawElementsClosed(world, surfaces);
+  for (const s of surfaces) drawSurface(world, s);
+}
 
   function drawRays(world, rayTraces, sensorX) {
     if (!ctx) return;
