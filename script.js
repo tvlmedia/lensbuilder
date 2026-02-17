@@ -1903,7 +1903,7 @@ function renderAll() {
     return { x: cx - w * 0.5, y: cy - h * 0.5, w, h };
   }
 
- function drawPreviewViewport() {
+function drawPreviewViewport() {
   if (!previewCanvasEl || !pctx) return;
 
   resizePreviewCanvasToCSS();
@@ -1911,7 +1911,6 @@ function renderAll() {
   const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
   const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
 
-  // dpr transform staat al goed; clear in CSS units
   pctx.clearRect(0, 0, Wc, Hc);
 
   const hasImg = !!(preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
@@ -1925,16 +1924,32 @@ function renderAll() {
     return;
   }
 
+  // sensor kader (binnen de pane)
   const sr0 = getSensorRectBaseInPane();
-  const sr = applyViewToSensorRect(sr0, preview.view);
 
- pctx.imageSmoothingEnabled = true;
-pctx.imageSmoothingQuality = "high";
+  // worldCanvas -> pane (met padding), behoud aspect van worldCanvas
+  const pad = 14;
+  const availW = Wc - pad * 2;
+  const availH = Hc - pad * 2;
 
-pctx.drawImage(
-  preview.worldCanvas,
-  0, 0, preview.worldCanvas.width, preview.worldCanvas.height,
-  sr.x, sr.y, sr.w, sr.h
+  const srcAsp = preview.worldCanvas.width / preview.worldCanvas.height;
+  let dw = availW;
+  let dh = dw / srcAsp;
+  if (dh > availH) {
+    dh = availH;
+    dw = dh * srcAsp;
+  }
+  const dx = (Wc - dw) * 0.5;
+  const dy = (Hc - dh) * 0.5;
+
+  pctx.imageSmoothingEnabled = true;
+  pctx.imageSmoothingQuality = "high";
+
+  pctx.drawImage(
+    preview.worldCanvas,
+    0, 0, preview.worldCanvas.width, preview.worldCanvas.height,
+    dx, dy, dw, dh
+ 
 );
 
 pctx.save();
