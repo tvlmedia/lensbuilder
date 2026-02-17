@@ -1699,13 +1699,18 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
 
   let _rafPrev = 0;
 
-   
-  function scheduleRenderPreview() {
+function scheduleRenderPreview(force = false) {
   if (_rafPrev) return;
   _rafPrev = requestAnimationFrame(() => {
     _rafPrev = 0;
     if (!preview.ready) return;
-    if (preview.isRendering) return; // ✅ voorkomt spam
+
+    // 🔥 nieuw: als er al een render loopt en we willen updaten: cancel + restart
+    if (preview.isRendering) {
+      preview.renderToken++;      // maak lopende job stale
+      preview.isRendering = false;
+    }
+
     renderPreview();
   });
 }
@@ -2956,7 +2961,11 @@ const hitB = traceOneSampleToObject(sensorX, sx, sy, "g", xStop, stopAp, xObjPla
   }
 
   // Preview bindings
-  if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
+if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => {
+  preview.renderToken++;
+  preview.isRendering = false;
+  renderPreview();
+});
    on("#btnCancelPreview", "click", () => {
   preview.renderToken++;     // maakt lopende job stale
   preview.isRendering = false;
