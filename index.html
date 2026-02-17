@@ -49,6 +49,7 @@
 </header>
 
 <main class="app">
+  <!-- LEFT: controls + table -->
   <section class="left">
     <div class="panel">
       <div class="panelTitle">Setup</div>
@@ -58,7 +59,6 @@
           <label>Sensor preset</label>
           <select id="sensorPreset" class="cellSelect"></select>
         </div>
-
         <div class="field inline2">
           <div>
             <label>Sensor W (mm)</label>
@@ -74,7 +74,6 @@
           <label>Field angle (deg)</label>
           <input id="fieldAngle" class="cellInput" type="number" step="0.05" value="0">
         </div>
-
         <div class="field">
           <label>Rays</label>
           <input id="rayCount" class="cellInput" type="number" step="1" value="31" min="3" max="101">
@@ -99,6 +98,7 @@
           <input id="renderScale" class="cellInput" type="number" step="0.05" value="1.25">
         </div>
 
+        <!-- kept for compatibility (script forces to 0 + disables cam focus) -->
         <div class="field">
           <label>Focus mode</label>
           <select id="focusMode" class="cellSelect">
@@ -122,6 +122,7 @@
         <div id="badgeCov" class="badge">COV: —</div>
       </div>
 
+      <!-- (top badges ids exist too, if you ever want to show them somewhere else) -->
       <div class="hidden">
         <span id="badgeEflTop"></span>
         <span id="badgeBflTop"></span>
@@ -159,8 +160,10 @@
     </div>
   </section>
 
+  <!-- RIGHT: split view -->
   <section class="right">
     <div class="split">
+      <!-- RAYS -->
       <div id="raysPane" class="pane">
         <div class="paneTop">
           <div class="paneTitle">Rays / Cross-section</div>
@@ -173,6 +176,7 @@
         </div>
       </div>
 
+      <!-- PREVIEW -->
       <div id="previewPane" class="pane">
         <div class="paneTop">
           <div class="paneTitle">Preview (chart)</div>
@@ -343,6 +347,7 @@
   </div>
 </div>
 
+<!-- TOASTS -->
 <div id="toastHost" class="toastHost"></div>
 
 <script src="./script.js"></script>
