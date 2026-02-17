@@ -2275,265 +2275,266 @@ pctx.restore();
     });
   }
 
-  // -------------------- preview rendering (split-view) --------------------
-  function renderPreview() {
-    if (!pctx || !previewCanvasEl) return;
+ // -------------------- preview rendering (split-view) --------------------
+function renderPreview() {
+  if (!pctx || !previewCanvasEl) return;
+  if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
 
-    const lensShift = Number(ui.lensFocus?.value || 0);
-    computeVertices(lens.surfaces, lensShift);
+  const lensShift = Number(ui.lensFocus?.value || 0);
+  computeVertices(lens.surfaces, lensShift);
 
-    applySensorToIMS();
-    clampAllApertures(lens.surfaces);
+  applySensorToIMS();
+  clampAllApertures(lens.surfaces);
 
-    const wavePreset = ui.wavePreset?.value || "d";
-    if (ui.sensorOffset) ui.sensorOffset.value = "0";
-    const sensorX = 0.0;
+  const wavePreset = ui.wavePreset?.value || "d";
+  if (ui.sensorOffset) ui.sensorOffset.value = "0";
+  const sensorX = 0.0;
 
-    const { w: sensorW, h: sensorH } = getSensorWH();
+  const { w: sensorW, h: sensorH } = getSensorWH();
 
-    const stopIdx = findStopSurfaceIndex(lens.surfaces);
-    const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
-    const xStop = stopSurf.vx;
+  const stopIdx = findStopSurfaceIndex(lens.surfaces);
+  const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
+  const xStop = stopSurf.vx;
 
-    const objDist = Number(ui.prevObjDist?.value || 2000);
-    const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+  const objDist   = Number(ui.prevObjDist?.value || 2000);
+  const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
-    const objH = Number(ui.prevObjH?.value || 200);
-    const halfObjH = Math.max(1e-3, objH * 0.5);
+  const objH      = Number(ui.prevObjH?.value || 200);
+  const halfObjH  = Math.max(1e-3, objH * 0.5);
 
-    const base = Math.max(64, Number(ui.prevRes?.value || 720));
+  const base = Math.max(64, Number(ui.prevRes?.value || 720));
 
-    const key = JSON.stringify({
-      lensShift,
-      wave: wavePreset,
-      sensor: [Number(sensorW.toFixed(4)), Number(sensorH.toFixed(4))],
-      objDist,
-      objH,
-      base,
-      lensHash: lens.surfaces.map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(",")).join("|"),
-    });
+  // cache-key (avoid rerender when nothing changed)
+  const key = JSON.stringify({
+    lensShift,
+    wave: wavePreset,
+    sensor: [Number(sensorW.toFixed(4)), Number(sensorH.toFixed(4))],
+    objDist,
+    objH,
+    base,
+    lensHash: lens.surfaces.map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(",")).join("|"),
+  });
 
-    if (preview.worldReady && preview.dirtyKey === key) {
-      drawPreviewViewport();
-      return;
+  if (preview.worldReady && preview.dirtyKey === key) {
+    drawPreviewViewport();
+    return;
+  }
+  preview.dirtyKey = key;
+  preview.worldReady = false;
+
+  // -------------------- output size (sensor aspect) --------------------
+  const aspect = sensorW / sensorH;
+  const W = Math.max(64, Math.round(base * aspect));
+  const H = Math.max(64, base);
+
+  // overscan in mm
+  const sensorWv = sensorW * OV;
+  const sensorHv = sensorH * OV;
+  const halfWv = sensorWv * 0.5;
+  const halfHv = sensorHv * 0.5;
+
+  // reverse-trace start just "in front of" sensor to avoid plane self-hit
+  const epsX = 0.05;
+  const startX = sensorX + epsX;
+
+  // max radial distance on overscanned sensor rectangle
+  const rMaxSensor = Math.hypot(halfWv, halfHv);
+
+  // -------------------- source image sampling --------------------
+  const hasImg = !!(preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
+  const imgW = preview.imgCanvas.width;
+  const imgH = preview.imgCanvas.height;
+  const imgData = hasImg ? preview.imgData : null;
+
+  function sample(u, v) {
+    if (!hasImg) return [255, 255, 255, 255];
+    if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
+
+    const x = u * (imgW - 1);
+    const y = v * (imgH - 1);
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = Math.min(imgW - 1, x0 + 1);
+    const y1 = Math.min(imgH - 1, y0 + 1);
+    const tx = x - x0, ty = y - y0;
+
+    function px(ix, iy) {
+      const o = (iy * imgW + ix) * 4;
+      return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
     }
-    preview.dirtyKey = key;
-    preview.worldReady = false;
 
-    const sensorWv = sensorW * OV;
-    const sensorHv = sensorH * OV;
+    const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
+    const lerp = (a, b, t) => a + (b - a) * t;
 
-    const aspect = sensorW / sensorH;
-    const W = Math.max(64, Math.round(base * aspect));
-    const H = Math.max(64, base);
-
-    const hasImg = preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0;
-    const imgW = preview.imgCanvas.width;
-    const imgH = preview.imgCanvas.height;
-    const imgData = hasImg ? preview.imgData : null;
-
-    function sample(u, v) {
-      if (!hasImg) return [255, 255, 255, 255];
-      if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
-
-      const x = u * (imgW - 1);
-      const y = v * (imgH - 1);
-      const x0 = Math.floor(x), y0 = Math.floor(y);
-      const x1 = Math.min(imgW - 1, x0 + 1);
-      const y1 = Math.min(imgH - 1, y0 + 1);
-      const tx = x - x0, ty = y - y0;
-
-      function px(ix, iy) {
-        const o = (iy * imgW + ix) * 4;
-        return [imgData[o], imgData[o + 1], imgData[o + 2], imgData[o + 3]];
-      }
-
-      const c00 = px(x0, y0), c10 = px(x1, y0), c01 = px(x0, y1), c11 = px(x1, y1);
-      const lerp = (a, b, t) => a + (b - a) * t;
-
-      const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
-      const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
-      return c0.map((v0, i) => lerp(v0, c1[i], ty));
-    }
-
-    const halfWv = sensorWv * 0.5;
-    const halfHv = sensorHv * 0.5;
-
-// -------------------- VIGNETTE / MAPPING LUT (axisymmetric 3D, RADIAL) --------------------
-// We build a LUT over sensor radius r_s = sqrt(x^2+y^2) (with overscan).
-// For each r_s: we (1) map chief ray to object radius, (2) compute mechanical throughput
-// by sampling the STOP pupil disk, tracing sensor->pupil->lens in 3D.
-
-const LUT_N = 900;
-const rObjLUT  = new Float32Array(LUT_N);
-const transLUT = new Float32Array(LUT_N);
-
-// Pupil sampling quality (trade speed/accuracy)
-const PUPIL_SQRT = 10;                 // 10 => 100 samples
-const PUPIL_SAMPLES = PUPIL_SQRT * PUPIL_SQRT;
-
-const epsX = 0.05;
-const startX = sensorX + epsX;
-
-const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
-
-// overscanned sensor extents in mm (already computed above in your code)
-const rMaxSensor = Math.hypot(halfWv, halfHv); // half diagonal of overscanned sensor
-
-function samplePupilDisk(u, v){
-  // stratified square -> concentric disk mapping-ish (simple, good enough)
-  // u,v in [0,1)
-  const a = (u * 2 - 1);
-  const b = (v * 2 - 1);
-
-  // map square to disk (Shirley-Chiu)
-  let r, phi;
-  if (a === 0 && b === 0){ r = 0; phi = 0; }
-  else if (Math.abs(a) > Math.abs(b)){
-    r = a;
-    phi = (Math.PI/4) * (b/a);
-  } else {
-    r = b;
-    phi = (Math.PI/2) - (Math.PI/4) * (a/b);
+    const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
+    const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
+    return c0.map((v0, i) => lerp(v0, c1[i], ty));
   }
 
-  const rr = Math.abs(r) * stopAp;
-  return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
-}
+  // -------------------- LUTs (radial mapping + throughput + natural cos^4) --------------------
+  const LUT_N = 900;
+  const rObjLUT  = new Float32Array(LUT_N);
+  const transLUT = new Float32Array(LUT_N);
+  const naturalLUT = new Float32Array(LUT_N);
 
-function lookupRadial(absR){
-  const t = Math.max(0, Math.min(1, absR / rMaxSensor));
-  const x = t * (LUT_N - 1);
-  const i0 = Math.floor(x);
-  const i1 = Math.min(LUT_N - 1, i0 + 1);
-  const u = x - i0;
+  const PUPIL_SQRT = 14; // 196 samples
+  const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 
-  const rObj  = rObjLUT[i0]  * (1 - u) + rObjLUT[i1]  * u;
-  const trans = transLUT[i0] * (1 - u) + transLUT[i1] * u;
-  return { rObj, trans };
-}
+  function clamp(x, a, b){ return x < a ? a : (x > b ? b : x); }
 
-// Build LUT
-for (let k = 0; k < LUT_N; k++){
-  const a = k / (LUT_N - 1);
-  const rS = a * rMaxSensor;
+  function samplePupilDisk(u, v){
+    // concentric square->disk mapping
+    const a = (u * 2 - 1);
+    const b = (v * 2 - 1);
 
-  // Put the sensor sample on +Y axis (rotation symmetry)
-  const pS = { x: startX, y: rS, z: 0 };
+    let r, phi;
+    if (a === 0 && b === 0){ r = 0; phi = 0; }
+    else if (Math.abs(a) > Math.abs(b)){
+      r = a;
+      phi = (Math.PI/4) * (b/a);
+    } else {
+      r = b;
+      phi = (Math.PI/2) - (Math.PI/4) * (a/b);
+    }
 
-  // 1) Chief ray for mapping: aim at stop center (y=z=0)
-  {
-    const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
-    const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wavePreset);
+    const rr = Math.abs(r) * stopAp;
+    return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
+  }
 
-    if (!trC.vignetted && !trC.tir){
-      const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
-      if (hitObj){
-        rObjLUT[k] = Math.hypot(hitObj.y, hitObj.z);
+  function lookupNatural(absR){
+    const t = clamp(absR / rMaxSensor, 0, 1);
+    const x = t * (LUT_N - 1);
+    const i0 = Math.floor(x);
+    const i1 = Math.min(LUT_N - 1, i0 + 1);
+    const u = x - i0;
+    return naturalLUT[i0] * (1 - u) + naturalLUT[i1] * u;
+  }
+
+  function lookupRadial(absR){
+    const t = clamp(absR / rMaxSensor, 0, 1);
+    const x = t * (LUT_N - 1);
+    const i0 = Math.floor(x);
+    const i1 = Math.min(LUT_N - 1, i0 + 1);
+    const u = x - i0;
+
+    const rObj  = rObjLUT[i0]  * (1 - u) + rObjLUT[i1]  * u;
+    const trans = transLUT[i0] * (1 - u) + transLUT[i1] * u;
+    return { rObj, trans };
+  }
+
+  for (let k = 0; k < LUT_N; k++){
+    const a = k / (LUT_N - 1);
+    const rS = a * rMaxSensor;
+
+    const pS = { x: startX, y: rS, z: 0 };
+
+    // natural cos^4 (chief direction to stop axis)
+    {
+      const dirChief0 = normalize3({ x: xStop - startX, y: -rS, z: 0 });
+      const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
+      naturalLUT[k] = Math.pow(cosT, 4);
+    }
+
+    // chief mapping rS -> rObj
+    {
+      const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
+      const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wavePreset);
+
+      if (!trC.vignetted && !trC.tir){
+        const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
+        rObjLUT[k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
       } else {
         rObjLUT[k] = 0;
       }
-    } else {
-      rObjLUT[k] = 0;
     }
+
+    // mechanical throughput (pupil disk sampling)
+    let ok = 0, total = 0;
+
+    for (let iy = 0; iy < PUPIL_SQRT; iy++){
+      for (let ix = 0; ix < PUPIL_SQRT; ix++){
+        const u = (ix + Math.random()) / PUPIL_SQRT;
+        const v = (iy + Math.random()) / PUPIL_SQRT;
+
+        const pp = samplePupilDisk(u, v);
+        const target = { x: xStop, y: pp.y, z: pp.z };
+        const dir = normalize3({
+          x: target.x - pS.x,
+          y: target.y - pS.y,
+          z: target.z - pS.z
+        });
+
+        const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wavePreset);
+        if (tr.vignetted || tr.tir){ total++; continue; }
+
+        const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+        if (!hitObj){ total++; continue; }
+
+        ok++; total++;
+      }
+    }
+
+    transLUT[k] = total > 0 ? (ok / total) : 0;
   }
 
-  // 2) Mechanical throughput: sample pupil disk points
-  let ok = 0;
-  let total = 0;
+  // -------------------- render to world canvas --------------------
+  preview.worldCanvas.width = W;
+  preview.worldCanvas.height = H;
 
-  for (let iy = 0; iy < PUPIL_SQRT; iy++){
-    for (let ix = 0; ix < PUPIL_SQRT; ix++){
-      // stratified jitter
-      const u = (ix + 0.5) / PUPIL_SQRT;
-      const v = (iy + 0.5) / PUPIL_SQRT;
+  const wctx = preview.worldCtx;
+  wctx.imageSmoothingEnabled = true;
+  wctx.imageSmoothingQuality = "high";
 
-      const pp = samplePupilDisk(u, v);
-      const target = { x: xStop, y: pp.y, z: pp.z };
-      const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
+  const out = wctx.createImageData(W, H);
+  const outD = out.data;
 
-      const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wavePreset);
-      if (tr.vignetted || tr.tir){ total++; continue; }
+  const imgAsp = hasImg ? (imgW / imgH) : (16/9);
+  const halfObjW = halfObjH * imgAsp;
 
-      const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-      if (!hitObj){ total++; continue; }
-
-      ok++; total++;
-    }
+  function objectMmToUV(xmm, ymm) {
+    const u = 0.5 + (xmm / (2 * halfObjW));
+    const v = 0.5 - (ymm / (2 * halfObjH));
+    return { u, v };
   }
 
-  transLUT[k] = total > 0 ? (ok / total) : 0;
-}
+  for (let py = 0; py < H; py++) {
+    const sy = (0.5 - (py + 0.5) / H) * sensorHv;
 
-// -------------------- render world canvas --------------------
-preview.worldCanvas.width = W;
-preview.worldCanvas.height = H;
+    for (let px = 0; px < W; px++) {
+      const sx = ((px + 0.5) / W - 0.5) * sensorWv;
+      const rS = Math.hypot(sx, sy);
 
-const wctx = preview.worldCtx;
-wctx.imageSmoothingEnabled = true;
-wctx.imageSmoothingQuality = "high";
-const out = wctx.createImageData(W, H);
-const outD = out.data;
+      const { rObj, trans } = lookupRadial(rS);
+      const g = clamp(trans * lookupNatural(rS), 0, 1);
 
-const imgAsp = hasImg ? (imgW / imgH) : 1.7777778;
-const halfObjW = halfObjH * imgAsp;
+      const idx = (py * W + px) * 4;
 
-function objectMmToUV(xmm, ymm) {
-  const u = 0.5 + (xmm / (2 * halfObjW));
-  const v = 0.5 - (ymm / (2 * halfObjH));
-  return { u, v };
-}
+      if (g < 1e-4) {
+        outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 0; outD[idx+3] = 255;
+        continue;
+      }
 
-for (let py = 0; py < H; py++) {
-  const sy = (0.5 - (py + 0.5) / H) * sensorHv;
+      // map sensor vector -> object vector via radial scale
+      let ox = 0, oy = 0;
+      if (rS > 1e-9) {
+        const s = rObj / rS;
+        ox = sx * s;
+        oy = sy * s;
+      }
 
-  for (let px = 0; px < W; px++) {
-    const sx = ((px + 0.5) / W - 0.5) * sensorWv; // sensor mm (overscan)
-    const rS = Math.hypot(sx, sy);
+      const { u, v } = objectMmToUV(ox, oy);
+      const c = sample(u, v);
 
-    const { rObj, trans } = lookupRadial(rS);
-
-    // scale factor: object radius / sensor radius
-    const kScale = (rS > 1e-9) ? (rObj / rS) : 0;
-
-    // throughput = purely mechanical
-    const g = Math.max(0, Math.min(1, trans));
-
-    const idx = (py * W + px) * 4;
-
-    // Fully vignetted => black
-    if (g < 1e-4) {
-      outD[idx] = 0;
-      outD[idx + 1] = 0;
-      outD[idx + 2] = 0;
+      outD[idx]     = clamp(c[0] * g, 0, 255);
+      outD[idx + 1] = clamp(c[1] * g, 0, 255);
+      outD[idx + 2] = clamp(c[2] * g, 0, 255);
       outD[idx + 3] = 255;
-      continue;
     }
-
-    // object coords (mm)
-    let ox, oy;
-    if (rS < 1e-9) {
-      ox = 0; oy = 0;
-    } else {
-      ox = sx * kScale;
-      oy = sy * kScale;
-    }
-
-    const { u, v } = objectMmToUV(ox, oy);
-    const c = sample(u, v);
-
-    outD[idx]     = Math.max(0, Math.min(255, c[0] * g));
-    outD[idx + 1] = Math.max(0, Math.min(255, c[1] * g));
-    outD[idx + 2] = Math.max(0, Math.min(255, c[2] * g));
-    outD[idx + 3] = 255;
   }
-}
 
-// ✅ pas NA alle pixels:
-wctx.putImageData(out, 0, 0);
-preview.worldReady = true;
-drawPreviewViewport();
-} // <-- DIT toevoegen: sluit renderPreview()
+  wctx.putImageData(out, 0, 0);
+  preview.worldReady = true;
+  drawPreviewViewport();
+}
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
