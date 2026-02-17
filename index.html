@@ -147,6 +147,31 @@
 </select>
             </div>
 
+            <div class="ctrl">
+              <label for="prevDOF">Depth of field</label>
+              <select id="prevDOF">
+                <option value="off" selected>Off (fast)</option>
+                <option value="on">On (slower)</option>
+              </select>
+            </div>
+
+            <div class="ctrl">
+              <label for="prevQual">DOF quality</label>
+              <select id="prevQual">
+                <option value="8">Draft (8 samples)</option>
+                <option value="24" selected>Medium (24 samples)</option>
+                <option value="64">High (64 samples)</option>
+              </select>
+            </div>
+
+            <div class="ctrl">
+              <label for="prevCA">Chromatic aberration</label>
+              <select id="prevCA">
+                <option value="on" selected>On (RGB traces)</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+
             <div class="ctrl two">
               <label>&nbsp;</label>
               <button id="btnRenderPreview" class="btn btnPrimary" type="button">Render Preview</button>
