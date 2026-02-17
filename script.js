@@ -2860,8 +2860,8 @@ on("#sensorPreset", "change", (e) => {
 const DEFAULT_LENS_URL = "./Bijna%20goed%20.json";   // <-- PAS AAN indien anders
 
 // 2) Jouw chart in je repo
-const DEFAULT_CHART_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png"; // <-- PAS AAN indien anders
-
+const DEFAULT_CHART_URL = "./TVL_Focus_Distortion_Chart_3x2.png";
+   
 async function loadDefaultLensFromUrl(url) {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Default lens fetch failed (${res.status})`);
