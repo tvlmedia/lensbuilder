@@ -162,7 +162,7 @@
 
 // -------------------- default preview chart (GitHub) --------------------
 const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
-   
+const DEFAULT_LENS_URL = "./bijna-goed.json";
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
     const i = lens.surfaces.length - 1;
@@ -2791,24 +2791,39 @@ if (ui.prevImg) {
       });
     }
   }
-
+async function loadDefaultLensFromUrl(url) {
+  try {
+    const res = await fetch(url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const obj = await res.json();
+    if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid lens JSON");
+    loadLens(obj);
+    toast("Loaded default lens JSON");
+    return true;
+  } catch (e) {
+    console.warn("Default lens failed to load:", url, e);
+    if (ui.footerWarn) ui.footerWarn.textContent = `Default lens not found: ${url} (fallback to OMIT)`;
+    loadLens(omit50ConceptV1());
+    toast("Loaded OMIT fallback");
+    return false;
+  }
+}
   // -------------------- init --------------------
 function init() {
   populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
 
-  buildTable();
-  applySensorToIMS();
+  await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
 
-  bindViewControls();
-  bindPreviewViewControls();
-  bindControlRerenders();
+bindViewControls();
+bindPreviewViewControls();
+bindControlRerenders();
 
-  // auto-load default chart from GitHub (if present)
-  loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
+// auto-load default chart
+loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
 
-  renderAll();
-  drawPreviewViewport(); // blank state draw
+renderAll();
+drawPreviewViewport();drawPreviewViewport(); // blank state draw
 }
 
   init();
