@@ -2776,7 +2776,46 @@ if (ui.prevImg) {
   });
 
   // -------------------- sensor UI bindings --------------------
-  function bindControlRerenders() {
+  function function resetPreviewView() {
+  preview.view.panX = 0;
+  preview.view.panY = 0;
+  preview.view.zoom = 1.0;
+}
+
+function bindControlRerenders() {
+  const all = [
+    ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.lensFocus, ui.renderScale,
+    ui.sensorW, ui.sensorH, ui.sensorPreset,
+  ].filter(Boolean);
+
+  for (const el of all) {
+    el.addEventListener("input", () => {
+      const isSensor = (el === ui.sensorW || el === ui.sensorH);
+      if (isSensor) {
+        applySensorToIMS();
+        resetPreviewView();         // ✅ belangrijk
+      }
+      scheduleRenderAll();
+      scheduleRenderPreview();
+    });
+
+    el.addEventListener("change", () => {
+      if (el === ui.sensorPreset) {
+        applyPreset(ui.sensorPreset.value);
+        resetPreviewView();         // ✅ belangrijk
+      }
+      const isSensor = (el === ui.sensorW || el === ui.sensorH);
+      if (isSensor) {
+        applySensorToIMS();
+        resetPreviewView();         // ✅ belangrijk
+      }
+      scheduleRenderAll();
+      scheduleRenderPreview();
+    });
+  }
+
+  // preview controls unchanged...
+}() {
     const all = [
       ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.lensFocus, ui.renderScale,
       ui.sensorW, ui.sensorH, ui.sensorPreset,
