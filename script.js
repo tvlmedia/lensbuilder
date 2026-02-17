@@ -3185,113 +3185,124 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
   }
 
   async function togglePreviewFullscreen() {
-    await togglePaneFullscreen(ui.previewPane || previewCanvasEl?.parentElement);
-    // na fullscreen: canvassen resizen + redraw
+    await togglePaneFullscreen(ui.previewPane);
+    // na fullscreen verandert de CSS size → canvassen opnieuw schalen
     setTimeout(() => {
       resizePreviewCanvasToCSS();
-      drawPreviewViewport();
-    }, 60);
+      if (preview.ready) scheduleRenderPreview();
+    }, 50);
   }
 
   async function toggleRaysFullscreen() {
-    await togglePaneFullscreen(ui.raysPane || canvas?.parentElement);
+    await togglePaneFullscreen(ui.raysPane);
     setTimeout(() => {
       resizeCanvasToCSS();
       renderAll();
-    }, 60);
+    }, 50);
   }
 
-  // -------------------- preview image loading --------------------
-  function loadPreviewImageFromUrl(url) {
-    return new Promise((resolve) => {
+  // -------------------- load default preview image --------------------
+  function loadPreviewImageFromURL(url) {
+    return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.onload = () => {
         preview.img = img;
+
+        // draw into imgCanvas at native res
         preview.imgCanvas.width = img.naturalWidth || img.width;
         preview.imgCanvas.height = img.naturalHeight || img.height;
+        preview.imgCtx.setTransform(1, 0, 0, 1, 0, 0);
+        preview.imgCtx.imageSmoothingEnabled = true;
+        preview.imgCtx.imageSmoothingQuality = "high";
         preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
         preview.imgCtx.drawImage(img, 0, 0);
 
-        // cache pixels
-        try {
-          const id = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-          preview.imgData = id.data;
-          preview.ready = true;
-          resolve(true);
-        } catch (e) {
-          // tainted canvas (CORS) -> fallback: no img data
-          preview.imgData = null;
-          preview.ready = false;
-          if (ui.footerWarn) ui.footerWarn.textContent =
-            "Preview image loaded but pixel access blocked (CORS). Use same-origin path or local file upload.";
-          resolve(false);
-        }
+        // cache pixels once
+        const id = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+        preview.imgData = id.data;
+        preview.ready = true;
+
+        if (ui.footerWarn) ui.footerWarn.textContent = `Preview image loaded: ${preview.imgCanvas.width}×${preview.imgCanvas.height}`;
+        scheduleRenderPreview();
+        resolve(true);
       };
-      img.onerror = () => {
-        preview.img = null;
-        preview.ready = false;
-        preview.imgData = null;
-        if (ui.footerWarn) ui.footerWarn.textContent = `Failed to load preview image: ${url}`;
-        resolve(false);
+      img.onerror = (e) => {
+        if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${url}`;
+        reject(e);
       };
-      img.src = url;
+      img.src = url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
     });
   }
 
   function loadPreviewImageFromFile(file) {
-    return new Promise((resolve) => {
-      if (!file) return resolve(false);
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        preview.img = img;
-        preview.imgCanvas.width = img.naturalWidth || img.width;
-        preview.imgCanvas.height = img.naturalHeight || img.height;
-        preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-        preview.imgCtx.drawImage(img, 0, 0);
-
-        const id = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-        preview.imgData = id.data;
-        preview.ready = true;
-        URL.revokeObjectURL(url);
-        resolve(true);
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = String(reader.result || "");
+        loadPreviewImageFromURL(url).then(resolve).catch(reject);
       };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        preview.img = null;
-        preview.ready = false;
-        preview.imgData = null;
-        resolve(false);
-      };
-      img.src = url;
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
     });
   }
 
-  // -------------------- file save/load (lens json) --------------------
-  function downloadJSON(obj, filename = "lens.json") {
-    const s = JSON.stringify(obj, null, 2);
-    const blob = new Blob([s], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(a.href);
-      a.remove();
-    }, 0);
+  // -------------------- load lens JSON --------------------
+  async function loadLensFromURL(url) {
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      const obj = await r.json();
+      loadLens(obj);
+      toast("Loaded lens JSON");
+      return true;
+    } catch (e) {
+      if (ui.footerWarn) ui.footerWarn.textContent = `Lens JSON load failed: ${url} (${e?.message || e})`;
+      return false;
+    }
   }
 
-  async function loadLensFromFile(file) {
-    const txt = await file.text();
-    const obj = JSON.parse(txt);
-    loadLens(obj);
+  function loadLensFromFile(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const obj = JSON.parse(String(reader.result || "{}"));
+          loadLens(obj);
+          toast("Loaded lens JSON (file)");
+          resolve(true);
+        } catch (e) {
+          if (ui.footerWarn) ui.footerWarn.textContent = `Lens JSON parse failed: ${e?.message || e}`;
+          resolve(false);
+        }
+      };
+      reader.readAsText(file);
+    });
   }
 
-  // -------------------- button wiring --------------------
+  // -------------------- save lens JSON --------------------
+  function saveLensToFile() {
+    try {
+      const blob = new Blob([JSON.stringify(lens, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const safeName = String(lens?.name || "lens").replace(/[^\w\-]+/g, "_");
+      a.download = `${safeName}.json`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 0);
+      toast("Saved lens JSON");
+    } catch (e) {
+      if (ui.footerWarn) ui.footerWarn.textContent = `Save failed: ${e?.message || e}`;
+    }
+  }
+
+  // -------------------- toolbar binds --------------------
   function bindUI() {
-    // sensor preset change
+    populateSensorPresetsSelect();
     if (ui.sensorPreset) {
       ui.sensorPreset.addEventListener("change", () => {
         applyPreset(ui.sensorPreset.value);
@@ -3299,7 +3310,8 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
         scheduleRenderPreview();
       });
     }
-    // manual sensor dims
+
+    // sensor W/H manual edits
     [ui.sensorW, ui.sensorH].forEach((el) => {
       if (!el) return;
       el.addEventListener("input", () => {
@@ -3307,171 +3319,216 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
         renderAll();
         scheduleRenderPreview();
       });
+      el.addEventListener("change", () => {
+        applySensorToIMS();
+        renderAll();
+        scheduleRenderPreview();
+      });
     });
 
-    // sliders/inputs that should rerender
+    // core sliders/inputs that should re-render
     [
-      ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.sensorOffset, ui.focusMode, ui.lensFocus,
-      ui.prevObjDist, ui.prevObjH, ui.prevRes
+      ui.fieldAngle, ui.rayCount, ui.wavePreset,
+      ui.sensorOffset, ui.focusMode, ui.lensFocus,
+      ui.renderScale, ui.prevObjDist, ui.prevObjH, ui.prevRes
     ].forEach((el) => {
       if (!el) return;
       el.addEventListener("input", () => { scheduleRenderAll(); scheduleRenderPreview(); });
       el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
     });
 
-    // preview buttons
-    if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => {
-      if (!preview.ready) toast("No preview image loaded yet.");
-      renderAll();
-      renderPreview();
-    });
-    if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
-    if (ui.btnRaysFS) ui.btnRaysFS.addEventListener("click", toggleRaysFullscreen);
+    if (ui.focusMode) {
+      ui.focusMode.addEventListener("change", () => {
+        // keep UI sane
+        renderAll();
+        scheduleRenderPreview();
+      });
+    }
 
-    // lens actions
-    if (ui.btnScaleToFocal) ui.btnScaleToFocal.addEventListener("click", scaleToTargetFocal);
-    if (ui.btnSetTStop) ui.btnSetTStop.addEventListener("click", setTargetTStop);
-    if (ui.btnAutoFocus) ui.btnAutoFocus.addEventListener("click", autoFocus);
+    // buttons
+    on("#btnScaleToFocal", "click", (e) => { e.preventDefault(); scaleToTargetFocal(); });
+    on("#btnSetTStop", "click", (e) => { e.preventDefault(); setTargetTStop(); });
 
-    if (ui.btnNew) ui.btnNew.addEventListener("click", () => loadLens(makeTemplate("blank")));
-    if (ui.btnLoadOmit) ui.btnLoadOmit.addEventListener("click", () => loadLens(omit50ConceptV1()));
-    if (ui.btnLoadDemo) ui.btnLoadDemo.addEventListener("click", () => loadLens(demoLensSimple()));
+    on("#btnNew", "click", (e) => { e.preventDefault(); loadLens(makeTemplate("blank")); toast("New lens"); });
+    on("#btnLoadOmit", "click", (e) => { e.preventDefault(); loadLens(omit50ConceptV1()); toast("Loaded OMIT preset"); });
+    on("#btnLoadDemo", "click", (e) => { e.preventDefault(); loadLens(demoLensSimple()); toast("Loaded demo lens"); });
 
-    // add surface
-    if (ui.btnAdd) ui.btnAdd.addEventListener("click", () => {
-      insertAfterSelected({ type: "", R: 0.0, t: 2.0, ap: 10.0, glass: "AIR", stop: false });
-    });
-
-    // add element modal
-    if (ui.btnAddElement) ui.btnAddElement.addEventListener("click", () => {
-      const ok = openElementModal();
-      if (!ok && ui.footerWarn) ui.footerWarn.textContent = "Element modal missing in index.html (ids don’t match).";
+    on("#btnAdd", "click", (e) => {
+      e.preventDefault();
+      insertAfterSelected({ type: "", R: 0.0, t: 5.0, ap: 10.0, glass: "AIR", stop: false });
+      toast("+ Surface");
     });
 
-    // duplicate / move / remove
-    if (ui.btnDuplicate) ui.btnDuplicate.addEventListener("click", () => {
+    on("#btnAddElement", "click", (e) => {
+      e.preventDefault();
+      if (!openElementModal()) {
+        if (ui.footerWarn) ui.footerWarn.textContent = "Element modal not found in HTML.";
+      }
+    });
+
+    on("#btnDuplicate", "click", (e) => {
+      e.preventDefault();
       clampSelected();
       if (isProtectedIndex(selectedIndex)) return;
       const s = clone(lens.surfaces[selectedIndex]);
-      s.stop = false;
       s.type = "";
       insertAfterSelected(s);
+      toast("Duplicated surface");
     });
 
-    if (ui.btnMoveUp) ui.btnMoveUp.addEventListener("click", () => {
+    on("#btnMoveUp", "click", (e) => {
+      e.preventDefault();
       clampSelected();
-      if (selectedIndex <= 1) return;
-      if (isProtectedIndex(selectedIndex)) return;
+      if (selectedIndex <= 1) return; // keep OBJ at 0
       const imsIdx = getIMSIndex();
       if (imsIdx >= 0 && selectedIndex === imsIdx) return;
-      const a = lens.surfaces[selectedIndex];
-      const b = lens.surfaces[selectedIndex - 1];
-      if (String(b.type).toUpperCase() === "OBJ") return;
-      lens.surfaces[selectedIndex] = b;
-      lens.surfaces[selectedIndex - 1] = a;
-      selectedIndex -= 1;
+      if (isProtectedIndex(selectedIndex)) return;
+
+      const i = selectedIndex;
+      const tmp = lens.surfaces[i - 1];
+      // prevent moving past OBJ
+      if (String(tmp.type).toUpperCase() === "OBJ") return;
+
+      lens.surfaces[i - 1] = lens.surfaces[i];
+      lens.surfaces[i] = tmp;
+      selectedIndex = i - 1;
+
       buildTable(); applySensorToIMS(); renderAll(); scheduleRenderPreview();
     });
 
-    if (ui.btnMoveDown) ui.btnMoveDown.addEventListener("click", () => {
+    on("#btnMoveDown", "click", (e) => {
+      e.preventDefault();
       clampSelected();
       const imsIdx = getIMSIndex();
-      if (imsIdx >= 0 && selectedIndex >= imsIdx - 1) return;
-      if (selectedIndex >= lens.surfaces.length - 2) return;
+      if (imsIdx >= 0 && selectedIndex >= imsIdx - 1) return; // don't move into IMS slot
       if (isProtectedIndex(selectedIndex)) return;
-      const a = lens.surfaces[selectedIndex];
-      const b = lens.surfaces[selectedIndex + 1];
-      if (String(b.type).toUpperCase() === "IMS") return;
-      lens.surfaces[selectedIndex] = b;
-      lens.surfaces[selectedIndex + 1] = a;
-      selectedIndex += 1;
+
+      const i = selectedIndex;
+      const tmp = lens.surfaces[i + 1];
+      if (!tmp) return;
+      if (String(tmp.type).toUpperCase() === "IMS") return;
+
+      lens.surfaces[i + 1] = lens.surfaces[i];
+      lens.surfaces[i] = tmp;
+      selectedIndex = i + 1;
+
       buildTable(); applySensorToIMS(); renderAll(); scheduleRenderPreview();
     });
 
-    if (ui.btnRemove) ui.btnRemove.addEventListener("click", () => {
+    on("#btnRemove", "click", (e) => {
+      e.preventDefault();
       clampSelected();
       if (isProtectedIndex(selectedIndex)) return;
-      const t = String(lens.surfaces[selectedIndex]?.type || "").toUpperCase();
-      if (t === "STOP") {
-        lens.surfaces[selectedIndex].stop = false;
-        lens.surfaces[selectedIndex].type = "";
-      }
+
+      const imsIdx = getIMSIndex();
+      if (imsIdx >= 0 && selectedIndex === imsIdx) return;
+
       lens.surfaces.splice(selectedIndex, 1);
       selectedIndex = Math.max(0, selectedIndex - 1);
-      // enforce IMS last + OBJ first
+
+      // re-sanitize stop uniqueness & IMS last
       lens = sanitizeLens(lens);
+
+      clampAllApertures(lens.surfaces);
       buildTable(); applySensorToIMS(); renderAll(); scheduleRenderPreview();
+      toast("Removed surface");
     });
 
-    // save/load json
-    if (ui.btnSave) ui.btnSave.addEventListener("click", () => {
-      downloadJSON(lens, `${(lens.name || "lens").replace(/[^\w\-]+/g, "_")}.json`);
-    });
+    on("#btnSave", "click", (e) => { e.preventDefault(); saveLensToFile(); });
 
-    if (ui.fileLoad) ui.fileLoad.addEventListener("change", async (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
-      try {
+    if (ui.fileLoad) {
+      ui.fileLoad.addEventListener("change", async (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
         await loadLensFromFile(f);
-        toast("Lens loaded");
-      } catch (err) {
-        if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err?.message || err}`;
-      } finally {
-        e.target.value = "";
-      }
-    });
-
-    // preview file input
-    if (ui.prevImg) ui.prevImg.addEventListener("change", async (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
-      await loadPreviewImageFromFile(f);
-      scheduleRenderPreview();
-    });
-
-    // New lens modal
-    if (ui.btnNew) {
-      // optional: if you have a separate "New Lens" modal trigger, wire it here
-      // e.g. ui.btnNewLens?.addEventListener("click", openNewLensModal);
+        ui.fileLoad.value = "";
+      });
     }
-    if (ui.nlClose) ui.nlClose.addEventListener("click", closeNewLensModal);
-    if (ui.nlCreate) ui.nlCreate.addEventListener("click", createNewLensFromModal);
-    if (ui.newLensModal) ui.newLensModal.addEventListener("mousedown", (e) => {
-      if (e.target === ui.newLensModal) closeNewLensModal();
+
+    on("#btnAutoFocus", "click", (e) => { e.preventDefault(); autoFocus(); toast("Autofocus"); });
+
+    on("#btnRenderPreview", "click", (e) => { e.preventDefault(); renderPreview(); toast("Render preview"); });
+
+    on("#btnPreviewFS", "click", (e) => { e.preventDefault(); togglePreviewFullscreen(); });
+    on("#btnRaysFS", "click", (e) => { e.preventDefault(); toggleRaysFullscreen(); });
+
+    // new lens modal binds
+    if (ui.newLensModal) {
+      ui.nlClose?.addEventListener("click", (e) => { e.preventDefault(); closeNewLensModal(); });
+      ui.nlCreate?.addEventListener("click", (e) => { e.preventDefault(); createNewLensFromModal(); });
+      ui.btnNew?.addEventListener("contextmenu", (e) => { e.preventDefault(); openNewLensModal(); }); // right click shortcut
+    }
+
+    // preview image input
+    if (ui.prevImg) {
+      ui.prevImg.addEventListener("change", async (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
+        await loadPreviewImageFromFile(f);
+        ui.prevImg.value = "";
+      });
+    }
+
+    // optional checkboxes / selects for preview mode
+    ["optDOF", "optCA", "renderQuality"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("change", () => scheduleRenderPreview());
+      el.addEventListener("input", () => scheduleRenderPreview());
     });
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        if (ui.newLensModal && !ui.newLensModal.classList.contains("hidden")) closeNewLensModal();
-      }
+
+    // resize
+    window.addEventListener("resize", () => {
+      resizeCanvasToCSS();
+      resizePreviewCanvasToCSS();
+      renderAll();
+      if (preview.ready) scheduleRenderPreview();
     });
+
+    // bind canvas interactions
+    bindViewControls();
+    bindPreviewViewControls();
   }
 
-  // -------------------- boot --------------------
-  async function boot() {
-    populateSensorPresetsSelect();
+  // -------------------- init --------------------
+  function init() {
+    bindUI();
 
-    // pick a sane default preset if none selected
+    // default sensor preset if empty
     if (ui.sensorPreset && !SENSOR_PRESETS[ui.sensorPreset.value]) {
       ui.sensorPreset.value = "ARRI Alexa Mini LF (LF)";
     }
-    if (ui.sensorPreset) applyPreset(ui.sensorPreset.value);
+    applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
 
+    // build table + first render
     clampAllApertures(lens.surfaces);
     buildTable();
-
-    bindViewControls();
-    bindPreviewViewControls();
-    bindUI();
-
-    // Try default chart first (same-origin path). If it fails, user can still upload.
-    await loadPreviewImageFromUrl(DEFAULT_PREVIEW_URL);
-
-    // initial render
+    computeVertices(lens.surfaces, 0);
     renderAll();
-    if (preview.ready) renderPreview();
-    else drawPreviewViewport();
+
+    // try load default lens JSON (optional), fallback keeps current lens
+    if (DEFAULT_LENS_URL) {
+      loadLensFromURL(DEFAULT_LENS_URL).catch(() => {});
+    }
+
+    // load default chart
+    if (DEFAULT_PREVIEW_URL) {
+      loadPreviewImageFromURL(DEFAULT_PREVIEW_URL).catch(() => {
+        // if chart missing, still show viewport frame
+        preview.ready = false;
+        preview.worldReady = false;
+        drawPreviewViewport();
+      });
+    } else {
+      drawPreviewViewport();
+    }
   }
 
-  // kick
-  boot();
-})();
+  // start after DOM ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, { once: true });
+  } else {
+    init();
+  }
+
+})(); // end IIFE
