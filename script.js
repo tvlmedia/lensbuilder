@@ -2228,19 +2228,19 @@ drawAxes(world);
     const halfWv = sensorWv * 0.5;
     const halfHv = sensorHv * 0.5;
 
-       // -------------------- VIGNETTE / MAPPING LUT (by SENSOR Y, not radial) --------------------
-const LUT_N = 768; // more = smoother vignet
-const yObjLUT = new Float32Array(LUT_N);   // object-space Y at object plane for chief ray
-const transLUT = new Float32Array(LUT_N);  // mechanical throughput at that sensor Y
-const cos4LUT  = new Float32Array(LUT_N);  // cos^4 approx using chief ray angle
+    // -------------------- RADIAL VIGNETTE / MAPPING LUT (aspect-correct) --------------------
+const LUT_N = 768;
+const rObjLUT = new Float32Array(LUT_N);   // object-space radius at object plane for chief ray
+const transLUT = new Float32Array(LUT_N);  // mechanical throughput at that field radius
+const cos4LUT  = new Float32Array(LUT_N);  // cos^4 approx (chief)
 
-const STOP_SAMPLES = 17; // more = cleaner mechanical vignet
+const STOP_SAMPLES = 21; // mechanical vignet sampling
 const epsX = 0.05;
 const startX = sensorX + epsX;
 
 function stopYs(stopAp) {
   const ys = [];
-  const N = Math.max(5, STOP_SAMPLES | 0);
+  const N = Math.max(7, STOP_SAMPLES | 0);
   for (let i = 0; i < N; i++) {
     const t = (i / (N - 1)) * 2 - 1;
     ys.push(t * stopAp);
@@ -2253,28 +2253,35 @@ function median(arr) {
   return a[(a.length / 2) | 0];
 }
 
-// Use SENSOR HEIGHT (with overscan) as the domain.
-// This is the critical fix: rectangle sensor, and vignette depends on |y| in meridional model.
-const yMaxSensor = halfHv; // sensorHv * 0.5
+// Elliptisch genormaliseerde radius (0..1) voor sensor aspect
+// rNorm = 1 op "corner" van jouw (overscan) sensor rect.
+const halfWv = (sensorW * OV) * 0.5;
+const halfHv = (sensorH * OV) * 0.5;
 
 const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 const yStopSamples = stopYs(stopAp);
 
-// Build LUT at sensor Y positions (0..yMaxSensor), symmetric in y
+// We bouwen LUT over rNorm van 0..1.
+// Voor de meridional tracer kunnen we alleen in 2D samplen -> we nemen punten langs Y-richting,
+// maar maken de CORNER-sterkte correct door rNorm te gebruiken + later per-pixel rNorm lookup.
 for (let k = 0; k < LUT_N; k++) {
   const a = k / (LUT_N - 1);
-  const y = a * yMaxSensor;
+  const rNorm = a;
 
-  // Chief ray (through stop center) for mapping + cos4
-  let yObjVals = [];
+  // representatieve sensor-Y op deze rNorm (langs de verticale as)
+  const sy = rNorm * halfHv; // mm
+  const y = sy;
+
+  // Chief ray door stop center (yStop=0)
+  let rObjVals = [];
   let cos4Sum = 0;
 
   {
     const dirChief = normalize({ x: xStop - startX, y: 0 - y });
-    const trChief = traceRayReverse({ p: { x: startX, y }, d: dirChief }, lens.surfaces, wavePreset);
+    const trChief = traceRayReverse({ p: { x: startX, y }, d: dirChief }, surfacesTrace, wavePreset);
     if (!trChief.vignetted && !trChief.tir) {
       const hitObj = intersectPlaneX(trChief.endRay, xObjPlane);
-      if (hitObj) yObjVals.push(Math.abs(hitObj.y));
+      if (hitObj) rObjVals.push(Math.abs(hitObj.y)); // meridional radius≈|y|
       const cos = Math.max(0, Math.min(1, Math.abs(dirChief.x)));
       cos4Sum += cos ** 4;
     } else {
@@ -2282,38 +2289,36 @@ for (let k = 0; k < LUT_N; k++) {
     }
   }
 
-  // Mechanical throughput: sample rays across stop at this sensor Y
+  // Mechanical throughput: sample rays across stop at this field radius
   let ok = 0;
   for (let ssi = 0; ssi < yStopSamples.length; ssi++) {
     const yStop = yStopSamples[ssi];
     const dir = normalize({ x: xStop - startX, y: yStop - y });
 
-    const tr = traceRayReverse({ p: { x: startX, y }, d: dir }, lens.surfaces, wavePreset);
+    const tr = traceRayReverse({ p: { x: startX, y }, d: dir }, surfacesTrace, wavePreset);
     if (tr.vignetted || tr.tir) continue;
-
     const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
     if (!hitObj) continue;
-
     ok++;
   }
 
-  yObjLUT[k]  = yObjVals.length ? median(yObjVals) : 0;
+  rObjLUT[k]  = rObjVals.length ? median(rObjVals) : 0;
   transLUT[k] = ok / yStopSamples.length;
-  cos4LUT[k]  = cos4Sum; // only 1 chief sample here
+  cos4LUT[k]  = cos4Sum;
 }
 
-function lookupYObjTransCos4(absY) {
-  const t = Math.max(0, Math.min(1, absY / yMaxSensor));
+function lookupRadial(rNorm) {
+  const t = Math.max(0, Math.min(1, rNorm));
   const x = t * (LUT_N - 1);
   const i0 = Math.floor(x);
   const i1 = Math.min(LUT_N - 1, i0 + 1);
   const u = x - i0;
 
-  const yObj  = yObjLUT[i0]  * (1 - u) + yObjLUT[i1]  * u;
+  const rObj  = rObjLUT[i0]  * (1 - u) + rObjLUT[i1]  * u;
   const trans = transLUT[i0] * (1 - u) + transLUT[i1] * u;
   const cos4  = cos4LUT[i0]  * (1 - u) + cos4LUT[i1]  * u;
 
-  return { yObj, trans, cos4 };
+  return { rObj, trans, cos4 };
 }
 
 // -------------------- render world canvas --------------------
@@ -2334,42 +2339,34 @@ function objectMmToUV(xmm, ymm) {
 }
 
 for (let py = 0; py < H; py++) {
-  const sy = (0.5 - (py + 0.5) / H) * sensorHv;     // sensor mm (with overscan)
-  const aSy = Math.abs(sy);
-
-  const { yObj, trans, cos4 } = lookupYObjTransCos4(aSy);
-
-  // 2D meridional model: use Y-based magnification for both axes (good for charts)
-  // Avoid divide-by-zero near center:
-  const kScaleY = (aSy > 1e-9) ? (yObj / aSy) : 0;
-
-  // If center pixel: map to center object
-  const mech = Math.max(0, Math.min(1, trans));
-  const gRow = mech * Math.max(0, Math.min(1, cos4));
-
+  const sy = (0.5 - (py + 0.5) / H) * (sensorH * OV); // mm
   for (let px = 0; px < W; px++) {
-    const sx = ((px + 0.5) / W - 0.5) * sensorWv;   // sensor mm (with overscan)
+    const sx = ((px + 0.5) / W - 0.5) * (sensorW * OV); // mm
     const idx = (py * W + px) * 4;
 
-    // If fully vignetted, go black
-    if (gRow < 1e-4) {
+    // aspect-correct radial coordinate (0..1 at corner)
+    const rNorm = Math.hypot(sx / halfWv, sy / halfHv);
+
+    const { rObj, trans, cos4 } = lookupRadial(rNorm);
+
+    const mech = Math.max(0, Math.min(1, trans));
+    const g = mech * Math.max(0, Math.min(1, cos4));
+
+    if (g < 1e-4) {
       outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
       continue;
     }
 
-    let ox = 0, oy = 0;
-    if (aSy < 1e-9) {
-      // center row: no reliable kScaleY; map via sx->0 at center (keeps chart stable)
-      ox = 0;
-      oy = 0;
-    } else {
-      ox = sx * kScaleY;
-      oy = sy * kScaleY;
-    }
+    // radial magnification mapping (chart blijft consistent)
+    // rObj is meridional object radius; scale r -> rObj.
+    const rSensor = Math.hypot(sx, sy);
+    const kScaleR = (rSensor > 1e-9) ? (rObj / rSensor) : 0;
+
+    const ox = sx * kScaleR;
+    const oy = sy * kScaleR;
 
     const { u, v } = objectMmToUV(ox, oy);
 
-    // Outside chart -> black
     if (u <= 0 || u >= 1 || v <= 0 || v >= 1) {
       outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
       continue;
@@ -2377,10 +2374,9 @@ for (let py = 0; py < H; py++) {
 
     const c = sample(u, v);
 
-    // apply gain (mechanical vignette + cos^4)
-    outD[idx]     = Math.max(0, Math.min(255, c[0] * gRow));
-    outD[idx + 1] = Math.max(0, Math.min(255, c[1] * gRow));
-    outD[idx + 2] = Math.max(0, Math.min(255, c[2] * gRow));
+    outD[idx]     = Math.max(0, Math.min(255, c[0] * g));
+    outD[idx + 1] = Math.max(0, Math.min(255, c[1] * g));
+    outD[idx + 2] = Math.max(0, Math.min(255, c[2] * g));
     outD[idx + 3] = 255;
   }
 }
