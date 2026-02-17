@@ -957,12 +957,17 @@ function buildSurfacesWithBarrelApertures(baseSurfaces, k = 1.0) {
     let best = { shift: currentLensShift, rms: Infinity, n: 0 };
 
     function evalShift(shift) {
-      computeVertices(lens.surfaces, shift);
-      const rays = buildRays(surfacesTrace, fieldAngle, rayCount);
-const traces = rays.map((r) => traceRayForward(clone(r), surfacesTrace, wavePreset));
-      return spotRmsAtSensorX(traces, sensorX);
-    }
+  // sync IMS aperture eerst
+  applySensorToIMS();
 
+  // build trace surfaces
+  const st = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
+  computeVertices(st, shift);
+
+  const rays = buildRays(st, fieldAngle, rayCount);
+  const traces = rays.map((r) => traceRayForward(clone(r), st, wavePreset));
+  return spotRmsAtSensorX(traces, sensorX);
+}
     function scan(center, halfRange, step) {
       const start = center - halfRange;
       const end = center + halfRange;
@@ -1004,8 +1009,8 @@ function drawBackgroundCSS(w, h) {
   ctx.fillStyle = "#05070c";
   ctx.fillRect(0, 0, w, h);
 
-  ctx.globalAlpha = 0.08;
-  ctx.strokeStyle = "#ffffff";
+ctx.globalAlpha = 0.05;
+   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 1;
 
   const step = 80;
@@ -1596,12 +1601,15 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     if (!canvas || !ctx) return;
     if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-   const lensShift = Number(ui.lensFocus?.value || 0);
+  const lensShift = Number(ui.lensFocus?.value || 0);
+
+// eerst sensor->IMS syncen voordat we trace-surfaces bouwen
+applySensorToIMS();
 
 // 1) maak trace-surfaces met barrel apertures
 const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
-     
-// 2) vertices op trace-surfaces (want we gaan hiermee raytracen)
+
+// 2) vertices op trace-surfaces
 computeVertices(surfacesTrace, lensShift);
     clampSelected();
 
@@ -2205,12 +2213,14 @@ drawAxes(world);
      
 const lensShift = Number(ui.lensFocus?.value || 0);
 
+// eerst sensor->IMS syncen voordat we trace-surfaces bouwen
+applySensorToIMS();
+
 // 1) maak trace-surfaces met barrel apertures
 const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
-     
-// 2) vertices op trace-surfaces (want we gaan hiermee raytracen)
-computeVertices(surfacesTrace, lensShift);
 
+// 2) vertices op trace-surfaces
+computeVertices(surfacesTrace, lensShift);
     applySensorToIMS();
     clampAllApertures(lens.surfaces);
 
@@ -2220,9 +2230,9 @@ computeVertices(surfacesTrace, lensShift);
 
     const { w: sensorW, h: sensorH } = getSensorWH();
 
-    const stopIdx = findStopSurfaceIndex(lens.surfaces);
-    const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
-    const xStop = stopSurf.vx;
+    const stopIdx = findStopSurfaceIndex(surfacesTrace);
+const stopSurf = stopIdx >= 0 ? surfacesTrace[stopIdx] : surfacesTrace[0];
+const xStop = stopSurf.vx;
 
     const objDist = Number(ui.prevObjDist?.value || 2000);
     const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
@@ -2315,8 +2325,7 @@ function median(arr) {
 
 // Elliptisch genormaliseerde radius (0..1) voor sensor aspect
 // rNorm = 1 op "corner" van jouw (overscan) sensor rect.
-const halfWv = (sensorW * OV) * 0.5;
-const halfHv = (sensorH * OV) * 0.5;
+
 
 const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 const yStopSamples = stopYs(stopAp);
