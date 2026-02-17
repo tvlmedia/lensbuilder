@@ -486,3 +486,11 @@ canvas{
   color:rgba(255,255,255,.82);
   text-shadow:0 1px 10px rgba(0,0,0,.65);
 }
+
+/* Fix: URL has #appMain so browser scrolls -> keep topbar visible */
+.topbar{
+  position: sticky;
+  top: 0;
+  z-index: 5000;
+  backdrop-filter: blur(10px);
+}
