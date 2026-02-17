@@ -1693,7 +1693,7 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     if (_rafPrev) return;
     _rafPrev = requestAnimationFrame(() => {
       _rafPrev = 0;
-      if (preview.ready) renderPreview();
+      if (preview.ready) renderPreview({ mode: 'quick' });
     });
   }
 
@@ -2301,9 +2301,12 @@ pctx.restore();
 
  // -------------------- preview rendering (split-view) --------------------
 
-function renderPreview() {
+let _previewJob = 0;
+async function renderPreview(opts = {}) {
   if (!pctx || !previewCanvasEl) return;
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
+  const jobId = ++_previewJob;
+  try {
 
   const lensShift = Number(ui.lensFocus?.value || 0);
   computeVertices(lens.surfaces, lensShift);
@@ -2327,10 +2330,15 @@ function renderPreview() {
   const objH      = Number(ui.prevObjH?.value || 200);
   const halfObjH  = Math.max(1e-3, objH * 0.5);
 
-  const base = Math.max(64, Number(ui.prevRes?.value || 720));
+  const mode = (opts?.mode || 'quick').toLowerCase();
+  const uiBase = Math.max(64, Number(ui.prevRes?.value || 720));
+  const uiDofQ = (ui.prevDofQ?.value || "auto").toLowerCase();
+  const dofChecked = !!ui.prevDof?.checked;
 
-  const dofQ = (ui.prevDofQ?.value || "auto").toLowerCase();
-  const dofEnabled = !!ui.prevDof?.checked && dofQ !== "off";
+  // QUICK mode keeps UI responsive: low res + low pupil samples.
+  const base = (mode === 'hq') ? uiBase : Math.min(uiBase, 256);
+  const dofQ = (mode === 'hq') ? uiDofQ : (dofChecked ? 'low' : uiDofQ);
+  const dofEnabled = dofChecked && dofQ !== 'off';
 
   // cache-key (avoid rerender when nothing changed)
   const key = JSON.stringify({
@@ -2373,6 +2381,17 @@ function renderPreview() {
   const imgData = hasImg ? preview.imgData : null;
 
   function clamp(x, a, b){ return x < a ? a : (x > b ? b : x); }
+
+  let _yieldT = performance.now();
+  async function maybeYield(){
+    // allow UI interaction during heavy preview renders
+    if (performance.now() - _yieldT > 12){
+      await new Promise(r => setTimeout(r, 0));
+      _yieldT = performance.now();
+    }
+    // cancel if a newer preview render started
+    if (jobId !== _previewJob) throw new Error("__CANCEL_PREVIEW__");
+  }
 
   function sample(u, v) {
     if (!hasImg) return [255, 255, 255, 255];
@@ -2552,6 +2571,7 @@ function renderPreview() {
 
     for (let py = 0; py < H; py++) {
       const sy = (0.5 - (py + 0.5) / H) * sensorHv;
+      await maybeYield();
 
       for (let px = 0; px < W; px++) {
         const sx = ((px + 0.5) / W - 0.5) * sensorWv;
@@ -2594,6 +2614,7 @@ function renderPreview() {
   // -------------------- DOF render --------------------
   for (let py = 0; py < H; py++) {
     const sy = (0.5 - (py + 0.5) / H) * sensorHv;
+    await maybeYield();
 
     for (let px = 0; px < W; px++) {
       const sx = ((px + 0.5) / W - 0.5) * sensorWv;
@@ -2653,6 +2674,10 @@ function renderPreview() {
   wctx.putImageData(out, 0, 0);
   preview.worldReady = true;
   drawPreviewViewport();
+  } catch (e){
+    if (String(e?.message||e) === "__CANCEL_PREVIEW__") return;
+    console.error(e);
+  }
 }
 
 
@@ -2913,8 +2938,8 @@ function renderPreview() {
 
   on("#prevDof", "change", () => scheduleRenderPreview());
   on("#prevDofQ", "change", () => scheduleRenderPreview());
-  if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
-  if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
+  if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview({ mode: "hq" }));
+if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
   if (ui.btnRaysFS) on("#btnRaysFS", "click", () => toggleRaysFullscreen());
 
   // Keyboard shortcuts: P = preview fullscreen, R = rays fullscreen (ignore typing)
