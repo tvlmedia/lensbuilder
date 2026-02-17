@@ -2803,7 +2803,7 @@ if (ui.prevImg) {
   });
 }
 
- // -------------------- file load --------------------
+// -------------------- file load --------------------
 on("#fileLoad", "change", async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
@@ -2835,14 +2835,12 @@ on("#fileLoad", "change", async (e) => {
 });
 
 // -------------------- controls -> rerender --------------------
-["fieldAngle", "rayCount", "wavePreset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"].forEach(
-  (id) => {
-    on("#" + id, "input", scheduleRenderAll);
-    on("#" + id, "change", scheduleRenderAll);
-  }
-);
+["fieldAngle", "rayCount", "wavePreset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"].forEach((id) => {
+  on("#" + id, "input", scheduleRenderAll);
+  on("#" + id, "change", scheduleRenderAll);
+});
 
-// preview-affecting controls (only if img loaded in scheduler)
+// preview-affecting controls
 ["lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"].forEach((id) => {
   on("#" + id, "input", scheduleRenderPreview);
   on("#" + id, "change", scheduleRenderPreview);
@@ -2856,12 +2854,13 @@ on("#sensorPreset", "change", (e) => {
 });
 
 // -------------------- defaults (autoload) --------------------
-// ✅ Zet deze 2 naar jouw echte bestandsnamen in dezelfde folder als index.html
-const DEFAULT_LENS_URL = "./bijna-goed.json";
-// Als je repo-bestand écht heet: "Bijna goed .json" (met spaties), gebruik:
-// const DEFAULT_LENS_URL = "./Bijna%20goed%20.json";
+// ✅ Zet deze 2 naar jouw echte bestandsnamen (zelfde folder als index.html)
 
-const DEFAULT_CHART_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
+// 1) Lens JSON in je repo (LET OP: spaties moeten URL-encoded zijn)
+const DEFAULT_LENS_URL = "./Bijna%20goed%20.json";   // <-- PAS AAN indien anders
+
+// 2) Jouw chart in je repo
+const DEFAULT_CHART_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png"; // <-- PAS AAN indien anders
 
 async function loadDefaultLensFromUrl(url) {
   const res = await fetch(url, { cache: "no-store" });
@@ -2869,7 +2868,6 @@ async function loadDefaultLensFromUrl(url) {
   const obj = await res.json();
   if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Default lens JSON is invalid.");
 
-  // allow default json to extend glass db too
   if (obj.glass_note && typeof obj.glass_note === "object") {
     for (const [k, v] of Object.entries(obj.glass_note)) {
       const nd = Number(v?.nd);
@@ -2902,7 +2900,7 @@ function loadPreviewImageFromUrl(url) {
         .data;
 
       preview.ready = true;
-      preview.worldReady = false; // reset cache so preview reprojects
+      preview.worldReady = false;
       scheduleRenderPreview();
       resolve();
     };
@@ -2952,23 +2950,22 @@ async function init() {
   populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
 
-  // binds first so errors can show & controls exist
+  // bind controls first
   bindViewControls();
   bindPreviewViewControls();
 
   lockSensor();
   drawPreviewViewport();
 
-  // ✅ autoload default lens instead of whatever 'lens' starts as
+  // autoload lens
   try {
     await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
   } catch (e) {
     if (ui.footerWarn) ui.footerWarn.textContent = `Default lens load failed: ${e.message}`;
-    // fallback to whatever global `lens` currently is
-    loadLens(lens);
+    loadLens(lens); // fallback
   }
 
-  // ✅ autoload chart so preview is always on
+  // autoload chart
   try {
     await loadPreviewImageFromUrl(DEFAULT_CHART_URL);
   } catch (e) {
