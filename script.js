@@ -631,30 +631,31 @@ function glassN(glassName, wavePreset){
     return { hit, t, vignetted, normal: Nout };
   }
 
-  function computeVertices(surfaces, lensShift = 0) {
-    let x = 0;
-    for (let i = 0; i < surfaces.length; i++) {
-      surfaces[i].vx = x;
-      x += Number(surfaces[i].t || 0);
-    }
-
-    // Pin IMS at x=0
-    const imsIdx = surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
-    if (imsIdx >= 0) {
-      const shift = -(surfaces[imsIdx].vx || 0);
-      for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shift;
-    }
-
-    // +lensShift moves lens toward sensor (+x) (shift all except IMS)
-    if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
-      for (let i = 0; i < surfaces.length; i++) {
-        const t = String(surfaces[i]?.type || "").toUpperCase();
-        if (t !== "IMS") surfaces[i].vx += lensShift;
-      }
-    }
-
-    return x;
+ function computeVertices(surfaces, lensShift = 0, sensorX = 0) {
+  // 1) build vx from thicknesses
+  let x = 0;
+  for (let i = 0; i < surfaces.length; i++) {
+    surfaces[i].vx = x;
+    x += Number(surfaces[i].t || 0);
   }
+
+  // 2) pin IMS at sensorX (instead of always 0)
+  const imsIdx = surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
+  if (imsIdx >= 0) {
+    const shiftAll = (Number(sensorX) || 0) - (surfaces[imsIdx].vx || 0);
+    for (let i = 0; i < surfaces.length; i++) surfaces[i].vx += shiftAll;
+  }
+
+  // 3) lens focus shift = move lens group, keep IMS fixed
+  if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
+    for (let i = 0; i < surfaces.length; i++) {
+      const t = String(surfaces[i]?.type || "").toUpperCase();
+      if (t !== "IMS") surfaces[i].vx += lensShift;
+    }
+  }
+
+  return x;
+}
 
   function findStopSurfaceIndex(surfaces) {
     return surfaces.findIndex((s) => !!s.stop);
@@ -1789,11 +1790,7 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     });
   }
 
-function setIMSVxTo(sensorX){
-  const imsIdx = getIMSIndex();
-  if (imsIdx < 0) return;
-  lens.surfaces[imsIdx].vx = sensorX;
-}
+
    
 function renderAll() {
   if (!canvas || !ctx) return;
@@ -1808,13 +1805,10 @@ function renderAll() {
 
   const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
 
-  const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
-  computeVertices(lens.surfaces, lensShift);
+const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
 
-  const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
-
-  // IMS vlak mee verplaatsen als cam focus actief is
-  setIMSVxTo(sensorX);
+computeVertices(lens.surfaces, lensShift, sensorX);
 
   // ---- PL reference ----
   const plX = -PL_FFD;
@@ -2475,13 +2469,14 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
   const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;   // samples per pixel (only for DOF path)
   const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));      // LUT throughput sampling (fast path)
 
-  const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
-  const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
-  computeVertices(lens.surfaces, lensShift);
+ const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
+const sensorX   = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0.0;
 
-  const wavePreset = ui.wavePreset?.value || "d";
-  const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
-  setIMSVxTo(sensorX);
+// BELANGRIJK: computeVertices krijgt nu sensorX mee en pint IMS correct
+computeVertices(lens.surfaces, lensShift, sensorX);
+
+const wavePreset = ui.wavePreset?.value || "d";
 
   const { w: sensorW, h: sensorH } = getSensorWH();
 
