@@ -2378,13 +2378,8 @@ function renderPreview() {
 const doCA  = !!document.getElementById("optCA")?.checked;
 const q     = String(document.getElementById("renderQuality")?.value || "normal");
    
-  // IMPORTANT: performance sane defaults
-  // - DOF path cost is ~W*H*spp*channels*surfaceCount
-  // - LUT path cost is ~LUT_N*(1 + lutPupilSqrt^2)*channels*surfaceCount + W*H
-  // Keep these numbers modest so preview stays interactive.
-  const spp = doDOF ? (q === "hq" ? 24 : (q === "draft" ? 6 : 12)) : 1;     // samples per pixel (only for DOF path)
-  const lutPupilSqrt = (q === "hq" ? 12 : (q === "draft" ? 6 : 9));         // LUT throughput sampling (fast path)
-  const LUT_N = (q === "hq" ? 900 : (q === "draft" ? 240 : 420));           // radial LUT samples
+  const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;   // samples per pixel (only for DOF path)
+  const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));      // LUT throughput sampling (fast path)
 
   const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
   const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
@@ -2466,52 +2461,15 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
   }
 
    // === FAST PATH (LUT) + optional CA (no blur, per-channel mapping) ===
-  // tiny stable hash (FNV-1a) for caching
-  function fnv1a(str){
-    let h = 2166136261;
-    for (let i=0;i<str.length;i++){
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return (h>>>0).toString(16);
-  }
-
-  // Cache LUTs across renders (massive speed win)
-  if (!preview._lutCache) preview._lutCache = new Map();
-
   function renderFastLUT(){
+    const LUT_N = 900;
 
     // If CA on: build 3 LUT sets for (R,G,B) = (c,d,g)
     const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
-    // Build a cache key that changes ONLY when optics/preview params change
-    const surfKey = JSON.stringify((lens.surfaces||[]).map(s=>[
-      String(s?.type||""),
-      +s.vx||0,
-      +s.r||0,
-      +s.ap||0,
-      String(s?.glass||""),
-      +s.n||0,
-      +s.vd||0,
-    ]));
-    const key = fnv1a(JSON.stringify({
-      q, doCA, wavePreset,
-      sensorX, lensShift,
-      xStop, stopAp,
-      xObjPlane, objH,
-      LUT_N, lutPupilSqrt,
-      surfKey,
-    }));
-
-    const cached = preview._lutCache.get(key);
-    let rObjLUT, transLUT, naturalLUT;
-    if (cached){
-      ({ rObjLUT, transLUT, naturalLUT } = cached);
-    } else {
-      rObjLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
-      transLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
-      naturalLUT = new Float32Array(LUT_N);
-    }
+    const rObjLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+    const transLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+    const naturalLUT = new Float32Array(LUT_N);
 
     const epsX = 0.05;
     const startX = sensorX + epsX;
@@ -2544,14 +2502,8 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
       };
     }
 
-    // Build LUTs only if we don't have them cached
-    if (!cached){
-      // Pre-jitter for stratified pupil sampling (avoids Math.random in hot loops)
-      const jitter = new Float32Array(lutPupilSqrt * lutPupilSqrt * 2);
-      for (let i=0;i<jitter.length;i++) jitter[i] = Math.random();
-      let ji = 0;
-
-      for (let k = 0; k < LUT_N; k++){
+    // Build LUTs
+    for (let k = 0; k < LUT_N; k++){
       const a = k / (LUT_N - 1);
       const rS = a * rMaxSensor;
       const pS = { x: startX, y: rS, z: 0 };
@@ -2575,9 +2527,8 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
         let ok = 0, total = 0;
         for (let iy = 0; iy < lutPupilSqrt; iy++){
           for (let ix = 0; ix < lutPupilSqrt; ix++){
-            const uu = (ix + jitter[ji++]) / lutPupilSqrt;
-            const vv = (iy + jitter[ji++]) / lutPupilSqrt;
-            if (ji >= jitter.length) ji = 0;
+            const uu = (ix + Math.random()) / lutPupilSqrt;
+            const vv = (iy + Math.random()) / lutPupilSqrt;
 
             const pp = samplePupilDisk(uu, vv);
             const target = { x: xStop, y: pp.y, z: pp.z };
@@ -2593,15 +2544,6 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
           }
         }
         transLUT[ch][k] = total ? (ok/total) : 0;
-      }
-      }
-
-      // store in cache
-      preview._lutCache.set(key, { rObjLUT, transLUT, naturalLUT });
-      // keep cache bounded (simple LRU-ish: delete oldest)
-      if (preview._lutCache.size > 8){
-        const firstKey = preview._lutCache.keys().next().value;
-        preview._lutCache.delete(firstKey);
       }
     }
 
@@ -2675,7 +2617,183 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
     drawPreviewViewport();
   }
 
-  // === DOF PATH (true pupil integration per pixel) ===
+  
+  // === DOF APPROX PATH (very fast preview) ===
+  // Idea: trace a handful of pupil rays to the object plane, estimate the PSF radius,
+  // then apply a tiny stochastic blur around the centroid in UV space.
+  // This is NOT physically perfect, but it is *massively* faster and reacts to focus.
+  function renderDOFApprox(){
+    // For DOF previews, keep resolution sane automatically (you can still raise prevRes if you insist)
+    // This caps runaway "10 minutes renders" on accident.
+    const cap = (q === "draft") ? 600 : 720;
+    const Hb = Math.min(H, cap);
+    const Wb = Math.round(Hb * aspect);
+    preview.worldCanvas.width = Wb;
+    preview.worldCanvas.height = Hb;
+
+    const wctx = preview.worldCtx;
+    const out = wctx.createImageData(Wb, Hb);
+    const outD = out.data;
+
+    const epsX = 0.05;
+    const startX = sensorX + epsX;
+
+    // 4-point pupil (plus center) samples
+    const P = (q === "draft") ? 0.60 : 0.70;
+    const pupilPts = [
+      { y:  stopAp * P, z: 0 },
+      { y: -stopAp * P, z: 0 },
+      { y: 0, z:  stopAp * P },
+      { y: 0, z: -stopAp * P },
+      { y: 0, z: 0 },
+    ];
+    const taps = (q === "draft")
+      ? [[0,0],[0.5,0.2],[-0.4,0.35],[0.2,-0.55],[-0.2,-0.15]]
+      : [[0,0],[0.55,0.15],[-0.48,0.36],[0.25,-0.58],[-0.28,-0.18],[0.18,0.62],[-0.62,0.05],[0.08,-0.34]];
+
+    const waveMain = doCA ? "d" : wavePreset; // keep main mapping stable
+    const WAVES = doCA ? ["c","d","g"] : [waveMain, waveMain, waveMain];
+
+    // Convert mm spread on object plane to UV spread
+    const mmToU = 1 / (2 * halfObjW);
+    const mmToV = 1 / (2 * halfObjH);
+
+    // Loop pixels
+    for (let py = 0; py < Hb; py++){
+      const sy = (0.5 - (py + 0.5) / Hb) * sensorHv;
+
+      for (let px = 0; px < Wb; px++){
+        const sx = ((px + 0.5) / Wb - 0.5) * sensorWv;
+        const rS = Math.hypot(sx, sy);
+        const nat = naturalCos4(rS);
+
+        let sumU = 0, sumV = 0, sumY = 0, sumZ = 0, hit = 0;
+
+        // First pass: centroid from main wave (green-ish)
+        for (let i=0;i<pupilPts.length;i++){
+          const pp = pupilPts[i];
+          const dx = (xStop - startX);
+          const dy = (pp.y - sx);
+          const dz = (pp.z - sy);
+          const invL = 1 / Math.hypot(dx, dy, dz);
+          const dir = { x: dx*invL, y: dy*invL, z: dz*invL };
+
+          const tr = traceRayReverse3D({ p: { x:startX, y:sx, z:sy }, d: dir }, lens.surfaces, waveMain);
+          if (tr.vignetted || tr.tir) continue;
+
+          const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+          if (!hitObj) continue;
+
+          sumY += hitObj.y;
+          sumZ += hitObj.z;
+          hit++;
+        }
+
+        const idx = (py * Wb + px) * 4;
+        if (hit === 0){
+          outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
+          continue;
+        }
+
+        const my = sumY / hit;
+        const mz = sumZ / hit;
+
+        // Second pass: RMS spread (PSF radius proxy)
+        let varY = 0, varZ = 0;
+        for (let i=0;i<pupilPts.length;i++){
+          const pp = pupilPts[i];
+          const dx = (xStop - startX);
+          const dy = (pp.y - sx);
+          const dz = (pp.z - sy);
+          const invL = 1 / Math.hypot(dx, dy, dz);
+          const dir = { x: dx*invL, y: dy*invL, z: dz*invL };
+
+          const tr = traceRayReverse3D({ p: { x:startX, y:sx, z:sy }, d: dir }, lens.surfaces, waveMain);
+          if (tr.vignetted || tr.tir) continue;
+
+          const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+          if (!hitObj) continue;
+
+          const dy2 = (hitObj.y - my);
+          const dz2 = (hitObj.z - mz);
+          varY += dy2*dy2;
+          varZ += dz2*dz2;
+        }
+        varY /= hit; varZ /= hit;
+
+        const sigmaMm = Math.sqrt(varY + varZ) * 0.85; // empirical
+        const su = sigmaMm * mmToU;
+        const sv = sigmaMm * mmToV;
+
+        const uv0 = objectMmToUV(my, mz);
+
+        // Throughput proxy: fraction of pupil rays that made it through
+        const trans = hit / pupilPts.length;
+        const gain = clamp(trans * nat, 0, 1);
+        if (gain < 1e-4){
+          outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
+          continue;
+        }
+
+        // Sample + tiny blur taps around centroid
+        if (!doCA){
+          let r=0,g=0,b=0,a=0;
+          for (let t=0;t<taps.length;t++){
+            const o=taps[t];
+            const c = sample(uv0.u + o[0]*su, uv0.v + o[1]*sv);
+            r += c[0]; g += c[1]; b += c[2]; a += c[3];
+          }
+          const inv = 1 / taps.length;
+          outD[idx]   = clamp(r*inv*gain, 0, 255);
+          outD[idx+1] = clamp(g*inv*gain, 0, 255);
+          outD[idx+2] = clamp(b*inv*gain, 0, 255);
+          outD[idx+3] = 255;
+        } else {
+          // CA: do 3 cheap centroid traces (one per channel) but keep taps same
+          const chCol = [0,0,0];
+          for (let ch=0; ch<3; ch++){
+            const wave = WAVES[ch];
+            let sumy=0,sumz=0,h=0;
+            for (let i=0;i<pupilPts.length;i++){
+              const pp = pupilPts[i];
+              const dx = (xStop - startX);
+              const dy = (pp.y - sx);
+              const dz = (pp.z - sy);
+              const invL = 1 / Math.hypot(dx, dy, dz);
+              const dir = { x: dx*invL, y: dy*invL, z: dz*invL };
+
+              const tr = traceRayReverse3D({ p: { x:startX, y:sx, z:sy }, d: dir }, lens.surfaces, wave);
+              if (tr.vignetted || tr.tir) continue;
+              const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+              if (!hitObj) continue;
+              sumy += hitObj.y; sumz += hitObj.z; h++;
+            }
+            if (h===0){ chCol[ch]=0; continue; }
+            const uy = sumy/h, uz=sumz/h;
+            const uv = objectMmToUV(uy, uz);
+
+            let acc=0;
+            for (let t=0;t<taps.length;t++){
+              const o=taps[t];
+              const c = sample(uv.u + o[0]*su, uv.v + o[1]*sv);
+              acc += c[ch];
+            }
+            chCol[ch] = (acc / taps.length) * gain;
+          }
+          outD[idx]   = clamp(chCol[0], 0, 255);
+          outD[idx+1] = clamp(chCol[1], 0, 255);
+          outD[idx+2] = clamp(chCol[2], 0, 255);
+          outD[idx+3] = 255;
+        }
+      }
+    }
+
+    wctx.putImageData(out, 0, 0);
+    preview.worldReady = true;
+    drawPreviewViewport();
+  }
+
+// === DOF PATH (true pupil integration per pixel) ===
   function renderDOFPath(){
     preview.worldCanvas.width = W;
     preview.worldCanvas.height = H;
@@ -2706,21 +2824,9 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
     const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
     let y = 0;
-    const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 28 : 18);
-
-    // Pre-generate randoms for this render (cuts Math.random pressure a lot)
-    // Each sample needs: 2 for pupil + 2 for pixel jitter.
-    const randStride = 4;
-    const randBuf = new Float32Array(Math.max(1024, W * rowsPerChunk * spp * randStride));
-    let rptr = 0;
-    function refillRand(){
-      for (let i=0;i<randBuf.length;i++) randBuf[i] = Math.random();
-      rptr = 0;
-    }
-    refillRand();
+    const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 24 : 16);
 
     function step(){
-      const y0 = y;
       const yEnd = Math.min(H, y + rowsPerChunk);
       setPreviewProgress(y / H, `DOF ${Math.round((y/H)*100)}%`);
 
@@ -2741,12 +2847,11 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
 
           for (let s = 0; s < spp; s++){
             // jitter inside pixel slightly helps noise
-            if (rptr + randStride >= randBuf.length) refillRand();
-            const jx = (randBuf[rptr++] - 0.5) * (sensorWv / W) * 0.6;
-            const jy = (randBuf[rptr++] - 0.5) * (sensorHv / H) * 0.6;
+            const jx = (Math.random() - 0.5) * (sensorWv / W) * 0.6;
+            const jy = (Math.random() - 0.5) * (sensorHv / H) * 0.6;
             const pSj = { x: startX, y: sx + jx, z: sy + jy };
 
-            const pp = samplePupilDisk(randBuf[rptr++], randBuf[rptr++]);
+            const pp = samplePupilDisk(Math.random(), Math.random());
             const target = { x: xStop, y: pp.y, z: pp.z };
             const dir0 = normalize3({ x: target.x - pSj.x, y: target.y - pSj.y, z: target.z - pSj.z });
 
@@ -2794,8 +2899,7 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
       }
 
       // partial update (progressive)
-      // Don't upload the full buffer each chunk; only upload the rows we just computed.
-      wctx.putImageData(out, 0, 0, 0, y0, W, yEnd - y0);
+      wctx.putImageData(out, 0, 0);
       preview.worldReady = true;
       drawPreviewViewport();
 
@@ -2810,12 +2914,14 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
   preview.worldReady = false;
   preview.dirtyKey = ""; // (optional) you can keep your key caching around this wrapper
 
-  if (!doDOF) {
+    if (!doDOF) {
     hidePreviewProgress();
     renderFastLUT();
   } else {
-    // DOF implies we *must* integrate over pupil; CA piggybacks here naturally
-    renderDOFPath();
+    // For interactive work: use Approx DOF for draft/normal, True DOF only for HQ.
+    // This turns "minutes" into "seconds" while still reacting to focus.
+    if (q === "hq") renderDOFPath();
+    else { hidePreviewProgress(); renderDOFApprox(); }
   }
 }
 
