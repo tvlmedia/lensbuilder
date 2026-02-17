@@ -165,11 +165,12 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "Fuji GFX (M
 
   const OV = 1.6; // overscan factor for preview
 
-const BASE_URL = new URL("./", window.location.href); // directory van de huidige page
-const assetUrl = (p) => new URL(p, BASE_URL).toString();
+// ✅ HARD DEFAULTS (no relative path / no hash issues)
+const DEFAULT_PREVIEW_URL =
+  "https://tvlmedia.github.io/lensbuilder/TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
 
-const DEFAULT_PREVIEW_URL = assetUrl("TVL_Focus_Distortion_Chart_3x2_6000x4000.png");
-const DEFAULT_LENS_URL    = assetUrl("bijna-goed.json");
+const DEFAULT_LENS_URL =
+  "https://tvlmedia.github.io/lensbuilder/bijna-goed.json";
    
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
@@ -2819,9 +2820,12 @@ async function loadPreviewFromUrl(url) {
 
     const im = new Image();
     im.onload = () => {
-      setPreviewImage(im);
-      URL.revokeObjectURL(objUrl);
-    };
+  setPreviewImage(im);
+  URL.revokeObjectURL(objUrl);
+
+  // ✅ force one render immediately after the chart is ready
+  renderPreview();
+};
     im.onerror = () => {
       URL.revokeObjectURL(objUrl);
       if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${url}`;
