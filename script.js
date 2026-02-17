@@ -2564,7 +2564,8 @@ function step(){
 }
 
 requestAnimationFrame(step);
-return; // belangrijk: renderPreview stopt hier, niet doorlopen
+// GEEN return nodig hier
+} // <-- renderPreview() eindigt hier
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
