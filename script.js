@@ -3283,153 +3283,101 @@ if (ui.prevImg) {
     const url = URL.createObjectURL(f);
     const im = new Image();
 
-    im.onload = () => {
+       im.onload = () => {
       setPreviewImage(im);
       URL.revokeObjectURL(url);
     };
     im.onerror = () => {
       URL.revokeObjectURL(url);
-      if (ui.footerWarn) ui.footerWarn.textContent = "Preview image load failed.";
+      if (ui.footerWarn) ui.footerWarn.textContent = "Kon afbeelding niet laden.";
     };
-
     im.src = url;
   });
 }
 
-  // -------------------- file load --------------------
-  on("#fileLoad", "change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+// -------------------- load lens JSON from file --------------------
+if (ui.fileLoad) {
+  ui.fileLoad.addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
     try {
-      const txt = await file.text();
+      const txt = await f.text();
       const obj = JSON.parse(txt);
-      if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
-
-      if (obj.glass_note && typeof obj.glass_note === "object") {
-        for (const [k, v] of Object.entries(obj.glass_note)) {
-          const nd = Number(v?.nd);
-          if (Number.isFinite(nd)) {
-            GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
-            GLASS_DB[k].nd = nd;
-            if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
-          }
-        }
-      }
-
       loadLens(obj);
-      scheduleRenderAll();
-      scheduleRenderPreview();
       toast("Loaded JSON");
     } catch (err) {
-      if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err?.message || err}`;
       console.error(err);
+      if (ui.footerWarn) ui.footerWarn.textContent = "JSON load failed (invalid file).";
     } finally {
-      if (ui.fileLoad) ui.fileLoad.value = "";
+      e.target.value = "";
     }
   });
-
-// -------------------- sensor UI bindings --------------------
-function resetPreviewView() {
-  preview.view.panX = 0;
-  preview.view.panY = 0;
-  preview.view.zoom = 1.0;
 }
 
-function bindControlRerenders() {
-const all = [
-  ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.lensFocus, ui.renderScale,
-  ui.sensorW, ui.sensorH, ui.sensorPreset,
-  ui.focusMode, ui.sensorOffset,   // <-- toevoegen
-].filter(Boolean);
+// -------------------- sensor preset wiring --------------------
+populateSensorPresetsSelect();
 
-  for (const el of all) {
-    el.addEventListener("input", () => {
-      const isSensor = (el === ui.sensorW || el === ui.sensorH);
-      if (isSensor) {
-        applySensorToIMS();
-        resetPreviewView();
-      }
-      scheduleRenderAll();
-      scheduleRenderPreview();
-    });
-
-    el.addEventListener("change", () => {
-      if (el === ui.sensorPreset) {
-        applyPreset(ui.sensorPreset.value);
-        resetPreviewView();
-      }
-
-      const isSensor = (el === ui.sensorW || el === ui.sensorH);
-      if (isSensor) {
-        applySensorToIMS();
-        resetPreviewView();
-      }
-
-      scheduleRenderAll();
-      scheduleRenderPreview();
-    });
-  }
-
-  // preview controls: only rerender preview
-  const prev = [ui.prevObjDist, ui.prevObjH, ui.prevRes].filter(Boolean);
-  for (const el of prev) {
-    el.addEventListener("input", () => scheduleRenderPreview());
-    el.addEventListener("change", () => scheduleRenderPreview());
-  }
-
-  
+if (ui.sensorPreset) {
+  ui.sensorPreset.addEventListener("change", () => {
+    applyPreset(ui.sensorPreset.value);
+    renderAll();
+    scheduleRenderPreview();
+  });
 }
-async function loadDefaultLensFromUrl(url) {
+
+// direct edits on sensor W/H
+if (ui.sensorW) ui.sensorW.addEventListener("input", () => { applySensorToIMS(); renderAll(); scheduleRenderPreview(); });
+if (ui.sensorH) ui.sensorH.addEventListener("input", () => { applySensorToIMS(); renderAll(); scheduleRenderPreview(); });
+
+// -------------------- preview controls wiring --------------------
+bindPreviewViewControls();
+
+// If you have extra preview checkboxes/quality dropdowns, re-render on change
+["optDOF", "optCA", "renderQuality"].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", () => scheduleRenderPreview());
+});
+
+// -------------------- initial UI + draw --------------------
+buildTable();
+applySensorToIMS();
+bindViewControls();
+renderAll();
+
+// -------------------- autoload default preview chart --------------------
+(function bootDefaultPreview() {
+  // Only autoload if user didn't already load an image in this session
+  if (!preview.ready) loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
+})();
+
+// -------------------- autoload default lens JSON (optional) --------------------
+(async function bootDefaultLensJson() {
+  // If you don’t want this behaviour, delete this IIFE.
+  if (!DEFAULT_LENS_URL) return;
+
   try {
-    const res = await fetch(url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(), { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch(DEFAULT_LENS_URL, { cache: "no-store" });
+    if (!res.ok) return;
     const obj = await res.json();
-    if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid lens JSON");
-
-if (obj.glass_note && typeof obj.glass_note === "object") {
-  for (const [k, v] of Object.entries(obj.glass_note)) {
-    const nd = Number(v?.nd);
-    if (Number.isFinite(nd)) {
-      GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
-      GLASS_DB[k].nd = nd;
-      if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
-    }
-  }
-}
-     
     loadLens(obj);
     toast("Loaded default lens JSON");
-    return true;
   } catch (e) {
-    console.warn("Default lens failed to load:", url, e);
-    if (ui.footerWarn) ui.footerWarn.textContent = `Default lens not found: ${url} (fallback to OMIT)`;
-    loadLens(omit50ConceptV1());
-    toast("Loaded OMIT fallback");
-    return false;
+    // silent: it’s optional
+    console.warn("Default lens JSON load failed:", e);
   }
-}
-  async function init() {
-  populateSensorPresetsSelect();
-  if (ui.sensorPreset) ui.sensorPreset.value = "Fuji GFX (MF)";
-  applyPreset("Fuji GFX (MF)");
-
-  await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
-
-  bindViewControls();
-  bindPreviewViewControls();
-  bindControlRerenders();
-
-  // force preview res default
-  if (ui.prevRes) {
-    ui.prevRes.value = "1920";
-    ui.prevRes.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
-
-  renderAll();
-  drawPreviewViewport();
-}
-
-init();
 })();
+
+// -------------------- sensor preset default (keep your preference) --------------------
+(function bootDefaultSensor() {
+  // If preset not set or unknown, fall back:
+  if (ui.sensorPreset && !SENSOR_PRESETS[ui.sensorPreset.value]) {
+    ui.sensorPreset.value = "Fuji GFX (MF)";
+  }
+  if (ui.sensorPreset) applyPreset(ui.sensorPreset.value);
+})();
+
+// -------------------- safety: ensure preview canvas sizes once --------------------
+resizePreviewCanvasToCSS();
+drawPreviewViewport();
+
+})(); // end IIFE
