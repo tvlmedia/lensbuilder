@@ -214,16 +214,98 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
     CZJ_6: { nd: 1.6229, Vd: 60.0 },
   };
 
-  function glassN(glassName, preset /* d,g,c */) {
-    const g = GLASS_DB[glassName] || GLASS_DB.AIR;
-    if (glassName === "AIR") return 1.0;
+  // Wavelengths (Fraunhofer + Hg g)
+// nm -> um
+const WL = {
+  C: 656.2725,
+  d: 587.5618,
+  F: 486.1327,
+  g: 435.8343,
+};
 
-    const base = g.nd;
-    const strength = 1.0 / Math.max(10.0, g.Vd);
-    if (preset === "g") return base + 35.0 * strength;
-    if (preset === "c") return base - 20.0 * strength;
-    return base;
+// --- Sellmeier + Cauchy dispersion ---
+function sellmeierN_um(glass, lambda_um){
+  // expects glass.sellmeier: {B:[B1,B2,B3], C:[C1,C2,C3]} with C in um^2
+  const s = glass.sellmeier;
+  const L2 = lambda_um * lambda_um;
+  let n2 = 1.0;
+  for (let i=0;i<3;i++){
+    n2 += (s.B[i] * L2) / (L2 - s.C[i]);
   }
+  return Math.sqrt(n2);
+}
+
+function fitCauchyFrom3(nC, nd, nF){
+  // fit n(λ) = A + B/λ^2 + C/λ^4 using λ in um
+  const lC = WL.C / 1000, ld = WL.d / 1000, lF = WL.F / 1000;
+
+  // Solve linear system for A,B,C:
+  // [1, 1/l^2, 1/l^4] * [A,B,C]^T = n
+  const M = [
+    [1, 1/(lC*lC), 1/(lC*lC*lC*lC)],
+    [1, 1/(ld*ld), 1/(ld*ld*ld*ld)],
+    [1, 1/(lF*lF), 1/(lF*lF*lF*lF)],
+  ];
+  const y = [nC, nd, nF];
+
+  // simple 3x3 solve (Cramer's / Gaussian)
+  const A = M.map(r=>r.slice());
+  const b = y.slice();
+
+  for (let i=0;i<3;i++){
+    // pivot
+    let piv=i;
+    for (let r=i+1;r<3;r++) if (Math.abs(A[r][i]) > Math.abs(A[piv][i])) piv=r;
+    if (piv!==i){ [A[i],A[piv]]=[A[piv],A[i]]; [b[i],b[piv]]=[b[piv],b[i]]; }
+
+    const div = A[i][i] || 1e-12;
+    for (let j=i;j<3;j++) A[i][j] /= div;
+    b[i] /= div;
+
+    for (let r=0;r<3;r++){
+      if (r===i) continue;
+      const f = A[r][i];
+      for (let j=i;j<3;j++) A[r][j] -= f*A[i][j];
+      b[r] -= f*b[i];
+    }
+  }
+  return { A:b[0], B:b[1], C:b[2] };
+}
+
+function cauchyN_um(cfit, lambda_um){
+  const L2 = lambda_um*lambda_um;
+  return cfit.A + cfit.B/L2 + cfit.C/(L2*L2);
+}
+
+// Cache fitted Cauchy per glass for speed
+const _cauchyCache = new Map();
+
+function glassN_lambda(glassName, lambdaNm){
+  const g = GLASS_DB[glassName] || GLASS_DB.AIR;
+  if (glassName === "AIR") return 1.0;
+
+  const lambda_um = lambdaNm / 1000;
+
+  // 1) Sellmeier if available
+  if (g.sellmeier && g.sellmeier.B && g.sellmeier.C){
+    return sellmeierN_um(g, lambda_um);
+  }
+
+  // 2) Fallback: Cauchy fit from nd+Vd
+  const key = glassName + "::cauchy";
+  let fit = _cauchyCache.get(key);
+  if (!fit){
+    const nd = Number(g.nd || 1.5168);
+    const Vd = Math.max(10, Number(g.Vd || 50));
+    const dN = (nd - 1) / Vd; // nF - nC
+    // asymmetric split assumption (works better than +/- 0.5)
+    const nF = nd + 0.6 * dN;
+    const nC = nd - 0.4 * dN;
+    fit = fitCauchyFrom3(nC, nd, nF);
+    _cauchyCache.set(key, fit);
+  }
+  return cauchyN_um(fit, lambda_um);
+}
 
   // -------------------- built-in lenses --------------------
   function demoLensSimple() {
@@ -798,8 +880,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     // OSLO-ish: glass = medium AFTER surface
-    const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
+const lambdaNm = (wavePreset === "c") ? WL.C
+               : (wavePreset === "F") ? WL.F
+               : (wavePreset === "g") ? WL.g
+               : WL.d; // default 'd'
 
+const nAfter = glassN_lambda(String(s.glass || "AIR"), lambdaNm);
+
+     
     if (Math.abs(nAfter - nBefore) < 1e-9) {
       ray = { p: hitInfo.hit, d: ray.d };
       nBefore = nAfter;
