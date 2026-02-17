@@ -93,9 +93,6 @@
     prevObjDist: $("#prevObjDist"),
     prevObjH: $("#prevObjH"),
     prevRes: $("#prevRes"),
-    prevDOF: $("#prevDOF"),
-    prevQual: $("#prevQual"),
-    prevCA: $("#prevCA"),
     btnRenderPreview: $("#btnRenderPreview"),
     btnPreviewFS: $("#btnPreviewFS"),
     previewPane: $("#previewPane"),
@@ -2548,10 +2545,6 @@ setIMSVxTo(sensorX);
     return { u, v };
   }
 
-  const dofOn = String(ui.prevDOF?.value || "off").toLowerCase() === "on";
-  const dofSamples = Math.max(1, Math.min(256, Number(ui.prevQual?.value || 24)));
-  const caOn = String(ui.prevCA?.value || "on").toLowerCase() === "on";
-
   for (let py = 0; py < H; py++) {
     const sy = (0.5 - (py + 0.5) / H) * sensorHv;
 
@@ -2569,85 +2562,20 @@ setIMSVxTo(sensorX);
         continue;
       }
 
-      if (!dofOn) {
-        // fast path: radial mapping via LUT
-        let ox = 0, oy = 0;
-        if (rS > 1e-9) {
-          const s = rObj / rS;
-          ox = sx * s;
-          oy = sy * s;
-        }
-
-        const { u, v } = objectMmToUV(ox, oy);
-        const c = sample(u, v);
-
-        outD[idx]     = clamp(c[0] * g, 0, 255);
-        outD[idx + 1] = clamp(c[1] * g, 0, 255);
-        outD[idx + 2] = clamp(c[2] * g, 0, 255);
-        outD[idx + 3] = 255;
-        continue;
+      // map sensor vector -> object vector via radial scale
+      let ox = 0, oy = 0;
+      if (rS > 1e-9) {
+        const s = rObj / rS;
+        ox = sx * s;
+        oy = sy * s;
       }
 
-      // DOF path: Monte-Carlo pupil sampling (reverse tracing to object plane)
-      const pS = { x: startX, y: sy, z: sx };
+      const { u, v } = objectMmToUV(ox, oy);
+      const c = sample(u, v);
 
-      let accR = 0, accG = 0, accB = 0;
-      let hits = 0;
-
-      for (let s = 0; s < dofSamples; s++) {
-        const pp = samplePupilDisk(Math.random(), Math.random());
-        const target = { x: xStop, y: pp.y, z: pp.z };
-        const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
-
-        if (caOn) {
-          // RGB traced with different wavelength presets (very rough CA, but useful)
-          const trR = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, "c");
-          const trG = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, "d");
-          const trB = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, "g");
-
-          if (trR.vignetted || trR.tir || trG.vignetted || trG.tir || trB.vignetted || trB.tir) continue;
-
-          const hitR = intersectPlaneX3D(trR.endRay, xObjPlane);
-          const hitG = intersectPlaneX3D(trG.endRay, xObjPlane);
-          const hitB = intersectPlaneX3D(trB.endRay, xObjPlane);
-          if (!hitR || !hitG || !hitB) continue;
-
-          const uvR = objectMmToUV(hitR.z, hitR.y);
-          const uvG = objectMmToUV(hitG.z, hitG.y);
-          const uvB = objectMmToUV(hitB.z, hitB.y);
-
-          const cR = sample(uvR.u, uvR.v);
-          const cG = sample(uvG.u, uvG.v);
-          const cB = sample(uvB.u, uvB.v);
-
-          accR += cR[0];
-          accG += cG[1];
-          accB += cB[2];
-          hits++;
-        } else {
-          const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wavePreset);
-          if (tr.vignetted || tr.tir) continue;
-          const hit = intersectPlaneX3D(tr.endRay, xObjPlane);
-          if (!hit) continue;
-
-          const uv = objectMmToUV(hit.z, hit.y);
-          const c = sample(uv.u, uv.v);
-          accR += c[0];
-          accG += c[1];
-          accB += c[2];
-          hits++;
-        }
-      }
-
-      if (hits < 1) {
-        outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 0; outD[idx+3] = 255;
-        continue;
-      }
-
-      const inv = 1 / hits;
-      outD[idx]     = clamp((accR * inv) * g, 0, 255);
-      outD[idx + 1] = clamp((accG * inv) * g, 0, 255);
-      outD[idx + 2] = clamp((accB * inv) * g, 0, 255);
+      outD[idx]     = clamp(c[0] * g, 0, 255);
+      outD[idx + 1] = clamp(c[1] * g, 0, 255);
+      outD[idx + 2] = clamp(c[2] * g, 0, 255);
       outD[idx + 3] = 255;
     }
   }
@@ -3076,7 +3004,7 @@ const all = [
   }
 
   // preview controls: only rerender preview
-  const prev = [ui.prevObjDist, ui.prevObjH, ui.prevRes, ui.prevDOF, ui.prevQual, ui.prevCA].filter(Boolean);
+  const prev = [ui.prevObjDist, ui.prevObjH, ui.prevRes].filter(Boolean);
   for (const el of prev) {
     el.addEventListener("input", () => scheduleRenderPreview());
     el.addEventListener("change", () => scheduleRenderPreview());
