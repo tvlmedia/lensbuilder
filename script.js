@@ -1524,20 +1524,16 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
 
   // tick density based on zoom
   const pxPerMm = world.s;
-  const stepMm = 10;     // elke 1cm een tick
-const majorMm = 50;    // elke 5cm “major”
-const midMm = 10;      // elke 1cm “mid” (dus label altijd mogelijk)
-
-  const majorMm = 50;
-  const midMm = 20;
+  const stepMm  = 10;   // 1cm
+const majorMm = 50;   // 5cm “major”
+const midMm   = 10;   // 1cm “mid”
 
   for (let x = originX; x >= xMin - 1e-6; x -= stepMm) {
     const distMm = originX - x;
     const isMajor = (Math.round(distMm) % majorMm) === 0;
 const isMid   = !isMajor && (Math.round(distMm) % midMm) === 0;
-
-    const tLen = isMajor ? 12 : isMid ? 8 : 5;
-
+const shouldLabel = isMajor || isMid;
+     
     const p = P(x, y);
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
