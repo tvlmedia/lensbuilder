@@ -432,3 +432,21 @@ canvas{
   .canvasSplit{ grid-template-columns: 1fr; }
   .pane{ height:420px; }
 }
+.topbar{
+  height:auto;              /* belangrijk */
+  min-height:56px;          /* of wat je wil */
+  padding:10px 12px;        /* geeft ruimte */
+  align-items:center;
+  overflow:visible;         /* NIET hidden */
+}
+
+.toolbar{
+  align-items:center;
+  flex-wrap:wrap;           /* voorkomt krappe clipping op kleinere breedtes */
+  gap:8px;
+}
+
+.btn{
+  line-height:1;            /* voorkomt rare “vertical crop” */
+  padding:10px 12px;
+}
