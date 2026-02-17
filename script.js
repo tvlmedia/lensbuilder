@@ -165,9 +165,12 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "Fuji GFX (M
 
   const OV = 1.6; // overscan factor for preview
 
-// -------------------- default preview chart (GitHub) --------------------
-const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
-const DEFAULT_LENS_URL = "./bijna-goed.json";
+const assetUrl = (p) => new URL(p, window.location.href).toString();
+
+// ✅ zet ze als “relative to current page”, maar dan robust
+const DEFAULT_PREVIEW_URL = assetUrl("TVL_Focus_Distortion_Chart_3x2_6000x4000.png");
+const DEFAULT_LENS_URL = assetUrl("bijna-goed.json");
+   
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
     const i = lens.surfaces.length - 1;
@@ -1105,8 +1108,8 @@ ctx.globalAlpha = 0.05;
 
   // fill
   ctx.globalAlpha = 1.0;
-  ctx.fillStyle = "rgba(120,180,255,0.10)";
-  ctx.beginPath();
+ctx.fillStyle = "rgba(140,200,255,0.16)";
+    ctx.beginPath();
   let p0 = worldToScreen(poly[0], world);
   ctx.moveTo(p0.x, p0.y);
   for (let i = 1; i < poly.length; i++) {
@@ -1118,7 +1121,7 @@ ctx.globalAlpha = 0.05;
 
   // edge with glow
   ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(220,235,255,0.55)";
+  ctx.strokeStyle = "rgba(235,245,255,0.78)";
   ctx.shadowColor = "rgba(70,140,255,0.35)";
   ctx.shadowBlur = 10;
   ctx.stroke();
@@ -1168,7 +1171,7 @@ ctx.globalAlpha = 0.05;
     if (!ctx) return;
     ctx.save();
     ctx.lineWidth = 1.25;
-ctx.strokeStyle = "rgba(255,255,255,.22)";
+ctx.strokeStyle = "rgba(255,255,255,.34)";
      
     const vx = s.vx;
     const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
@@ -2777,15 +2780,22 @@ function setPreviewImage(im) {
   preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
   preview.imgCtx.drawImage(im, 0, 0);
 
-  preview.imgData = preview.imgCtx
-    .getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height)
-    .data;
+  try {
+    preview.imgData = preview.imgCtx
+      .getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height)
+      .data;
+    preview.ready = true;
+    toast("Preview image loaded");
+  } catch (e) {
+    // ✅ CORS/tainted fallback
+    preview.imgData = null;
+    preview.ready = false;
+    if (ui.footerWarn) ui.footerWarn.textContent =
+      "Preview image blocked by CORS (tainted canvas). Use a local upload OR host the PNG on same origin (GitHub Pages).";
+  }
 
-  preview.ready = true;
   preview.worldReady = false;
-
   scheduleRenderPreview();
-  toast("Preview image loaded");
 }
 
 function loadPreviewFromUrl(url) {
