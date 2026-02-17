@@ -2363,8 +2363,37 @@ function samplePupilDiskConcentric(u, v, stopAp){
   const rr = Math.abs(r) * stopAp;
   return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
 }
-   
+   // -------------------- DOF helper: 1 sample naar object plane --------------------
+function traceOneSampleToObject(sx, sy, wavePreset, xStop, stopAp, xObjPlane){
+  // Kies willekeurig punt in pupil (stop)
+  const pp = samplePupilDiskConcentric(Math.random(), Math.random(), stopAp);
+
+  // Ray start net vóór sensor (richting lens)
+  const epsX = 0.05;
+  const start = { x: (Number(ui.sensorOffset?.value || 0) + epsX), y: sy, z: sx }; 
+  // ^ let op: we gebruiken z = sx zodat we 2D-sensor naar 3D-rotatie mappen:
+  //   - y = verticale sensor-as
+  //   - z = horizontale sensor-as
+
+  // Richting naar stop-punt
+  const target = { x: xStop, y: pp.y, z: pp.z };
+  const dir = normalize3({ x: target.x - start.x, y: target.y - start.y, z: target.z - start.z });
+
+  // Trace reverse door lens naar object plane
+  const tr = traceRayReverse3D({ p: start, d: dir }, lens.surfaces, wavePreset);
+  if (tr.vignetted || tr.tir) return null;
+
+  const hit = intersectPlaneX3D(tr.endRay, xObjPlane);
+  if (!hit) return null;
+
+  // Gewicht (simpel): cos^4 benadering vanaf sensor-ray richting stop
+  const cosT = Math.max(0, Math.min(1, Math.abs(dir.x)));
+  const w = Math.pow(cosT, 4);
+
+  return { ox: hit.z, oy: hit.y, w };
+}
  // -------------------- preview rendering (split-view) --------------------
+// -------------------- preview rendering (split-view) --------------------
 function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
 
@@ -2372,7 +2401,7 @@ function renderPreview() {
   preview.renderToken++;
   const token = preview.renderToken;
 
-  // --- eerst key bouwen, pas daarna locken ---
+  // --- focus + vertices ---
   const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
   const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
   computeVertices(lens.surfaces, lensShift);
@@ -2383,13 +2412,28 @@ function renderPreview() {
 
   const { w: sensorW, h: sensorH } = getSensorWH();
 
+  // --- STOP / object plane ---
   const stopIdx = findStopSurfaceIndex(lens.surfaces);
   const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
+  const xStop = Number(stopSurf?.vx || 0);
+  const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 
-  const objDist   = Number(ui.prevObjDist?.value || 2000);
-  const objH      = Number(ui.prevObjH?.value || 200);
-  const base      = Math.max(64, Number(ui.prevRes?.value || 720));
+  const objDist = Number(ui.prevObjDist?.value || 2000); // mm
+  const objH = Number(ui.prevObjH?.value || 200);       // half-height in mm
+  const xObjPlane = -Math.max(1, objDist);              // object plane links van lens
 
+  // --- preview settings ---
+  const dofOn = !!ui.prevDofOn?.checked;
+  const caOn = !!ui.prevCaOn?.checked;
+  const progressive = !!ui.prevProgressive?.checked;
+  const samples = Math.max(1, Math.min(256, Number(ui.prevSamples?.value || 16)));
+
+  const base = Math.max(64, Number(ui.prevRes?.value || 720));
+  const aspect = sensorW / sensorH;
+  const W = Math.max(64, Math.round(base * aspect));
+  const H = Math.max(64, base);
+
+  // --- dirty key (cache) ---
   const key = JSON.stringify({
     lensShift,
     wave: wavePreset,
@@ -2397,6 +2441,10 @@ function renderPreview() {
     objDist,
     objH,
     base,
+    dofOn,
+    caOn,
+    samples,
+    progressive,
     lensHash: lens.surfaces.map(s => [s.type, s.R, s.t, s.ap, s.glass, s.stop].join(",")).join("|"),
   });
 
@@ -2405,27 +2453,20 @@ function renderPreview() {
     return;
   }
 
-  // ✅ nu pas “locken”
   preview.isRendering = true;
-
   preview.dirtyKey = key;
   preview.worldReady = false;
 
-
-  const aspect = sensorW / sensorH;
-  const W = Math.max(64, Math.round(base * aspect));
-  const H = Math.max(64, base);
-
+  // --- overscan sensor window (in mm) ---
   const sensorWv = sensorW * OV;
   const sensorHv = sensorH * OV;
   const halfWv = sensorWv * 0.5;
   const halfHv = sensorHv * 0.5;
 
-  const epsX = 0.05;
-  const startX = sensorX + epsX;
-
+  // radial LUT range
   const rMaxSensor = Math.hypot(halfWv, halfHv);
 
+  // --- source image sampling ---
   const hasImg = !!(preview.ready && preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
   const imgW = preview.imgCanvas.width;
   const imgH = preview.imgCanvas.height;
@@ -2451,20 +2492,27 @@ function renderPreview() {
 
     const c00 = px(x0,y0), c10 = px(x1,y0), c01 = px(x0,y1), c11 = px(x1,y1);
     const lerp = (a,b,t)=>a+(b-a)*t;
-
     const c0 = c00.map((v0,i)=>lerp(v0,c10[i],tx));
     const c1 = c01.map((v0,i)=>lerp(v0,c11[i],tx));
     return c0.map((v0,i)=>lerp(v0,c1[i],ty));
   }
 
-  // ---- build LUTs once per render ----
+  // --- mapping object-mm -> UV in chart ---
+  const halfObjH = Math.max(1e-6, objH);
+  const imgAsp = hasImg ? (imgW / imgH) : (3/2);
+  const halfObjW = halfObjH * imgAsp;
+
+  function objectMmToUV(xmm, ymm){
+    const u = 0.5 + (xmm / (2 * halfObjW));
+    const v = 0.5 - (ymm / (2 * halfObjH));
+    return { u, v };
+  }
+
+  // --- build LUTs only when DOF OFF (fast path) ---
   const LUT_N = 900;
   const rObjLUT  = new Float32Array(LUT_N);
   const transLUT = new Float32Array(LUT_N);
   const naturalLUT = new Float32Array(LUT_N);
-
-  const PUPIL_SQRT = 14;
-  const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 
   function lookupNatural(absR){
     const t = clamp(absR / rMaxSensor, 0, 1);
@@ -2486,54 +2534,62 @@ function renderPreview() {
     };
   }
 
-  // NOTE: LUT building is also heavy — but it’s finite and cancelable here too.
-  for (let k=0;k<LUT_N;k++){
-    if (token !== preview.renderToken) { preview.isRendering=false; return; }
+  if (!dofOn){
+    const epsX = 0.05;
+    const startX = sensorX + epsX;
 
-    const a = k/(LUT_N-1);
-    const rS = a * rMaxSensor;
-    const pS = { x:startX, y:rS, z:0 };
+    const PUPIL_SQRT = 14;
 
-    // cos^4
-    {
-      const dirChief0 = normalize3({ x:xStop-startX, y:-rS, z:0 });
-      const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
-      naturalLUT[k] = Math.pow(cosT, 4);
-    }
+    for (let k=0;k<LUT_N;k++){
+      if (token !== preview.renderToken) { preview.isRendering=false; return; }
 
-    // chief mapping
-    {
-      const dirChief = normalize3({ x:xStop-startX, y:-rS, z:0 });
-      const trC = traceRayReverse3D({ p:pS, d:dirChief }, lens.surfaces, wavePreset);
-      if (!trC.vignetted && !trC.tir){
-        const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
-        rObjLUT[k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
-      } else rObjLUT[k] = 0;
-    }
+      const a = k/(LUT_N-1);
+      const rS = a * rMaxSensor;
 
-    // throughput
-    let ok=0, total=0;
-    for (let iy=0; iy<PUPIL_SQRT; iy++){
-      for (let ix=0; ix<PUPIL_SQRT; ix++){
-        const u = (ix + Math.random()) / PUPIL_SQRT;
-        const v = (iy + Math.random()) / PUPIL_SQRT;
-        const pp = samplePupilDiskConcentric(u, v, stopAp);
-        const target = { x:xStop, y:pp.y, z:pp.z };
-
-        const dir = normalize3({ x:target.x-pS.x, y:target.y-pS.y, z:target.z-pS.z });
-        const tr = traceRayReverse3D({ p:pS, d:dir }, lens.surfaces, wavePreset);
-
-        total++;
-        if (tr.vignetted || tr.tir) continue;
-        const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-        if (!hitObj) continue;
-        ok++;
+      // cos^4 (chief direction)
+      {
+        const dirChief0 = normalize3({ x:xStop-startX, y:-rS, z:0 });
+        const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
+        naturalLUT[k] = Math.pow(cosT, 4);
       }
+
+      // chief mapping -> object radius
+      {
+        const pS = { x:startX, y:rS, z:0 };
+        const dirChief = normalize3({ x:xStop-startX, y:-rS, z:0 });
+        const trC = traceRayReverse3D({ p:pS, d:dirChief }, lens.surfaces, wavePreset);
+        if (!trC.vignetted && !trC.tir){
+          const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
+          rObjLUT[k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
+        } else rObjLUT[k] = 0;
+      }
+
+      // throughput (monte-carlo over pupil)
+      let ok=0, total=0;
+      const pS = { x:startX, y:rS, z:0 };
+
+      for (let iy=0; iy<PUPIL_SQRT; iy++){
+        for (let ix=0; ix<PUPIL_SQRT; ix++){
+          const u = (ix + Math.random()) / PUPIL_SQRT;
+          const v = (iy + Math.random()) / PUPIL_SQRT;
+          const pp = samplePupilDiskConcentric(u, v, stopAp);
+          const target = { x:xStop, y:pp.y, z:pp.z };
+
+          const dir = normalize3({ x:target.x-pS.x, y:target.y-pS.y, z:target.z-pS.z });
+          const tr = traceRayReverse3D({ p:pS, d:dir }, lens.surfaces, wavePreset);
+
+          total++;
+          if (tr.vignetted || tr.tir) continue;
+          const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+          if (!hitObj) continue;
+          ok++;
+        }
+      }
+      transLUT[k] = total>0 ? (ok/total) : 0;
     }
-    transLUT[k] = total>0 ? (ok/total) : 0;
   }
 
-  // ---- render target canvas ----
+  // --- render target canvas ---
   preview.worldCanvas.width = W;
   preview.worldCanvas.height = H;
 
@@ -2544,108 +2600,101 @@ function renderPreview() {
   const out = wctx.createImageData(W,H);
   const outD = out.data;
 
-  const imgAsp = hasImg ? (imgW / imgH) : (16/9);
-  const halfObjW = halfObjH * imgAsp;
-
-  function objectMmToUV(xmm, ymm){
-    const u = 0.5 + (xmm / (2 * halfObjW));
-    const v = 0.5 - (ymm / (2 * halfObjH));
-    return { u, v };
-  }
-
-  // progressive loop
+  // progressive rows
   let py = 0;
-  const rowsPerFrame = progressive ? 12 : H; // tweakable
+  const rowsPerFrame = progressive ? 12 : H;
 
   const step = () => {
     if (token !== preview.renderToken) { preview.isRendering=false; return; }
 
     const yEnd = Math.min(H, py + rowsPerFrame);
 
-   for (; py < yEnd; py++){
-  const sy = (0.5 - (py + 0.5) / H) * sensorHv;
+    for (; py < yEnd; py++){
+      const sy = (0.5 - (py + 0.5) / H) * sensorHv;
 
-  for (let px=0; px<W; px++){
-    const sx = ((px + 0.5) / W - 0.5) * sensorWv;
+      for (let px=0; px<W; px++){
+        const sx = ((px + 0.5) / W - 0.5) * sensorWv;
+        const idx = (py*W + px)*4;
 
-    const idx = (py*W + px)*4;
+        // ---------- FAST (no DOF) ----------
+        if (!dofOn){
+          const rS = Math.hypot(sx, sy);
+          const { rObj, trans } = lookupRadial(rS);
+          const g = clamp(trans * lookupNatural(rS), 0, 1);
 
-    if (!dofOn){
-      // JOUW HUIDIGE SNELLE PAD (LUT) — laat staan zoals je ‘m hebt
-      const rS = Math.hypot(sx, sy);
-      const { rObj, trans } = lookupRadial(rS);
-      const g = clamp(trans * lookupNatural(rS), 0, 1);
-      if (g < 1e-4){
-        outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
-        continue;
+          if (g < 1e-4){
+            outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
+            continue;
+          }
+
+          let ox=0, oy=0;
+          if (rS > 1e-9){
+            const s = rObj / rS;
+            ox = sx * s;
+            oy = sy * s;
+          }
+
+          const uv = objectMmToUV(ox, oy);
+          const c = sample(uv.u, uv.v);
+
+          outD[idx]   = clamp(c[0]*g, 0, 255);
+          outD[idx+1] = clamp(c[1]*g, 0, 255);
+          outD[idx+2] = clamp(c[2]*g, 0, 255);
+          outD[idx+3] = 255;
+          continue;
+        }
+
+        // ---------- DOF (multi-sample) ----------
+        let r=0,g=0,b=0, wsum=0;
+
+        for (let s=0; s<samples; s++){
+          if (token !== preview.renderToken) { preview.isRendering=false; return; }
+
+          if (!caOn){
+            const hit = traceOneSampleToObject(sx, sy, wavePreset, xStop, stopAp, xObjPlane);
+            if (!hit) continue;
+
+            const uv = objectMmToUV(hit.ox, hit.oy);
+            const c = sample(uv.u, uv.v);
+
+            r += c[0]*hit.w;
+            g += c[1]*hit.w;
+            b += c[2]*hit.w;
+            wsum += hit.w;
+          } else {
+            const hitR = traceOneSampleToObject(sx, sy, "c", xStop, stopAp, xObjPlane);
+            const hitG = traceOneSampleToObject(sx, sy, "d", xStop, stopAp, xObjPlane);
+            const hitB = traceOneSampleToObject(sx, sy, "g", xStop, stopAp, xObjPlane);
+            if (!hitR || !hitG || !hitB) continue;
+
+            const uvR = objectMmToUV(hitR.ox, hitR.oy);
+            const uvG = objectMmToUV(hitG.ox, hitG.oy);
+            const uvB = objectMmToUV(hitB.ox, hitB.oy);
+
+            const cR = sample(uvR.u, uvR.v);
+            const cG = sample(uvG.u, uvG.v);
+            const cB = sample(uvB.u, uvB.v);
+
+            const w = (hitR.w + hitG.w + hitB.w)/3;
+
+            r += cR[0]*w;
+            g += cG[1]*w;
+            b += cB[2]*w;
+            wsum += w;
+          }
+        }
+
+        if (wsum <= 1e-9){
+          outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
+        } else {
+          outD[idx]   = clamp(r/wsum, 0, 255);
+          outD[idx+1] = clamp(g/wsum, 0, 255);
+          outD[idx+2] = clamp(b/wsum, 0, 255);
+          outD[idx+3] = 255;
+        }
       }
-      let ox=0, oy=0;
-      if (rS > 1e-9){
-        const s = rObj / rS;
-        ox = sx * s;
-        oy = sy * s;
-      }
-      const { u, v } = objectMmToUV(ox, oy);
-      const c = sample(u, v);
-      outD[idx]   = clamp(c[0]*g, 0, 255);
-      outD[idx+1] = clamp(c[1]*g, 0, 255);
-      outD[idx+2] = clamp(c[2]*g, 0, 255);
-      outD[idx+3] = 255;
-      continue;
     }
 
-    // ---- DOF PAD (multi-sample) ----
-    let r=0,g=0,b=0, wsum=0;
-
-    for (let s=0; s<samples; s++){
-      if (token !== preview.renderToken) { preview.isRendering=false; return; }
-
-      if (!caOn){
-        const hit = traceOneSampleToObject(sx, sy, wavePreset);
-        if (!hit) continue;
-
-        const { u, v } = objectMmToUV(hit.ox, hit.oy);
-        const c = sample(u, v);
-        const w = hit.w;
-
-        r += c[0]*w; g += c[1]*w; b += c[2]*w;
-        wsum += w;
-      } else {
-        // simpele CA: per channel andere wave
-        const hitR = traceOneSampleToObject(sx, sy, waveForChannel(0));
-        const hitG = traceOneSampleToObject(sx, sy, waveForChannel(1));
-        const hitB = traceOneSampleToObject(sx, sy, waveForChannel(2));
-        if (!hitR || !hitG || !hitB) continue;
-
-        const uvR = objectMmToUV(hitR.ox, hitR.oy);
-        const uvG = objectMmToUV(hitG.ox, hitG.oy);
-        const uvB = objectMmToUV(hitB.ox, hitB.oy);
-
-        const cR = sample(uvR.u, uvR.v);
-        const cG = sample(uvG.u, uvG.v);
-        const cB = sample(uvB.u, uvB.v);
-
-        const w = (hitR.w + hitG.w + hitB.w)/3;
-
-        r += cR[0]*w;
-        g += cG[1]*w;
-        b += cB[2]*w;
-        wsum += w;
-      }
-    }
-
-    if (wsum <= 1e-9){
-      outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
-    } else {
-      outD[idx]   = clamp(r/wsum, 0, 255);
-      outD[idx+1] = clamp(g/wsum, 0, 255);
-      outD[idx+2] = clamp(b/wsum, 0, 255);
-      outD[idx+3] = 255;
-    }
-  }
-}
-
-    // draw partial
     wctx.putImageData(out, 0, 0);
     preview.worldReady = true;
     drawPreviewViewport();
