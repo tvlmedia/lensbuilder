@@ -1347,112 +1347,112 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
     ctx.restore();
   }
 
-  function drawRulerFrom(world, originX, xMin, yWorld = null, label = "", yOffsetMm = 0) {
-    if (!ctx) return;
+ function drawRulerFrom(world, originX, xMin, yWorld = null, label = "", yOffsetMm = 0) {
+  if (!ctx) return;
 
-    let maxAp = 0;
-    if (lens?.surfaces?.length) {
-      for (const s of lens.surfaces) maxAp = Math.max(maxAp, Math.abs(Number(s.ap || 0)));
-    }
+  let maxAp = 0;
+  if (lens?.surfaces?.length) {
+    for (const s of lens.surfaces) maxAp = Math.max(maxAp, Math.abs(Number(s.ap || 0)));
+  }
 
-    const yBase = (yWorld != null) ? yWorld : (maxAp + 18);
-    const y = yBase + yOffsetMm;
+  const yBase = (yWorld != null) ? yWorld : (maxAp + 18);
+  const y = yBase + yOffsetMm;
 
-    const P = (x, yy) => worldToScreen({ x, y: yy }, world);
+  const P = (x, yy) => worldToScreen({ x, y: yy }, world);
 
-    ctx.save();
-    ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "rgba(255,255,255,.18)";
-ctx.fillStyle = "rgba(255,255,255,.55)";
-     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-    ctx.font = `11px ${mono}`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
+  const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+  const fontMajor = 13;
+  const fontMinor = 12;
 
-    const a = P(xMin, y);
-    const b = P(originX, y);
+  ctx.save();
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = "rgba(255,255,255,.30)";
+  ctx.fillStyle = "rgba(255,255,255,.92)";
+  ctx.font = `${fontMinor}px ${mono}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  // base line
+  const a = P(xMin, y);
+  const b = P(originX, y);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  // tick density based on zoom
+  const pxPerMm = world.s;
+  const stepMm =
+    pxPerMm < 0.8 ? 50 :
+    pxPerMm < 1.6 ? 20 :
+    pxPerMm < 3.0 ? 10 :
+    5;
+
+  const majorMm = 50;
+  const midMm = 20;
+
+  for (let x = originX; x >= xMin - 1e-6; x -= stepMm) {
+    const distMm = originX - x;
+    const isMajor = (Math.round(distMm) % majorMm) === 0;
+    const isMid = !isMajor && (Math.round(distMm) % midMm) === 0;
+
+    const tLen = isMajor ? 12 : isMid ? 8 : 5;
+
+    const p = P(x, y);
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x, p.y + tLen);
     ctx.stroke();
 
-    for (let x = originX; x >= xMin - 1e-6; x -= 10) {
-      const distMm = originX - x;
-      const major = (Math.round(distMm) % 50) === 0;
-      const tLen = major ? 6 : 3;
-
-      const p = P(x, y);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x, p.y + tLen);
-      ctx.stroke();
-
+    const shouldLabel = isMajor || (isMid && pxPerMm >= 1.6);
+    if (shouldLabel) {
       const cm = Math.round(distMm / 10);
+      const txt = `${cm}cm`;
+
       ctx.save();
-      ctx.fillStyle = major ? "rgba(0,0,0,.55)" : "rgba(0,0,0,.30)";
-      ctx.font = major ? `11px ${mono}` : `10px ${mono}`;
-      ctx.fillText(`${cm}cm`, p.x, p.y + tLen + 2);
+      ctx.font = `${isMajor ? fontMajor : fontMinor}px ${mono}`;
+      ctx.shadowColor = "rgba(0,0,0,.75)";
+      ctx.shadowBlur = 6;
+
+      const padX = 6, padY = 3;
+      const w = ctx.measureText(txt).width + padX * 2;
+      const h = (isMajor ? fontMajor : fontMinor) + padY * 2;
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(0,0,0,.78)";
+      ctx.fillRect(p.x - w / 2, p.y + tLen + 3, w, h);
+
+      ctx.fillStyle = "rgba(255,255,255,.95)";
+      ctx.shadowColor = "rgba(0,0,0,.75)";
+      ctx.shadowBlur = 6;
+      ctx.fillText(txt, p.x, p.y + tLen + 5);
       ctx.restore();
     }
-
-    if (label) {
-      const p0 = P(originX, y);
-      ctx.save();
-      ctx.fillStyle = "rgba(0,0,0,.65)";
-      ctx.fillText(`${label} 0`, p0.x, p0.y + 10);
-      ctx.restore();
-    }
-
-    ctx.restore();
   }
 
-  function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
-    if (!ctx) return;
-
-    let maxAp = 0;
-    if (lens?.surfaces?.length) {
-      for (const s of lens.surfaces) maxAp = Math.max(maxAp, Math.abs(Number(s.ap || 0)));
-    }
-    const y = (yWorld != null) ? yWorld : (maxAp + 10);
-
-    const P = (x, yy) => worldToScreen({ x, y: yy }, world);
-
+  if (label) {
+    const p0 = P(originX, y);
+    const txt = `${label} 0`;
     ctx.save();
-    ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "rgba(255,255,255,.18)";
-ctx.fillStyle = "rgba(255,255,255,.55)";
-     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-    ctx.font = `11px ${mono}`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-
-    const a = P(xMin, y);
-    const b = P(x0, y);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-
-    for (let x = x0; x >= xMin - 1e-6; x -= 10) {
-      const major = (Math.round(Math.abs(x)) % 50) === 0;
-      const tLen = major ? 6 : 3;
-
-      const p = P(x, y);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x, p.y + tLen);
-      ctx.stroke();
-
-      const cm = Math.round(Math.abs(x) / 10);
-      ctx.save();
-      ctx.fillStyle = major ? "rgba(0,0,0,.55)" : "rgba(0,0,0,.30)";
-      ctx.font = major ? `11px ${mono}` : `10px ${mono}`;
-      ctx.fillText(`${cm}cm`, p.x, p.y + tLen + 2);
-      ctx.restore();
-    }
-
+    ctx.font = `${fontMajor}px ${mono}`;
+    ctx.fillStyle = "rgba(0,0,0,.78)";
+    const padX = 7, padY = 4;
+    const w = ctx.measureText(txt).width + padX * 2;
+    const h = fontMajor + padY * 2;
+    ctx.fillRect(p0.x - w / 2, p0.y + 14, w, h);
+    ctx.fillStyle = "rgba(255,255,255,.95)";
+    ctx.shadowColor = "rgba(0,0,0,.75)";
+    ctx.shadowBlur = 6;
+    ctx.fillText(txt, p0.x, p0.y + 18);
     ctx.restore();
   }
+
+  ctx.restore();
+}
+
+function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
+  drawRulerFrom(world, x0, xMin, yWorld, "", 0);
+}
 
   function drawTitleOverlay(partsOrText) {
     if (!ctx || !canvas) return;
@@ -2809,22 +2809,24 @@ async function loadDefaultLensFromUrl(url) {
   }
 }
   // -------------------- init --------------------
-function init() {
+// -------------------- init --------------------
+async function init() {
   populateSensorPresetsSelect();
   applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
 
+  // load default lens json (your uploaded file)
   await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
 
-bindViewControls();
-bindPreviewViewControls();
-bindControlRerenders();
+  bindViewControls();
+  bindPreviewViewControls();
+  bindControlRerenders();
 
-// auto-load default chart
-loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
+  // auto-load default chart
+  loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
 
-renderAll();
-drawPreviewViewport();drawPreviewViewport(); // blank state draw
+  renderAll();
+  drawPreviewViewport(); // blank/initial draw
 }
 
-  init();
+init();
 })();
