@@ -52,13 +52,15 @@ function resizeCanvasToCSS() {
   const cssW = Number.isFinite(r.width) ? r.width : 0;
   const cssH = Number.isFinite(r.height) ? r.height : 0;
 
-  // guard: fullscreen/layout transitions can briefly report 0x0
-  if (cssW < 10 || cssH < 10) {
-    if (_lastCanvasCSS.w > 0 && _lastCanvasCSS.h > 0) {
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    return;
-  }
+// guard: fullscreen/layout transitions can briefly report 0x0
+if (cssW < 10 || cssH < 10) {
+  // retry next frame until layout is stable
+  requestAnimationFrame(() => {
+    resizePreviewCanvasToCSS();
+    if (preview.worldReady) drawPreviewViewport();
+  });
+  return;
+}
 
   _lastCanvasCSS.w = cssW;
   _lastCanvasCSS.h = cssH;
@@ -1114,25 +1116,24 @@ function resizePreviewCanvasToCSS() {
   const cssW = Number.isFinite(r.width) ? r.width : 0;
   const cssH = Number.isFinite(r.height) ? r.height : 0;
 
-  // guard: fullscreen/layout transitions can briefly report 0x0
+  // ✅ idiotproof guard: layout can be 0×0 for 1 frame -> retry next frame
   if (cssW < 10 || cssH < 10) {
-    if (_lastPrevCSS.w > 0 && _lastPrevCSS.h > 0) {
-      pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
+    requestAnimationFrame(() => {
+      resizePreviewCanvasToCSS();
+      if (preview.worldReady) drawPreviewViewport();
+    });
     return;
   }
 
   _lastPrevCSS.w = cssW;
   _lastPrevCSS.h = cssH;
 
-  // store CSS size for drawPreviewViewport() convenience
   previewCanvasEl._cssW = cssW;
   previewCanvasEl._cssH = cssH;
 
   const pxW = Math.max(2, Math.floor(cssW * dpr));
   const pxH = Math.max(2, Math.floor(cssH * dpr));
 
-  // Only resize if changed (setting width/height resets context)
   if (previewCanvasEl.width !== pxW || previewCanvasEl.height !== pxH) {
     previewCanvasEl.width = pxW;
     previewCanvasEl.height = pxH;
@@ -2236,6 +2237,7 @@ function drawSensor(world, sensorX, halfH) {
 
   // -------------------- preview rendering (split-view) --------------------
  function renderPreview() {
+      try {
   if (!pctx || !previewCanvasEl) return;
 
   const lensShift = Number(ui.lensFocus?.value || 0);
@@ -2496,8 +2498,12 @@ wctx.putImageData(out, 0, 0);
 preview.worldReady = true;
 drawPreviewViewport();
 
-      
-  }
+} catch (e) {
+  console.error("renderPreview crashed:", e);
+  preview.worldReady = false;
+  if (ui.footerWarn) ui.footerWarn.textContent = "Preview crash: " + (e?.message || e);
+}
+}
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
 function scaleToTargetFocal() {
@@ -2826,22 +2832,25 @@ function setPreviewImage(im) {
 
 async function loadPreviewFromUrl(url) {
   try {
-    // haal 'm op als blob (CORS), dan wordt het objectURL same-origin
     const res = await fetch(
-  url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(),
-  { cache: "no-store", mode: "cors" }
-);
+      url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(),
+      { cache: "no-store", mode: "cors" }
+    );
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
     const blob = await res.blob();
     const objUrl = URL.createObjectURL(blob);
 
     const im = new Image();
     im.onload = () => {
-  setPreviewImage(im);
-  URL.revokeObjectURL(objUrl);
+      setPreviewImage(im);
+      URL.revokeObjectURL(objUrl);
 
-  // ✅ force one render immediately after the chart is ready
-  renderPreview();
-};
+      // ✅ force render immediately once chart is ready
+      renderPreview();
+      drawPreviewViewport();
+    };
     im.onerror = () => {
       URL.revokeObjectURL(objUrl);
       if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${url}`;
@@ -2850,7 +2859,8 @@ async function loadPreviewFromUrl(url) {
     im.src = objUrl;
   } catch (e) {
     console.warn("Default preview failed to load:", url, e);
-    if (ui.footerWarn) ui.footerWarn.textContent = `Default preview fetch failed: ${url} (${e.message})`;
+    if (ui.footerWarn) ui.footerWarn.textContent =
+      `Default preview fetch failed: ${url} (${e.message})`;
   }
 }
 
