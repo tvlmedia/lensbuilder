@@ -2803,47 +2803,50 @@ if (ui.prevImg) {
   });
 }
 
-  // -------------------- file load --------------------
-  on("#fileLoad", "change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const txt = await file.text();
-      const obj = JSON.parse(txt);
-      if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
+ // -------------------- file load --------------------
+on("#fileLoad", "change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try {
+    const txt = await file.text();
+    const obj = JSON.parse(txt);
+    if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
 
-      if (obj.glass_note && typeof obj.glass_note === "object") {
-        for (const [k, v] of Object.entries(obj.glass_note)) {
-          const nd = Number(v?.nd);
-          if (Number.isFinite(nd)) {
-            GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
-            GLASS_DB[k].nd = nd;
-            if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
-          }
+    // allow lens json to extend glass db
+    if (obj.glass_note && typeof obj.glass_note === "object") {
+      for (const [k, v] of Object.entries(obj.glass_note)) {
+        const nd = Number(v?.nd);
+        if (Number.isFinite(nd)) {
+          GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
+          GLASS_DB[k].nd = nd;
+          if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
         }
       }
-
-      loadLens(obj);
-    } catch (err) {
-      if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err.message}`;
-    } finally {
-      e.target.value = "";
     }
-  });
+
+    loadLens(obj);
+    scheduleRenderAll();
+    scheduleRenderPreview();
+  } catch (err) {
+    if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err.message}`;
+  } finally {
+    e.target.value = "";
+  }
+});
 
 // -------------------- controls -> rerender --------------------
-["fieldAngle", "rayCount", "wavePreset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"]
-  .forEach((id) => {
+["fieldAngle", "rayCount", "wavePreset", "lensFocus", "focusMode", "renderScale", "sensorW", "sensorH"].forEach(
+  (id) => {
     on("#" + id, "input", scheduleRenderAll);
     on("#" + id, "change", scheduleRenderAll);
-  });
+  }
+);
 
 // preview-affecting controls (only if img loaded in scheduler)
-["lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"]
-  .forEach((id) => {
-    on("#" + id, "input", scheduleRenderPreview);
-    on("#" + id, "change", scheduleRenderPreview);
-  });
+["lensFocus", "focusMode", "wavePreset", "sensorW", "sensorH"].forEach((id) => {
+  on("#" + id, "input", scheduleRenderPreview);
+  on("#" + id, "change", scheduleRenderPreview);
+});
 
 on("#sensorPreset", "change", (e) => {
   applyPreset(e.target.value);
@@ -2851,27 +2854,73 @@ on("#sensorPreset", "change", (e) => {
   scheduleRenderAll();
   scheduleRenderPreview();
 });
-  // -------------------- init --------------------
-function init() {
-  populateSensorPresetsSelect();
-  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
-  loadLens(lens);
-  bindViewControls();
-  bindPreviewViewControls();
-  lockSensor();          // ✅ ADD THIS
-  drawPreviewViewport();
+
+// -------------------- defaults (autoload) --------------------
+// ✅ Zet deze 2 naar jouw echte bestandsnamen in dezelfde folder als index.html
+const DEFAULT_LENS_URL = "./bijna-goed.json";
+// Als je repo-bestand écht heet: "Bijna goed .json" (met spaties), gebruik:
+// const DEFAULT_LENS_URL = "./Bijna%20goed%20.json";
+
+const DEFAULT_CHART_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
+
+async function loadDefaultLensFromUrl(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Default lens fetch failed (${res.status})`);
+  const obj = await res.json();
+  if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Default lens JSON is invalid.");
+
+  // allow default json to extend glass db too
+  if (obj.glass_note && typeof obj.glass_note === "object") {
+    for (const [k, v] of Object.entries(obj.glass_note)) {
+      const nd = Number(v?.nd);
+      if (Number.isFinite(nd)) {
+        GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
+        GLASS_DB[k].nd = nd;
+        if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
+      }
+    }
+  }
+
+  loadLens(obj);
 }
 
-  function hideRaysChip() {
+function loadPreviewImageFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+
+    im.onload = () => {
+      preview.img = im;
+
+      preview.imgCanvas.width = im.naturalWidth;
+      preview.imgCanvas.height = im.naturalHeight;
+
+      preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+      preview.imgCtx.drawImage(im, 0, 0);
+
+      preview.imgData = preview.imgCtx
+        .getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height)
+        .data;
+
+      preview.ready = true;
+      preview.worldReady = false; // reset cache so preview reprojects
+      scheduleRenderPreview();
+      resolve();
+    };
+
+    im.onerror = () => reject(new Error("Default chart image failed to load."));
+    im.src = url;
+  });
+}
+
+// -------------------- UI tweak: hide "Rays" chip --------------------
+function hideRaysChip() {
   const nodes = Array.from(document.querySelectorAll("button, span, div, label, a"));
   for (const el of nodes) {
     const t = (el.textContent || "").trim();
     if (!t) continue;
 
-    // ✅ match "Rays" and "Rays 50mm ..." etc
     if (/^rays\b/i.test(t)) {
       const r = el.getBoundingClientRect();
-      // avoid nuking big panels
       if (r.width > 10 && r.width < 420 && r.height > 10 && r.height < 90) {
         el.style.display = "none";
         return true;
@@ -2881,22 +2930,55 @@ function init() {
   return false;
 }
 
-// try a few times (some UI mounts late)
 hideRaysChip();
 let _tries = 0;
 const _iv = setInterval(() => {
   _tries++;
   if (hideRaysChip() || _tries > 30) clearInterval(_iv);
 }, 200);
-   
-   function lockSensor() {
+
+// -------------------- lock sensor (PL camera) --------------------
+function lockSensor() {
   if (ui.sensorOffset) {
     ui.sensorOffset.value = "0";
     ui.sensorOffset.disabled = true;
     ui.sensorOffset.title = "Sensor is fixed (PL camera).";
   }
-  // Force focus mode to lens
   if (ui.focusMode) ui.focusMode.value = "lens";
 }
-  init();
-})();
+
+// -------------------- init --------------------
+async function init() {
+  populateSensorPresetsSelect();
+  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
+
+  // binds first so errors can show & controls exist
+  bindViewControls();
+  bindPreviewViewControls();
+
+  lockSensor();
+  drawPreviewViewport();
+
+  // ✅ autoload default lens instead of whatever 'lens' starts as
+  try {
+    await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
+  } catch (e) {
+    if (ui.footerWarn) ui.footerWarn.textContent = `Default lens load failed: ${e.message}`;
+    // fallback to whatever global `lens` currently is
+    loadLens(lens);
+  }
+
+  // ✅ autoload chart so preview is always on
+  try {
+    await loadPreviewImageFromUrl(DEFAULT_CHART_URL);
+  } catch (e) {
+    if (ui.footerWarn) ui.footerWarn.textContent = `Default chart load failed: ${e.message}`;
+  }
+
+  scheduleRenderAll();
+  scheduleRenderPreview();
+}
+
+init().catch((e) => {
+  if (ui.footerWarn) ui.footerWarn.textContent = `Init failed: ${e.message}`;
+});
