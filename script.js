@@ -161,7 +161,7 @@
   const OV = 1.6; // overscan factor for preview
 
 // -------------------- default preview chart (GitHub) --------------------
-const DEFAULT_PREVIEW_URL = "./assets/lenschart.png"; // <-- pas bestandsnaam/pad aan
+const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
    
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
