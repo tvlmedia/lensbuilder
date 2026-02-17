@@ -149,7 +149,7 @@
     if (!ui.sensorPreset) return;
     const keys = Object.keys(SENSOR_PRESETS);
     ui.sensorPreset.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
-    if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa Mini LF (LF)";
+if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "Fuji GFX (MF)";
   }
 
   function getSensorWH() {
@@ -2807,25 +2807,26 @@ async function loadDefaultLensFromUrl(url) {
     return false;
   }
 }
-  // -------------------- init --------------------
-// -------------------- init --------------------
-async function init() {
+  async function init() {
   populateSensorPresetsSelect();
-  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
+  if (ui.sensorPreset) ui.sensorPreset.value = "Fuji GFX (MF)";
+  applyPreset("Fuji GFX (MF)");
 
-  // load default lens json (your uploaded file)
   await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
 
   bindViewControls();
   bindPreviewViewControls();
   bindControlRerenders();
 
-  // auto-load default chart
+  // force preview res default
+  if (ui.prevRes) {
+    ui.prevRes.value = "1920";
+    ui.prevRes.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
 
   renderAll();
-  drawPreviewViewport(); // blank/initial draw
+  drawPreviewViewport();
 }
-
-init();
 })();
