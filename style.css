@@ -578,3 +578,61 @@ canvas{
   .topbar{ height:auto; min-height:56px; padding:10px 12px; }
   .toolbar{ gap:8px; }
 }
+/* ===========================
+   HARD LAYOUT LOCK (FIXES “kut doen”)
+   =========================== */
+
+/* 1) force exact viewport height (desktop + modern browsers) */
+html, body { height: 100%; }
+body{
+  height: 100vh;        /* fallback */
+  min-height: 0 !important;
+}
+@supports (height: 100dvh){
+  body{ height: 100dvh; }
+}
+
+/* 2) topbar mag NOOIT mee schalen/rekken */
+.topbar{
+  flex: 0 0 auto;
+}
+
+/* 3) main layout vult precies de rest, en knipt overflow weg */
+.layout{
+  flex: 1 1 auto;
+  min-height: 0 !important;
+  overflow: hidden; /* SUPER belangrijk: panels beheren hun eigen scroll */
+  align-content: stretch;
+}
+
+/* 4) grid children moeten kunnen “krimpen” (anders duwt content alles stuk) */
+.layout > .panel{
+  min-height: 0 !important;
+}
+
+/* 5) left panel: alleen .leftScroll scrollt, status blijft altijd zichtbaar */
+.panel.left{
+  min-height: 0 !important;
+}
+.panel.left .leftScroll{
+  flex: 1 1 auto;
+  min-height: 0 !important;
+  overflow: auto;
+  padding-bottom: 12px; /* voorkomt dat laatste controls tegen rand plakken */
+}
+.panel.left .status{
+  flex: 0 0 auto;
+}
+
+/* 6) right panel ook netjes “shrinkable” */
+.panel.right,
+.panel.right .canvasFrame,
+.panel.right .canvasSplit,
+.panel.right .pane{
+  min-height: 0 !important;
+}
+
+/* 7) voorkom dat sticky/blur rare repaint issues geven in sommige builds */
+.topbar{
+  will-change: transform;
+}
