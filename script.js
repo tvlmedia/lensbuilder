@@ -1386,55 +1386,52 @@ ctx.fillStyle = "rgba(255,255,255,.55)";
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
 
-  // tick density based on zoom
-  const pxPerMm = world.s;
-  const stepMm =
-    pxPerMm < 0.8 ? 50 :
-    pxPerMm < 1.6 ? 20 :
-    pxPerMm < 3.0 ? 10 :
-    5;
+ // ---- FORCE 1cm ticks (10mm) ----
+const pxPerMm = world.s;
 
-  const majorMm = 50;
-  const midMm = 20;
+const stepMm  = 10; // elke 1cm
+const majorMm = 10; // major tick elke 1cm (zelfde als step)
+const labelEvery = (pxPerMm < 1.2) ? 50 : 10; // label elke 5cm bij ver uitzoomen, anders elke 1cm
 
-  for (let x = originX; x >= xMin - 1e-6; x -= stepMm) {
-    const distMm = originX - x;
-    const isMajor = (Math.round(distMm) % majorMm) === 0;
-    const isMid = !isMajor && (Math.round(distMm) % midMm) === 0;
+for (let x = originX; x >= xMin - 1e-6; x -= stepMm) {
+  const distMm = originX - x;
 
-    const tLen = isMajor ? 12 : isMid ? 8 : 5;
+  // altijd 1cm ticks
+  const isMajor = true;
+  const tLen = 12;
 
-    const p = P(x, y);
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
-    ctx.lineTo(p.x, p.y + tLen);
-    ctx.stroke();
+  const p = P(x, y);
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y);
+  ctx.lineTo(p.x, p.y + tLen);
+  ctx.stroke();
 
-    const shouldLabel = isMajor || (isMid && pxPerMm >= 1.6);
-    if (shouldLabel) {
-      const cm = Math.round(distMm / 10);
-      const txt = `${cm}cm`;
+  // labels: 1cm of 5cm afhankelijk van zoom
+  const shouldLabel = (Math.round(distMm) % labelEvery) === 0;
+  if (shouldLabel) {
+    const cm = Math.round(distMm / 10);
+    const txt = `${cm}cm`;
 
-      ctx.save();
-      ctx.font = `${isMajor ? fontMajor : fontMinor}px ${mono}`;
-      ctx.shadowColor = "rgba(0,0,0,.75)";
-      ctx.shadowBlur = 6;
+    ctx.save();
+    ctx.font = `${fontMajor}px ${mono}`;
+    ctx.shadowColor = "rgba(0,0,0,.75)";
+    ctx.shadowBlur = 6;
 
-      const padX = 6, padY = 3;
-      const w = ctx.measureText(txt).width + padX * 2;
-      const h = (isMajor ? fontMajor : fontMinor) + padY * 2;
+    const padX = 6, padY = 3;
+    const w = ctx.measureText(txt).width + padX * 2;
+    const h = fontMajor + padY * 2;
 
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = "rgba(0,0,0,.78)";
-      ctx.fillRect(p.x - w / 2, p.y + tLen + 3, w, h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(0,0,0,.78)";
+    ctx.fillRect(p.x - w / 2, p.y + tLen + 3, w, h);
 
-      ctx.fillStyle = "rgba(255,255,255,.95)";
-      ctx.shadowColor = "rgba(0,0,0,.75)";
-      ctx.shadowBlur = 6;
-      ctx.fillText(txt, p.x, p.y + tLen + 5);
-      ctx.restore();
-    }
+    ctx.fillStyle = "rgba(255,255,255,.95)";
+    ctx.shadowColor = "rgba(0,0,0,.75)";
+    ctx.shadowBlur = 6;
+    ctx.fillText(txt, p.x, p.y + tLen + 5);
+    ctx.restore();
   }
+}
 
   if (label) {
     const p0 = P(originX, y);
