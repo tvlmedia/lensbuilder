@@ -37,6 +37,44 @@
   const previewCanvasEl = $("#previewCanvas");
   const pctx = previewCanvasEl?.getContext("2d");
 
+   // -------------------- CORE VIEW HELPERS (MUST EXIST) --------------------
+
+// cache "last good" sizes so transient 0x0 rects don't nuke the canvas
+let _lastCanvasCSS = { w: 0, h: 0 };
+let _lastPrevCSS   = { w: 0, h: 0 };
+
+function resizeCanvasToCSS() {
+  if (!canvas || !ctx) return;
+
+  const r = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  const cssW = Number.isFinite(r.width) ? r.width : 0;
+  const cssH = Number.isFinite(r.height) ? r.height : 0;
+
+  // guard: fullscreen/layout transitions can briefly report 0x0
+  if (cssW < 10 || cssH < 10) {
+    if (_lastCanvasCSS.w > 0 && _lastCanvasCSS.h > 0) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    return;
+  }
+
+  _lastCanvasCSS.w = cssW;
+  _lastCanvasCSS.h = cssH;
+
+  const pxW = Math.max(2, Math.floor(cssW * dpr));
+  const pxH = Math.max(2, Math.floor(cssH * dpr));
+
+  if (canvas.width !== pxW || canvas.height !== pxH) {
+    canvas.width = pxW;
+    canvas.height = pxH;
+  }
+
+  // draw in CSS units
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
   // -------------------- preview state --------------------
   const preview = {
     img: null,
@@ -1032,71 +1070,9 @@ ctx.globalAlpha = 0.05;
   ctx.restore();
 }
 
-  function resizeCanvasToCSS() {
-    if (!canvas || !ctx) return;
-    const r = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(2, Math.floor(r.width * dpr));
-    canvas.height = Math.max(2, Math.floor(r.height * dpr));
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
 
-  function resizePreviewCanvasToCSS() {
-  if (!previewCanvasEl || !pctx) return;
-  const r = previewCanvasEl.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
 
-  previewCanvasEl.width  = Math.max(2, Math.floor(r.width  * dpr));
-  previewCanvasEl.height = Math.max(2, Math.floor(r.height * dpr));
-
-  // teken in CSS units
-  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  previewCanvasEl._cssW = Math.max(2, r.width);
-  previewCanvasEl._cssH = Math.max(2, r.height);
-}
-
-  function worldToScreen(p, world) {
-    const { cx, cy, s } = world;
-    return { x: cx + p.x * s, y: cy - p.y * s };
-  }
-
-  function makeWorldTransform() {
-    if (!canvas) return { cx: 0, cy: 0, s: 1 };
-    const r = canvas.getBoundingClientRect();
-    const cx = r.width / 2 + view.panX;
-    const cy = r.height / 2 + view.panY;
-    const base = Number(ui.renderScale?.value || 1.25) * 3.2;
-    const s = base * view.zoom;
-    return { cx, cy, s };
-  }
-
-  function drawAxes(world) {
-    if (!ctx) return;
-    ctx.save();
-    ctx.lineWidth = 1;
-   ctx.strokeStyle = "rgba(255,255,255,.10)";
-    ctx.beginPath();
-    const p1 = worldToScreen({ x: -240, y: 0 }, world);
-    const p2 = worldToScreen({ x: 800, y: 0 }, world);
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function buildSurfacePolyline(s, ap, steps = 90) {
-    const pts = [];
-    for (let i = 0; i <= steps; i++) {
-      const y = -ap + (i / steps) * (2 * ap);
-      const x = surfaceXatY(s, y);
-      if (x == null) continue;
-      pts.push({ x, y });
-    }
-    return pts;
-  }
-
- function drawElementBody(world, sFront, sBack, apRegion) {
+function drawElementBody(world, sFront, sBack, apRegion) {
   if (!ctx) return;
   const front = buildSurfacePolyline(sFront, apRegion, 90);
   const back = buildSurfacePolyline(sBack, apRegion, 90);
@@ -1108,8 +1084,8 @@ ctx.globalAlpha = 0.05;
 
   // fill
   ctx.globalAlpha = 1.0;
-ctx.fillStyle = "rgba(140,200,255,0.16)";
-    ctx.beginPath();
+  ctx.fillStyle = "rgba(140,200,255,0.16)";
+  ctx.beginPath();
   let p0 = worldToScreen(poly[0], world);
   ctx.moveTo(p0.x, p0.y);
   for (let i = 1; i < poly.length; i++) {
@@ -1129,174 +1105,42 @@ ctx.fillStyle = "rgba(140,200,255,0.16)";
   ctx.restore();
 }
 
-  function drawElementsClosed(world, surfaces) {
-    let minNonOverlap = Infinity;
+function resizePreviewCanvasToCSS() {
+  if (!previewCanvasEl || !pctx) return;
 
-    for (let i = 0; i < surfaces.length - 1; i++) {
-      const sA = surfaces[i];
-      const sB = surfaces[i + 1];
+  const r = previewCanvasEl.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
 
-      const typeA = String(sA.type || "").toUpperCase();
-      const typeB = String(sB.type || "").toUpperCase();
+  const cssW = Number.isFinite(r.width) ? r.width : 0;
+  const cssH = Number.isFinite(r.height) ? r.height : 0;
 
-      if (typeA === "OBJ" || typeB === "OBJ") continue;
-      if (typeA === "IMS" || typeB === "IMS") continue;
-
-      const medium = String(sA.glass || "AIR").toUpperCase();
-      if (medium === "AIR") continue;
-
-      const apA = Math.max(0, Number(sA.ap || 0));
-      const apB = Math.max(0, Number(sB.ap || 0));
-      const limA = maxApForSurface(sA);
-      const limB = maxApForSurface(sB);
-
-      let apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
-
-      if (Math.abs(sA.R) > 1e-9 && Math.abs(sB.R) > 1e-9) {
-        const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
-        minNonOverlap = Math.min(minNonOverlap, nonOverlap);
-        apRegion = Math.min(apRegion, nonOverlap);
-      }
-
-      drawElementBody(world, sA, sB, apRegion);
+  // guard: fullscreen/layout transitions can briefly report 0x0
+  if (cssW < 10 || cssH < 10) {
+    if (_lastPrevCSS.w > 0 && _lastPrevCSS.h > 0) {
+      pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-
-    if (Number.isFinite(minNonOverlap) && minNonOverlap < 0.5 && ui.footerWarn) {
-      ui.footerWarn.textContent =
-        "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
-    }
+    return;
   }
 
-  function drawSurface(world, s) {
-    if (!ctx) return;
-    ctx.save();
-    ctx.lineWidth = 1.25;
-ctx.strokeStyle = "rgba(255,255,255,.34)";
-     
-    const vx = s.vx;
-    const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
+  _lastPrevCSS.w = cssW;
+  _lastPrevCSS.h = cssH;
 
-    if (Math.abs(s.R) < 1e-9) {
-      const a = worldToScreen({ x: vx, y: -ap }, world);
-      const b = worldToScreen({ x: vx, y: ap }, world);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-      ctx.restore();
-      return;
-    }
+  // store CSS size for drawPreviewViewport() convenience
+  previewCanvasEl._cssW = cssW;
+  previewCanvasEl._cssH = cssH;
 
-    const R = s.R;
-    const cx = vx + R;
-    const rad = Math.abs(R);
-    const sign = Math.sign(R) || 1;
+  const pxW = Math.max(2, Math.floor(cssW * dpr));
+  const pxH = Math.max(2, Math.floor(cssH * dpr));
 
-    const steps = 90;
-    ctx.beginPath();
-    let moved = false;
-    for (let i = 0; i <= steps; i++) {
-      const y = -ap + (i / steps) * (2 * ap);
-      const inside = rad * rad - y * y;
-      if (inside < 0) continue;
-      const x = cx - sign * Math.sqrt(inside);
-      const sp = worldToScreen({ x, y }, world);
-      if (!moved) { ctx.moveTo(sp.x, sp.y); moved = true; }
-      else ctx.lineTo(sp.x, sp.y);
-    }
-    ctx.stroke();
-    ctx.restore();
+  // Only resize if changed (setting width/height resets context)
+  if (previewCanvasEl.width !== pxW || previewCanvasEl.height !== pxH) {
+    previewCanvasEl.width = pxW;
+    previewCanvasEl.height = pxH;
   }
 
-  function drawLens(world, surfaces) {
-    drawElementsClosed(world, surfaces);
-    for (const s of surfaces) drawSurface(world, s);
-  }
-
-  function drawRays(world, rayTraces, sensorX) {
-    if (!ctx) return;
-    ctx.save();
-   ctx.lineWidth = 1.6;
-ctx.strokeStyle = "rgba(70,140,255,0.85)";
-ctx.shadowColor = "rgba(70,140,255,0.45)";
-ctx.shadowBlur = 12;
-     
-
-    for (const tr of rayTraces) {
-      if (!tr.pts || tr.pts.length < 2) continue;
-     ctx.globalAlpha = tr.vignetted ? 0.10 : 1.0;
-
-      ctx.beginPath();
-      const p0 = worldToScreen(tr.pts[0], world);
-      ctx.moveTo(p0.x, p0.y);
-      for (let i = 1; i < tr.pts.length; i++) {
-        const p = worldToScreen(tr.pts[i], world);
-        ctx.lineTo(p.x, p.y);
-      }
-
-      const last = tr.endRay;
-      if (last && Number.isFinite(sensorX) && last.d && Math.abs(last.d.x) > 1e-9) {
-        const t = (sensorX - last.p.x) / last.d.x;
-        if (t > 0) {
-          const hit = add(last.p, mul(last.d, t));
-          const ps = worldToScreen(hit, world);
-          ctx.lineTo(ps.x, ps.y);
-        }
-      }
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  function drawStop(world, surfaces) {
-    if (!ctx) return;
-    const idx = findStopSurfaceIndex(surfaces);
-    if (idx < 0) return;
-    const s = surfaces[idx];
-    const ap = Math.max(0, s.ap);
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "#b23b3b";
-    const a = worldToScreen({ x: s.vx, y: -ap }, world);
-    const b = worldToScreen({ x: s.vx, y: ap }, world);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawSensor(world, sensorX, halfH) {
-    if (!ctx) return;
-    ctx.save();
-    ctx.lineWidth = 2;
-ctx.strokeStyle = "rgba(255,255,255,.35)";
-     ctx.setLineDash([6, 6]);
-
-    const a = worldToScreen({ x: sensorX, y: -halfH }, world);
-    const b = worldToScreen({ x: sensorX, y: halfH }, world);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-
-    ctx.setLineDash([3, 6]);
-    ctx.lineWidth = 1.25;
-    const l1 = worldToScreen({ x: sensorX - 2.5, y: halfH }, world);
-    const l2 = worldToScreen({ x: sensorX + 2.5, y: halfH }, world);
-    const l3 = worldToScreen({ x: sensorX - 2.5, y: -halfH }, world);
-    const l4 = worldToScreen({ x: sensorX + 2.5, y: -halfH }, world);
-
-    ctx.beginPath();
-    ctx.moveTo(l1.x, l1.y);
-    ctx.lineTo(l2.x, l2.y);
-    ctx.moveTo(l3.x, l3.y);
-    ctx.lineTo(l4.x, l4.y);
-    ctx.stroke();
-
-    ctx.setLineDash([]);
-    ctx.restore();
-  }
+  // draw in CSS units
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
 
   // -------- PL mount visuals ----------
   const PL_FFD = 52.0;
