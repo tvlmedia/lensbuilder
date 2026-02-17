@@ -38,21 +38,25 @@
   const pctx = previewCanvasEl?.getContext("2d");
 
   // -------------------- preview state --------------------
-  const preview = {
-    img: null,
-    imgCanvas: document.createElement("canvas"),
-    imgCtx: null,
-    ready: false,
+ const preview = {
+  img: null,
+  imgCanvas: document.createElement("canvas"),
+  imgCtx: null,
+  ready: false,
 
-    imgData: null, // cached pixels
+  imgData: null,
 
-    worldCanvas: document.createElement("canvas"),
-    worldCtx: null,
-    worldReady: false,
-    dirtyKey: "",
+  worldCanvas: document.createElement("canvas"),
+  worldCtx: null,
+  worldReady: false,
+  dirtyKey: "",
 
-    view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
-  };
+  // ✅ voeg toe
+  renderToken: 0,
+  isRendering: false,
+
+  view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
+};
   preview.imgCtx = preview.imgCanvas.getContext("2d");
   preview.worldCtx = preview.worldCanvas.getContext("2d");
 
@@ -1694,6 +1698,8 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
   }
 
   let _rafPrev = 0;
+
+   
   function scheduleRenderPreview() {
     if (_rafPrev) return;
     _rafPrev = requestAnimationFrame(() => {
@@ -2568,6 +2574,13 @@ setIMSVxTo(sensorX);
   const out = wctx.createImageData(W, H);
   const outD = out.data;
 
+   const token = ++preview.renderToken;   // ✅ nieuwe render “job id”
+preview.isRendering = true;
+
+   function checkCancel() {
+  if (token !== preview.renderToken) throw new Error("CANCELLED");
+}
+
   const imgAsp = hasImg ? (imgW / imgH) : (16/9);
   const halfObjW = halfObjH * imgAsp;
 
@@ -2872,6 +2885,11 @@ setIMSVxTo(sensorX);
 
   // Preview bindings
   if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
+   on("#btnCancelPreview", "click", () => {
+  preview.renderToken++;      // ✅ maakt alle lopende renders “stale”
+  preview.isRendering = false;
+  toast("Preview render cancelled");
+});
   if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
   if (ui.btnRaysFS) on("#btnRaysFS", "click", () => toggleRaysFullscreen());
 
