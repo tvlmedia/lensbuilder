@@ -594,6 +594,36 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
     for (const s of surfaces) clampSurfaceAp(s);
   }
 
+function buildSurfacesWithBarrelApertures(baseSurfaces, k = 0.92) {
+  // k < 1 maakt de barrel net iets strakker dan de glas-apertures (realistisch)
+  const out = [];
+  for (let i = 0; i < baseSurfaces.length; i++) {
+    const s = baseSurfaces[i];
+    out.push(s);
+
+    const tA = String(s.type || "").toUpperCase();
+    const sN = baseSurfaces[i + 1];
+    if (!sN) continue;
+
+    const tB = String(sN.type || "").toUpperCase();
+    if (tA === "IMS" || tB === "IMS") continue; // geen barrel NA sensor
+    if (tA === "OBJ") continue;                 // geen barrel vóór OBJ
+
+    // géén barrel “in” een glasblok; we plaatsen 'm alleen in AIR segmenten:
+    // medium na surface s = s.glass; als dat AIR is, dan is t-segment lucht.
+    const mediumAfter = String(s.glass || "AIR").toUpperCase();
+    if (mediumAfter !== "AIR") continue;
+
+    const apA = Math.max(0.01, Number(s.ap || 0));
+    const apB = Math.max(0.01, Number(sN.ap || 0));
+    const apBarrel = Math.max(0.01, Math.min(apA, apB) * k);
+
+    // “BAR” plane: R=0 => plane. glass blijft AIR.
+    out.push({ type: "BAR", R: 0.0, t: 0.0, ap: apBarrel, glass: "AIR", stop: false });
+  }
+  return out;
+}
+   
   function surfaceXatY(s, y) {
     const vx = s.vx;
     const R = s.R;
@@ -908,8 +938,8 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
 
     function evalShift(shift) {
       computeVertices(lens.surfaces, shift);
-      const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-      const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+      const rays = buildRays(surfacesTrace, fieldAngle, rayCount);
+const traces = rays.map((r) => traceRayForward(clone(r), surfacesTrace, wavePreset));
       return spotRmsAtSensorX(traces, sensorX);
     }
 
@@ -1546,8 +1576,13 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     if (!canvas || !ctx) return;
     if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-    const lensShift = Number(ui.lensFocus?.value || 0);
-    computeVertices(lens.surfaces, lensShift);
+   const lensShift = Number(ui.lensFocus?.value || 0);
+
+// 1) maak trace-surfaces met barrel apertures
+const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 0.92);
+
+// 2) vertices op trace-surfaces (want we gaan hiermee raytracen)
+computeVertices(surfacesTrace, lensShift);
     clampSelected();
 
     const { w: sensorW, h: sensorH, halfH } = getSensorWH();
@@ -1567,8 +1602,8 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
       ? `LEN≈ ${totalLen.toFixed(1)}mm (front→PL + mount)`
       : `LEN≈ —`;
 
-    const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+    const rays = buildRays(surfacesTrace, fieldAngle, rayCount);
+const traces = rays.map((r) => traceRayForward(clone(r), surfacesTrace, wavePreset));
 
     const vCount = traces.filter((t) => t.vignetted).length;
     const tirCount = traces.filter((t) => t.tir).length;
@@ -2147,9 +2182,14 @@ drawAxes(world);
   // -------------------- preview rendering (split-view) --------------------
   function renderPreview() {
     if (!pctx || !previewCanvasEl) return;
+     
+const lensShift = Number(ui.lensFocus?.value || 0);
 
-    const lensShift = Number(ui.lensFocus?.value || 0);
-    computeVertices(lens.surfaces, lensShift);
+// 1) maak trace-surfaces met barrel apertures
+const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 0.92);
+
+// 2) vertices op trace-surfaces (want we gaan hiermee raytracen)
+computeVertices(surfacesTrace, lensShift);
 
     applySensorToIMS();
     clampAllApertures(lens.surfaces);
