@@ -941,19 +941,18 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
   let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
 
    // High-contrast canvas theme
-function drawBackground(w, h) {
+function drawBackgroundCSS(w, h) {
   if (!ctx) return;
 
-  // deep dark background
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // ctx staat al in dpr-space, dus w/h zijn CSS units -> OK
   ctx.fillStyle = "#05070c";
   ctx.fillRect(0, 0, w, h);
 
-  // subtle grid
   ctx.globalAlpha = 0.08;
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 1;
+
   const step = 80;
   for (let x = 0; x <= w; x += step) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
@@ -975,17 +974,19 @@ function drawBackground(w, h) {
   }
 
   function resizePreviewCanvasToCSS() {
-    if (!previewCanvasEl || !pctx) return;
-    const r = previewCanvasEl.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+  if (!previewCanvasEl || !pctx) return;
+  const r = previewCanvasEl.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
 
-    previewCanvasEl.width = Math.max(2, Math.floor(r.width * dpr));
-    previewCanvasEl.height = Math.max(2, Math.floor(r.height * dpr));
-    pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  previewCanvasEl.width  = Math.max(2, Math.floor(r.width  * dpr));
+  previewCanvasEl.height = Math.max(2, Math.floor(r.height * dpr));
 
-    previewCanvasEl._cssW = r.width;
-    previewCanvasEl._cssH = r.height;
-  }
+  // teken in CSS units
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  previewCanvasEl._cssW = Math.max(2, r.width);
+  previewCanvasEl._cssH = Math.max(2, r.height);
+}
 
   function worldToScreen(p, world) {
     const { cx, cy, s } = world;
@@ -1615,8 +1616,8 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
 
     resizeCanvasToCSS();
 const r = canvas.getBoundingClientRect();
-drawBackground(r.width, r.height);
-
+drawBackgroundCSS(r.width, r.height);
+     
 const world = makeWorldTransform();
 drawAxes(world);
 
@@ -1722,49 +1723,47 @@ drawAxes(world);
     return { x: cx - w * 0.5, y: cy - h * 0.5, w, h };
   }
 
-  function drawPreviewViewport() {
-    if (!previewCanvasEl || !pctx) return;
+ function drawPreviewViewport() {
+  if (!previewCanvasEl || !pctx) return;
 
-    resizePreviewCanvasToCSS();
+  resizePreviewCanvasToCSS();
 
-    const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
-    const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
+  const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
+  const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
 
-    pctx.save();
-    pctx.setTransform(1, 0, 0, 1, 0, 0);
-    pctx.clearRect(0, 0, previewCanvasEl.width, previewCanvasEl.height);
-    pctx.restore();
+  // dpr transform staat al goed; clear in CSS units
+  pctx.clearRect(0, 0, Wc, Hc);
 
-    const hasImg = !!(preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
-    pctx.fillStyle = hasImg ? "#000" : "#fff";
-    pctx.fillRect(0, 0, Wc, Hc);
+  const hasImg = !!(preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
+  pctx.fillStyle = hasImg ? "#000" : "#fff";
+  pctx.fillRect(0, 0, Wc, Hc);
 
-    if (!preview.worldReady) {
-      pctx.fillStyle = "rgba(255,255,255,.65)";
-      pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
-      pctx.fillText("Preview: render first", 18, 24);
-      return;
-    }
-
-    const sr0 = getSensorRectBaseInPane();
-    const sr = applyViewToSensorRect(sr0, preview.view);
-
-    pctx.imageSmoothingEnabled = true;
-    pctx.drawImage(
-      preview.worldCanvas,
-      0, 0, preview.worldCanvas.width, preview.worldCanvas.height,
-      sr.x, sr.y, sr.w, sr.h
-    );
-
-    pctx.save();
-    pctx.strokeStyle = "rgba(255,255,255,.20)";
-    pctx.lineWidth = 1;
-    pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
-
-    pctx.strokeStyle = "rgba(42,110,242,.55)";
-    pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
-    pctx.restore();
+  if (!preview.worldReady) {
+    pctx.fillStyle = "rgba(255,255,255,.65)";
+    pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+    pctx.fillText("Preview: render first", 18, 24);
+    return;
   }
+
+  const sr0 = getSensorRectBaseInPane();
+  const sr = applyViewToSensorRect(sr0, preview.view);
+
+  pctx.imageSmoothingEnabled = true;
+  pctx.drawImage(
+    preview.worldCanvas,
+    0, 0, preview.worldCanvas.width, preview.worldCanvas.height,
+    sr.x, sr.y, sr.w, sr.h
+  );
+
+  pctx.save();
+  pctx.strokeStyle = "rgba(255,255,255,.20)";
+  pctx.lineWidth = 1;
+  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
+
+  pctx.strokeStyle = "rgba(42,110,242,.55)";
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+  pctx.restore();
+}
 
   function bindPreviewViewControls() {
     if (!previewCanvasEl) return;
