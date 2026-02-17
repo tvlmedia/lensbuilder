@@ -1695,21 +1695,25 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
     });
   }
 
+function setIMSVxTo(sensorX){
+  const imsIdx = getIMSIndex();
+  if (imsIdx < 0) return;
+  lens.surfaces[imsIdx].vx = sensorX;
+}
+   
   function renderAll() {
     if (!canvas || !ctx) return;
     if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-    const lensShift = Number(ui.lensFocus?.value || 0);
-    computeVertices(lens.surfaces, lensShift);
-    clampSelected();
+    const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
 
-    const { w: sensorW, h: sensorH, halfH } = getSensorWH();
-    const fieldAngle = Number(ui.fieldAngle?.value || 0);
-    const rayCount = Number(ui.rayCount?.value || 31);
-    const wavePreset = ui.wavePreset?.value || "d";
+const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
+computeVertices(lens.surfaces, lensShift);
 
-    if (ui.sensorOffset) ui.sensorOffset.value = "0";
-    const sensorX = 0.0;
+const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+
+// IMS vlak mee verplaatsen als cam focus actief is
+setIMSVxTo(sensorX);
 
     const plX = -PL_FFD;
 
@@ -1790,15 +1794,11 @@ drawAxes(world);
 
     const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
     const tTxt = T == null ? "—" : "T" + T.toFixed(2);
-    const lensOff = Number(ui.lensFocus?.value || 0);
-
-    const titleParts = [
-      lens.name,
-      lenTxt,
-      `EFL ${eflTxt}`,
-      `T≈ ${tTxt}`,
-      rearTxt,
-      `Focus ${lensOff.toFixed(2)}mm`,
+   const focusTxt = (focusMode === "cam")
+  ? `CamFocus ${sensorX.toFixed(2)}mm`
+  : `LensFocus ${lensShift.toFixed(2)}mm`;
+...
+focusTxt,
     ];
     drawTitleOverlay(titleParts);
   }
@@ -2302,15 +2302,15 @@ function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
 
-  const lensShift = Number(ui.lensFocus?.value || 0);
-  computeVertices(lens.surfaces, lensShift);
+ const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
 
-  applySensorToIMS();
-  clampAllApertures(lens.surfaces);
+const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
+computeVertices(lens.surfaces, lensShift);
 
-  const wavePreset = ui.wavePreset?.value || "d";
-  if (ui.sensorOffset) ui.sensorOffset.value = "0";
-  const sensorX = 0.0;
+const wavePreset = ui.wavePreset?.value || "d";
+const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+
+setIMSVxTo(sensorX);
 
   const { w: sensorW, h: sensorH } = getSensorWH();
 
