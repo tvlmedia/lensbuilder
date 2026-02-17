@@ -2829,4 +2829,6 @@ async function loadDefaultLensFromUrl(url) {
   renderAll();
   drawPreviewViewport();
 }
+
+init();
 })();
