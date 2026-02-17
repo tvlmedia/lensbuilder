@@ -67,11 +67,8 @@ body{
   display:flex;
   align-items:center;
   gap:10px;
-  flex-wrap:nowrap;
+  flex-wrap:wrap;
   justify-content:flex-end;
-  overflow-x:auto;
-  -webkit-overflow-scrolling:touch;
-  scrollbar-width:thin;
 }
 .sep{
   width:1px; height:28px;
@@ -453,6 +450,3 @@ canvas{
   line-height:1;
   padding:10px 12px;
 }
-
-.toolbar::-webkit-scrollbar{height:6px;}
-.toolbar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:999px;}
