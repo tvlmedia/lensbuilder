@@ -2808,39 +2808,30 @@ function setPreviewImage(im) {
   scheduleRenderPreview();
 }
 
-function loadPreviewFromUrl(url) {
-  const im = new Image();
-  im.crossOrigin = "anonymous"; // meestal ok voor GH pages
-  im.onload = () => setPreviewImage(im);
-  im.onerror = () => {
-    console.warn("Default preview failed to load:", url);
-    if (ui.footerWarn) ui.footerWarn.textContent = `Default preview image not found: ${url}`;
-  };
+async function loadPreviewFromUrl(url) {
+  try {
+    // haal 'm op als blob (CORS), dan wordt het objectURL same-origin
+    const res = await fetch(url + (url.includes("?") ? "&" : "?") + "v=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-  // cache-buster handig bij GH pages updates
-  im.src = url + (url.includes("?") ? "&" : "?") + "v=" + Date.now();
-}
-   
-  // Image load (cache pixels once)
-if (ui.prevImg) {
-  ui.prevImg.addEventListener("change", (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
 
-    const url = URL.createObjectURL(f);
     const im = new Image();
-
     im.onload = () => {
       setPreviewImage(im);
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(objUrl);
     };
     im.onerror = () => {
-      URL.revokeObjectURL(url);
-      if (ui.footerWarn) ui.footerWarn.textContent = "Preview image load failed.";
+      URL.revokeObjectURL(objUrl);
+      if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${url}`;
     };
 
-    im.src = url;
-  });
+    im.src = objUrl;
+  } catch (e) {
+    console.warn("Default preview failed to load:", url, e);
+    if (ui.footerWarn) ui.footerWarn.textContent = `Default preview fetch failed: ${url} (${e.message})`;
+  }
 }
 
   // -------------------- file load --------------------
