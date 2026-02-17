@@ -491,3 +491,63 @@ canvas{
   .topbar{ height:auto; min-height:56px; padding:10px 12px; }
   .toolbar{ gap:8px; }
 }
+/* ===========================
+   TOPBAR: alles op 1 lijn
+   - verberg linkse titel/subtitle
+   - toolbar niet meer wrappen
+   - Load JSON in dezelfde rij
+   =========================== */
+
+/* verberg linkse tekst (Meridional Raytracer / subtitle) */
+.brandText{ display:none !important; }
+
+/* laat brand niet onnodig breed zijn */
+.brand{ min-width:auto !important; }
+
+/* toolbar altijd 1 rij, met horizontale scroll als het echt te krap wordt */
+.toolbar{
+  flex-wrap:nowrap !important;
+  overflow-x:auto;
+  overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;
+}
+
+/* optioneel: nettere scrollbar in webkit */
+.toolbar::-webkit-scrollbar{ height:8px; }
+.toolbar::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,.12);
+  border-radius:999px;
+}
+.toolbar::-webkit-scrollbar-track{
+  background:rgba(0,0,0,.12);
+}
+
+/* maak separator wat compacter zodat je meer knoppen kwijt kan */
+.sep{ margin:0 2px; }
+
+/* ===========================
+   STATUS ONDERIN: groter/duidelijker
+   (screenshot 3)
+   =========================== */
+
+.statusLine{
+  font-size:13px !important;
+  color:rgba(255,255,255,.70) !important;
+}
+
+.badges{ gap:12px !important; }
+
+.badge{
+  font-size:13px !important;
+  padding:8px 12px !important;
+}
+
+/* als FOV badge te snel breekt: iets ruimer */
+.badgeWide{ min-width:260px; }
+
+/* tekst die te lang is mag wrappen i.p.v. “wegvallen” */
+.statusLine, .meta, .warn{
+  white-space:normal;
+  word-break:break-word;
+}
