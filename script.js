@@ -1924,44 +1924,46 @@ function drawPreviewViewport() {
     return;
   }
 
-  // sensor kader (binnen de pane)
+  // Base sensor rect (waar het beeld in hoort te staan)
   const sr0 = getSensorRectBaseInPane();
-  const sr  = applyViewToSensorRect(sr0, preview.view);
 
-  // worldCanvas -> pane (met padding), behoud aspect van worldCanvas
-  const pad = 14;
-  const availW = Wc - pad * 2;
-  const availH = Hc - pad * 2;
+  // Draw: worldCanvas mapped into sr0, with pan/zoom around sr0 center
+  const cx = sr0.x + sr0.w * 0.5;
+  const cy = sr0.y + sr0.h * 0.5;
 
-  const srcAsp = preview.worldCanvas.width / preview.worldCanvas.height;
-  let dw = availW;
-  let dh = dw / srcAsp;
-  if (dh > availH) {
-    dh = availH;
-    dw = dh * srcAsp;
-  }
-  const dx = (Wc - dw) * 0.5;
-  const dy = (Hc - dh) * 0.5;
-
+  pctx.save();
   pctx.imageSmoothingEnabled = true;
   pctx.imageSmoothingQuality = "high";
 
+  // clip naar sensor kader zodat je niet buiten het kader tekent
+  pctx.beginPath();
+  pctx.rect(sr0.x, sr0.y, sr0.w, sr0.h);
+  pctx.clip();
+
+  // transform: center -> pan -> zoom -> draw centered
+  pctx.translate(cx + preview.view.panX, cy + preview.view.panY);
+  pctx.scale(preview.view.zoom, preview.view.zoom);
+
+  // draw worldCanvas fitted in sr0 (maar nu rond center, dus makkelijk)
+  // let op: in transformed space is sr0.w/h de "unzoomed" size
   pctx.drawImage(
     preview.worldCanvas,
-    0, 0, preview.worldCanvas.width, preview.worldCanvas.height,
-    dx, dy, dw, dh
- 
-);
+    -sr0.w * 0.5, -sr0.h * 0.5,
+    sr0.w, sr0.h
+  );
 
- pctx.save();
+  pctx.restore();
+
+  // overlays
+  pctx.save();
   pctx.lineWidth = 1;
-
   pctx.strokeStyle = "rgba(255,255,255,.20)";
   pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
 
+  // viewport rect (optioneel, maar nu klopt het tenminste)
+  const sr = applyViewToSensorRect(sr0, preview.view);
   pctx.strokeStyle = "rgba(42,110,242,.55)";
   pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
-
   pctx.restore();
 }
 
@@ -2372,11 +2374,10 @@ function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
 
-  const doDOF = !!ui.optDOF?.checked;
-  const doCA  = !!ui.optCA?.checked;
-
-  // quality knobs
-  const q = String(ui.renderQuality?.value || "normal");
+ const doDOF = !!document.getElementById("optDOF")?.checked;
+const doCA  = !!document.getElementById("optCA")?.checked;
+const q     = String(document.getElementById("renderQuality")?.value || "normal");
+   
   const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;   // samples per pixel (only for DOF path)
   const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));      // LUT throughput sampling (fast path)
 
