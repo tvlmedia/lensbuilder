@@ -2484,7 +2484,7 @@ const PREVIEW_SPP = Math.max(2, Math.min(8, Math.floor(targetRays / Math.max(1, 
 
   function objectMmToUV(xmm, ymm) {
     const u = 0.5 + (xmm / (2 * halfObjW));
-    const v = 0.5 + (ymm / (2 * halfObjH));
+const v = 0.5 - (ymm / (2 * halfObjH)); // ✅ flip V (wereld Y omhoog → image V omlaag)
     return { u, v };
   }
 
