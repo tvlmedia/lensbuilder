@@ -466,7 +466,12 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
     renderAll();
     scheduleRenderPreview();
   }
-
+function getSurfacesForMetrics(lensShift) {
+  applySensorToIMS();
+  const st = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
+  computeVertices(st, lensShift);
+  return st.filter(s => String(s.type || "").toUpperCase() !== "BAR");
+}
   // -------------------- math helpers --------------------
   function normalize(v) {
     const m = Math.hypot(v.x, v.y);
@@ -2466,63 +2471,72 @@ drawPreviewViewport();
   }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
-  function scaleToTargetFocal() {
-    const wavePreset = ui.wavePreset?.value || "d";
-    const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
-    if (!Number.isFinite(cur) || cur <= 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Scale→FL: current EFL not solvable (try a valid stop + lens).";
-      return;
-    }
+function scaleToTargetFocal() {
+  const wavePreset = ui.wavePreset?.value || "d";
+  const lensShift = Number(ui.lensFocus?.value || 0);
 
-    const target = num(prompt("Target focal length (mm)?", String(Math.round(cur))), cur);
-    if (!Number.isFinite(target) || target <= 0) return;
+  const surf = getSurfacesForMetrics(lensShift);
+  const cur = estimateEflBflParaxial(surf, wavePreset).efl;
 
-    const k = target / cur;
-
-    for (let i = 0; i < lens.surfaces.length; i++) {
-      const s = lens.surfaces[i];
-      const t = String(s.type).toUpperCase();
-      if (t !== "OBJ" && t !== "IMS") s.t = Number(s.t || 0) * k;
-      if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
-    }
-
-    computeVertices(lens.surfaces);
-    clampAllApertures(lens.surfaces);
-    buildTable();
-    renderAll();
-    scheduleRenderPreview();
-
-    if (ui.footerWarn) ui.footerWarn.textContent = `Scale→FL: EFL ${cur.toFixed(2)} → target ${target.toFixed(2)} (k=${k.toFixed(4)}).`;
+  if (!Number.isFinite(cur) || cur <= 0) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Scale→FL: current EFL not solvable.";
+    return;
   }
 
-  function setTargetTStop() {
-    const wavePreset = ui.wavePreset?.value || "d";
-    const { efl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-    if (!Number.isFinite(efl) || efl <= 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: EFL unknown (try Scale→FL or fix geometry).";
-      return;
-    }
+  const target = num(prompt("Target focal length (mm)?", String(Math.round(cur))), cur);
+  if (!Number.isFinite(target) || target <= 0) return;
 
-    const stopIdx = findStopSurfaceIndex(lens.surfaces);
-    if (stopIdx < 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: no STOP surface marked.";
-      return;
-    }
+  const k = target / cur;
 
-    const currentT = estimateTStopApprox(efl, lens.surfaces);
-    const targetT = num(prompt("Target T-stop? (approx)", currentT ? currentT.toFixed(2) : "2.00"), currentT || 2.0);
-    if (!Number.isFinite(targetT) || targetT <= 0) return;
-
-    const newAp = efl / (2 * targetT);
-    lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
-
-    clampAllApertures(lens.surfaces);
-    buildTable();
-    renderAll();
-    scheduleRenderPreview();
-
-    if (ui.footerWarn) ui.footerWarn.textContent = `Set T: stop ap → ${lens.surfaces[stopIdx].ap.toFixed(2)}mm (semi-diam) for T${targetT.toFixed(2)} @ EFL ${efl.toFixed(2)}mm.`;
+  for (let i = 0; i < lens.surfaces.length; i++) {
+    const s = lens.surfaces[i];
+    const t = String(s.type).toUpperCase();
+    if (t !== "OBJ" && t !== "IMS") s.t = Number(s.t || 0) * k;
+    if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
   }
+
+  clampAllApertures(lens.surfaces);
+  buildTable();
+  renderAll();
+  scheduleRenderPreview();
+
+  if (ui.footerWarn) ui.footerWarn.textContent =
+    `Scale→FL: EFL ${cur.toFixed(2)} → target ${target.toFixed(2)} (k=${k.toFixed(4)}).`;
+}
+
+function setTargetTStop() {
+  const wavePreset = ui.wavePreset?.value || "d";
+  const lensShift = Number(ui.lensFocus?.value || 0);
+
+  const surf = getSurfacesForMetrics(lensShift);
+  const { efl } = estimateEflBflParaxial(surf, wavePreset);
+
+  if (!Number.isFinite(efl) || efl <= 0) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Set T: EFL unknown.";
+    return;
+  }
+
+  const stopIdx = findStopSurfaceIndex(lens.surfaces);
+  if (stopIdx < 0) {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Set T: no STOP surface marked.";
+    return;
+  }
+
+  const currentT = estimateTStopApprox(efl, surf);
+  const targetT = num(prompt("Target T-stop? (approx)", currentT ? currentT.toFixed(2) : "2.00"), currentT || 2.0);
+  if (!Number.isFinite(targetT) || targetT <= 0) return;
+
+  const newAp = efl / (2 * targetT);
+  lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
+
+  clampAllApertures(lens.surfaces);
+  buildTable();
+  renderAll();
+  scheduleRenderPreview();
+
+  if (ui.footerWarn) ui.footerWarn.textContent =
+    `Set T: stop ap → ${lens.surfaces[stopIdx].ap.toFixed(2)}mm for T${targetT.toFixed(2)} @ EFL ${efl.toFixed(2)}mm.`;
+}
 
   // -------------------- New Lens modal --------------------
   function openNewLensModal() {
