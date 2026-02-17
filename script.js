@@ -2400,12 +2400,16 @@ function renderPreview() {
   const token = preview.renderToken;
 
   // --- focus + vertices ---
-  const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
-  const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
-  computeVertices(lens.surfaces, lensShift);
+ const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
+const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
+const sensorX_ui = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
 
-  const wavePreset = ui.wavePreset?.value || "d";
-  const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+// zelfde frame als renderAll(): sensorplane = 0 (IMS=0), lens verschuift t.o.v. sensor
+const totalShift = lensShift - sensorX_ui;
+computeVertices(lens.surfaces, totalShift);
+
+const wavePreset = ui.wavePreset?.value || "d";
+const sensorPlaneX = 0.0;
 
 
   const { w: sensorW, h: sensorH } = getSensorWH();
