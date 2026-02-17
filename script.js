@@ -1959,8 +1959,8 @@ pctx.strokeStyle = "rgba(255,255,255,.20)";
 pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
 
 pctx.strokeStyle = "rgba(42,110,242,.55)";
-pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
-
+pctx.strokeRect(sr.x, sr.y, sr.w, sr.h); // <-- sr is undefined
+   
 pctx.restore();
 }
 
@@ -2710,65 +2710,7 @@ function renderPreview() {
   }
 }
 
-  // -------------------- render to world canvas --------------------
-  preview.worldCanvas.width = W;
-  preview.worldCanvas.height = H;
-
-  const wctx = preview.worldCtx;
-  wctx.imageSmoothingEnabled = true;
-  wctx.imageSmoothingQuality = "high";
-
-  const out = wctx.createImageData(W, H);
-  const outD = out.data;
-
-  const imgAsp = hasImg ? (imgW / imgH) : (16/9);
-  const halfObjW = halfObjH * imgAsp;
-
-  function objectMmToUV(xmm, ymm) {
-    const u = 0.5 + (xmm / (2 * halfObjW));
-    const v = 0.5 - (ymm / (2 * halfObjH));
-    return { u, v };
-  }
-
-  for (let py = 0; py < H; py++) {
-    const sy = (0.5 - (py + 0.5) / H) * sensorHv;
-
-    for (let px = 0; px < W; px++) {
-      const sx = ((px + 0.5) / W - 0.5) * sensorWv;
-      const rS = Math.hypot(sx, sy);
-
-      const { rObj, trans } = lookupRadial(rS);
-      const g = clamp(trans * lookupNatural(rS), 0, 1);
-
-      const idx = (py * W + px) * 4;
-
-      if (g < 1e-4) {
-        outD[idx] = 0; outD[idx+1] = 0; outD[idx+2] = 0; outD[idx+3] = 255;
-        continue;
-      }
-
-      // map sensor vector -> object vector via radial scale
-      let ox = 0, oy = 0;
-      if (rS > 1e-9) {
-        const s = rObj / rS;
-        ox = sx * s;
-        oy = sy * s;
-      }
-
-      const { u, v } = objectMmToUV(ox, oy);
-      const c = sample(u, v);
-
-      outD[idx]     = clamp(c[0] * g, 0, 255);
-      outD[idx + 1] = clamp(c[1] * g, 0, 255);
-      outD[idx + 2] = clamp(c[2] * g, 0, 255);
-      outD[idx + 3] = 255;
-    }
-  }
-
-  wctx.putImageData(out, 0, 0);
-  preview.worldReady = true;
-  drawPreviewViewport();
-}
+ 
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
