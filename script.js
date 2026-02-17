@@ -160,6 +160,9 @@
 
   const OV = 1.6; // overscan factor for preview
 
+// -------------------- default preview chart (GitHub) --------------------
+const DEFAULT_PREVIEW_URL = "./assets/lenschart.png"; // <-- pas bestandsnaam/pad aan
+   
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
     const i = lens.surfaces.length - 1;
@@ -937,6 +940,31 @@
   // -------------------- drawing --------------------
   let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
 
+   // High-contrast canvas theme
+function drawBackground(w, h) {
+  if (!ctx) return;
+
+  // deep dark background
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#05070c";
+  ctx.fillRect(0, 0, w, h);
+
+  // subtle grid
+  ctx.globalAlpha = 0.08;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  const step = 80;
+  for (let x = 0; x <= w; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+  for (let y = 0; y <= h; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
   function resizeCanvasToCSS() {
     if (!canvas || !ctx) return;
     const r = canvas.getBoundingClientRect();
@@ -978,7 +1006,7 @@
     if (!ctx) return;
     ctx.save();
     ctx.lineWidth = 1;
-    ctx.strokeStyle = "rgba(20,25,35,.28)";
+   ctx.strokeStyle = "rgba(255,255,255,.10)";
     ctx.beginPath();
     const p1 = worldToScreen({ x: -240, y: 0 }, world);
     const p2 = worldToScreen({ x: 800, y: 0 }, world);
@@ -999,32 +1027,38 @@
     return pts;
   }
 
-  function drawElementBody(world, sFront, sBack, apRegion) {
-    if (!ctx) return;
-    const front = buildSurfacePolyline(sFront, apRegion, 90);
-    const back = buildSurfacePolyline(sBack, apRegion, 90);
-    if (front.length < 2 || back.length < 2) return;
-    const poly = front.concat(back.slice().reverse());
+ function drawElementBody(world, sFront, sBack, apRegion) {
+  if (!ctx) return;
+  const front = buildSurfacePolyline(sFront, apRegion, 90);
+  const back = buildSurfacePolyline(sBack, apRegion, 90);
+  if (front.length < 2 || back.length < 2) return;
 
-    ctx.save();
-    ctx.globalAlpha = 0.12;
-    ctx.fillStyle = "#000";
-    ctx.beginPath();
-    let p0 = worldToScreen(poly[0], world);
-    ctx.moveTo(p0.x, p0.y);
-    for (let i = 1; i < poly.length; i++) {
-      const p = worldToScreen(poly[i], world);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.closePath();
-    ctx.fill();
+  const poly = front.concat(back.slice().reverse());
 
-    ctx.globalAlpha = 1.0;
-    ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "#1b1b1b";
-    ctx.stroke();
-    ctx.restore();
+  ctx.save();
+
+  // fill
+  ctx.globalAlpha = 1.0;
+  ctx.fillStyle = "rgba(120,180,255,0.10)";
+  ctx.beginPath();
+  let p0 = worldToScreen(poly[0], world);
+  ctx.moveTo(p0.x, p0.y);
+  for (let i = 1; i < poly.length; i++) {
+    const p = worldToScreen(poly[i], world);
+    ctx.lineTo(p.x, p.y);
   }
+  ctx.closePath();
+  ctx.fill();
+
+  // edge with glow
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(220,235,255,0.55)";
+  ctx.shadowColor = "rgba(70,140,255,0.35)";
+  ctx.shadowBlur = 10;
+  ctx.stroke();
+
+  ctx.restore();
+}
 
   function drawElementsClosed(world, surfaces) {
     let minNonOverlap = Infinity;
@@ -1068,8 +1102,8 @@
     if (!ctx) return;
     ctx.save();
     ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "#1b1b1b";
-
+ctx.strokeStyle = "rgba(255,255,255,.22)";
+     
     const vx = s.vx;
     const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
 
@@ -1113,12 +1147,15 @@
   function drawRays(world, rayTraces, sensorX) {
     if (!ctx) return;
     ctx.save();
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = "#2a6ef2";
+   ctx.lineWidth = 1.6;
+ctx.strokeStyle = "rgba(70,140,255,0.85)";
+ctx.shadowColor = "rgba(70,140,255,0.45)";
+ctx.shadowBlur = 12;
+     
 
     for (const tr of rayTraces) {
       if (!tr.pts || tr.pts.length < 2) continue;
-      ctx.globalAlpha = tr.vignetted ? 0.15 : 0.9;
+     ctx.globalAlpha = tr.vignetted ? 0.10 : 1.0;
 
       ctx.beginPath();
       const p0 = worldToScreen(tr.pts[0], world);
@@ -1164,8 +1201,8 @@
     if (!ctx) return;
     ctx.save();
     ctx.lineWidth = 2;
-    ctx.strokeStyle = "#111";
-    ctx.setLineDash([6, 6]);
+ctx.strokeStyle = "rgba(255,255,255,.35)";
+     ctx.setLineDash([6, 6]);
 
     const a = worldToScreen({ x: sensorX, y: -halfH }, world);
     const b = worldToScreen({ x: sensorX, y: halfH }, world);
@@ -1232,8 +1269,8 @@
 
     ctx.save();
     ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(0,0,0,.32)";
-    ctx.fillStyle = "rgba(0,0,0,.02)";
+    ctx.strokeStyle = "rgba(255,255,255,.18)";
+ctx.fillStyle = "rgba(255,255,255,.02)";
 
     // flange face
     {
@@ -1301,8 +1338,8 @@
 
     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
     ctx.font = `11px ${mono}`;
-    ctx.fillStyle = "rgba(0,0,0,.55)";
-    ctx.textAlign = "left";
+ctx.fillStyle = "rgba(255,255,255,.55)";
+     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     const lab = P(xFlange - lensLip + 1.5, outerR + 6);
     ctx.fillText("PL mount • Ø54 throat • flange @ -52mm", lab.x, lab.y);
@@ -1325,9 +1362,9 @@
 
     ctx.save();
     ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "rgba(0,0,0,.35)";
-    ctx.fillStyle = "rgba(0,0,0,.55)";
-    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+    ctx.strokeStyle = "rgba(255,255,255,.18)";
+ctx.fillStyle = "rgba(255,255,255,.55)";
+     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
     ctx.font = `11px ${mono}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
@@ -1382,9 +1419,9 @@
 
     ctx.save();
     ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "rgba(0,0,0,.35)";
-    ctx.fillStyle = "rgba(0,0,0,.55)";
-    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+    ctx.strokeStyle = "rgba(255,255,255,.18)";
+ctx.fillStyle = "rgba(255,255,255,.55)";
+     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
     ctx.font = `11px ${mono}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
@@ -1577,11 +1614,11 @@
     if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
 
     resizeCanvasToCSS();
-    const r = canvas.getBoundingClientRect();
-    ctx.clearRect(0, 0, r.width, r.height);
+const r = canvas.getBoundingClientRect();
+drawBackground(r.width, r.height);
 
-    const world = makeWorldTransform();
-    drawAxes(world);
+const world = makeWorldTransform();
+drawAxes(world);
 
     drawRuler(world, 0, -200);
 
@@ -2629,39 +2666,60 @@
     else if (preview.ready) scheduleRenderPreview();
   });
 
+function setPreviewImage(im) {
+  preview.img = im;
+
+  preview.imgCanvas.width = im.naturalWidth;
+  preview.imgCanvas.height = im.naturalHeight;
+
+  preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
+  preview.imgCtx.drawImage(im, 0, 0);
+
+  preview.imgData = preview.imgCtx
+    .getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height)
+    .data;
+
+  preview.ready = true;
+  preview.worldReady = false;
+
+  scheduleRenderPreview();
+  toast("Preview image loaded");
+}
+
+function loadPreviewFromUrl(url) {
+  const im = new Image();
+  im.crossOrigin = "anonymous"; // meestal ok voor GH pages
+  im.onload = () => setPreviewImage(im);
+  im.onerror = () => {
+    console.warn("Default preview failed to load:", url);
+    if (ui.footerWarn) ui.footerWarn.textContent = `Default preview image not found: ${url}`;
+  };
+
+  // cache-buster handig bij GH pages updates
+  im.src = url + (url.includes("?") ? "&" : "?") + "v=" + Date.now();
+}
+   
   // Image load (cache pixels once)
-  if (ui.prevImg) {
-    ui.prevImg.addEventListener("change", (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
+if (ui.prevImg) {
+  ui.prevImg.addEventListener("change", (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
 
-      const url = URL.createObjectURL(f);
-      const im = new Image();
+    const url = URL.createObjectURL(f);
+    const im = new Image();
 
-      im.onload = () => {
-        preview.img = im;
+    im.onload = () => {
+      setPreviewImage(im);
+      URL.revokeObjectURL(url);
+    };
+    im.onerror = () => {
+      URL.revokeObjectURL(url);
+      if (ui.footerWarn) ui.footerWarn.textContent = "Preview image load failed.";
+    };
 
-        preview.imgCanvas.width = im.naturalWidth;
-        preview.imgCanvas.height = im.naturalHeight;
-
-        preview.imgCtx.clearRect(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
-        preview.imgCtx.drawImage(im, 0, 0);
-
-        preview.imgData = preview.imgCtx
-          .getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height)
-          .data;
-
-        preview.ready = true;
-        preview.worldReady = false;
-
-        scheduleRenderPreview();
-        URL.revokeObjectURL(url);
-        toast("Preview image loaded");
-      };
-
-      im.src = url;
-    });
-  }
+    im.src = url;
+  });
+}
 
   // -------------------- file load --------------------
   on("#fileLoad", "change", async (e) => {
@@ -2735,20 +2793,23 @@
   }
 
   // -------------------- init --------------------
-  function init() {
-    populateSensorPresetsSelect();
-    applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
+function init() {
+  populateSensorPresetsSelect();
+  applyPreset(ui.sensorPreset?.value || "ARRI Alexa Mini LF (LF)");
 
-    buildTable();
-    applySensorToIMS();
+  buildTable();
+  applySensorToIMS();
 
-    bindViewControls();
-    bindPreviewViewControls();
-    bindControlRerenders();
+  bindViewControls();
+  bindPreviewViewControls();
+  bindControlRerenders();
 
-    renderAll();
-    drawPreviewViewport(); // blank state draw
-  }
+  // auto-load default chart from GitHub (if present)
+  loadPreviewFromUrl(DEFAULT_PREVIEW_URL);
+
+  renderAll();
+  drawPreviewViewport(); // blank state draw
+}
 
   init();
 })();
