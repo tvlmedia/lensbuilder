@@ -1,10 +1,9 @@
 /* Meridional Raytracer (2D) — TVL Lens Builder (split-view build)
-   - Matches your current index.html + style.css (no tabs required)
    - Element modal: achromats + optional FRONT AIR injection
    - Reverse tracing: IMS aperture does NOT vignette
-   - Preview: radial mapping (rotational symmetry) with r->obj LUT
+   - Preview: FAST LUT (default) + optional DOF path trace
+   - Optional CA mapping (RGB = c,d,g lines)
    - OSLO-ish convention: glass = medium AFTER surface
-   - Added: Scale → FL, Set T, New Lens modal, Preview fullscreen button
 */
 
 (() => {
@@ -15,7 +14,6 @@
     if (el) el.addEventListener(ev, fn, opts);
     return el;
   };
-
   const clone = (obj) =>
     typeof structuredClone === "function" ? structuredClone(obj) : JSON.parse(JSON.stringify(obj));
 
@@ -24,8 +22,9 @@
     const x = parseFloat(s);
     return Number.isFinite(x) ? x : fallback;
   }
-  function clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
-  function smoothstep(a, b, x) {
+  function clamp01(x){ return x < 0 ? 0 : (x > 1 ? 1 : x); }
+  function clamp(x,a,b){ return x < a ? a : (x > b ? b : x); }
+  function smoothstep(a, b, x){
     const t = clamp01((x - a) / (b - a));
     return t * t * (3 - 2 * t);
   }
@@ -43,7 +42,7 @@
     imgCanvas: document.createElement("canvas"),
     imgCtx: null,
     ready: false,
-    imgData: null, // cached pixels
+    imgData: null,
 
     worldCanvas: document.createElement("canvas"),
     worldCtx: null,
@@ -51,20 +50,20 @@
     dirtyKey: "",
 
     view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
+
+    cache: {
+      lutKey: "",
+      imgKey: "",
+      LUT_N: 0,
+      rMaxSensor: 0,
+      rObjLUT: null,
+      transLUT: null,
+      naturalLUT: null,
+      jitter: { n: 0, u: null, v: null },
+    }
   };
   preview.imgCtx = preview.imgCanvas.getContext("2d");
   preview.worldCtx = preview.worldCanvas.getContext("2d");
-
-  preview.cache = {
-    lutKey: "",
-    imgKey: "",
-    LUT_N: 0,
-    rMaxSensor: 0,
-    rObjLUT: null,
-    transLUT: null,
-    naturalLUT: null,
-    jitter: { n: 0, u: null, v: null },
-  };
 
   // -------------------- UI --------------------
   const ui = {
@@ -175,34 +174,9 @@
 
   const OV = 1.6; // overscan factor for preview
 
-  // -------------------- default preview chart (GitHub) --------------------
+  // -------------------- default assets (GitHub) --------------------
   const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
   const DEFAULT_LENS_URL = "./bijna-goed.json";
-
-  function syncIMSCellApertureToUI() {
-    if (!ui.tbody || !lens?.surfaces?.length) return;
-    const i = lens.surfaces.length - 1;
-    const s = lens.surfaces[i];
-    if (!s || String(s.type).toUpperCase() !== "IMS") return;
-    const apInput = ui.tbody.querySelector(`input.cellInput[data-k="ap"][data-i="${i}"]`);
-    if (apInput) apInput.value = Number(s.ap || 0).toFixed(2);
-  }
-
-  function applySensorToIMS() {
-    const { halfH } = getSensorWH();
-    const ims = lens?.surfaces?.[lens.surfaces.length - 1];
-    if (ims && String(ims.type).toUpperCase() === "IMS") {
-      ims.ap = halfH;
-      syncIMSCellApertureToUI();
-    }
-  }
-
-  function applyPreset(name) {
-    const p = SENSOR_PRESETS[name] || SENSOR_PRESETS["ARRI Alexa Mini LF (LF)"];
-    if (ui.sensorW) ui.sensorW.value = p.w.toFixed(2);
-    if (ui.sensorH) ui.sensorH.value = p.h.toFixed(2);
-    applySensorToIMS();
-  }
 
   // -------------------- glass db --------------------
   const GLASS_DB = {
@@ -228,7 +202,6 @@
   function glassN(glassName, preset /* d,g,c */) {
     const g = GLASS_DB[glassName] || GLASS_DB.AIR;
     if (glassName === "AIR") return 1.0;
-
     const base = g.nd;
     const strength = 1.0 / Math.max(10.0, g.Vd);
     if (preset === "g") return base + 35.0 * strength;
@@ -259,10 +232,6 @@
   function omit50ConceptV1() {
     return {
       name: "OMIT 50mm (concept v1 — scaled Double-Gauss base)",
-      notes: [
-        "Scaled from Double-Gauss base; used as geometric sanity for this 2D meridional tracer.",
-        "Not optimized; coatings/stop/entrance pupil are not modeled.",
-      ],
       surfaces: [
         { type: "OBJ", R: 0.0, t: 0.0, ap: 60.0, glass: "AIR", stop: false },
 
@@ -323,6 +292,52 @@
 
   let lens = sanitizeLens(omit50ConceptV1());
 
+  // -------------------- physical sanity clamps --------------------
+  const AP_SAFETY = 0.90;
+  const AP_MAX_PLANE = 30.0;
+  const AP_MIN = 0.01;
+
+  function maxApForSurface(s) {
+    const R = Number(s?.R || 0);
+    if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
+    return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
+  }
+  function clampSurfaceAp(s) {
+    if (!s) return;
+    const t = String(s.type || "").toUpperCase();
+    if (t === "IMS" || t === "OBJ") return;
+    const lim = maxApForSurface(s);
+    const ap = Number(s.ap || 0);
+    s.ap = Math.max(AP_MIN, Math.min(ap, lim));
+  }
+  function clampAllApertures(surfaces) {
+    if (!Array.isArray(surfaces)) return;
+    for (const s of surfaces) clampSurfaceAp(s);
+  }
+
+  function syncIMSCellApertureToUI() {
+    if (!ui.tbody || !lens?.surfaces?.length) return;
+    const i = lens.surfaces.length - 1;
+    const s = lens.surfaces[i];
+    if (!s || String(s.type).toUpperCase() !== "IMS") return;
+    const apInput = ui.tbody.querySelector(`input.cellInput[data-k="ap"][data-i="${i}"]`);
+    if (apInput) apInput.value = Number(s.ap || 0).toFixed(2);
+  }
+  function applySensorToIMS() {
+    const { halfH } = getSensorWH();
+    const ims = lens?.surfaces?.[lens.surfaces.length - 1];
+    if (ims && String(ims.type).toUpperCase() === "IMS") {
+      ims.ap = halfH;
+      syncIMSCellApertureToUI();
+    }
+  }
+  function applyPreset(name) {
+    const p = SENSOR_PRESETS[name] || SENSOR_PRESETS["ARRI Alexa Mini LF (LF)"];
+    if (ui.sensorW) ui.sensorW.value = p.w.toFixed(2);
+    if (ui.sensorH) ui.sensorH.value = p.h.toFixed(2);
+    applySensorToIMS();
+  }
+
   function loadLens(obj) {
     lens = sanitizeLens(obj);
     selectedIndex = 0;
@@ -333,15 +348,7 @@
     if (preview.ready) scheduleRenderPreview();
   }
 
-  // -------------------- table helpers --------------------
-  function clampSelected() {
-    selectedIndex = Math.max(0, Math.min(lens.surfaces.length - 1, selectedIndex));
-  }
-  function enforceSingleStop(changedIndex) {
-    if (!lens.surfaces[changedIndex]?.stop) return;
-    lens.surfaces.forEach((s, i) => { if (i !== changedIndex) s.stop = false; });
-  }
-
+  // -------------------- table build + events --------------------
   let _focusMemo = null;
   function rememberTableFocus() {
     const a = document.activeElement;
@@ -361,12 +368,15 @@
     if (!el) return;
     el.focus({ preventScroll: true });
     if (_focusMemo.ss != null && _focusMemo.se != null) {
-      try { el.setSelectionRange(_focusMemo.ss, _focusMemo.se); } catch (_) { }
+      try { el.setSelectionRange(_focusMemo.ss, _focusMemo.se); } catch (_) {}
     }
     _focusMemo = null;
   }
 
-  // -------------------- table build + events --------------------
+  function clampSelected() {
+    selectedIndex = Math.max(0, Math.min(lens.surfaces.length - 1, selectedIndex));
+  }
+
   function buildTable() {
     clampSelected();
     if (!ui.tbody) return;
@@ -438,6 +448,10 @@
     scheduleRenderPreview();
   }
 
+  function findStopSurfaceIndex(surfaces) {
+    return surfaces.findIndex((s) => !!s.stop);
+  }
+
   function onCellCommit(e) {
     const el = e.target;
     const i = Number(el.dataset.i);
@@ -450,19 +464,16 @@
 
     if (k === "stop") {
       const want = !!el.checked;
-
       const t0 = String(s.type || "").toUpperCase();
       if (t0 === "OBJ" || t0 === "IMS") {
         el.checked = false;
         if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
         return;
       }
-
       lens.surfaces.forEach((ss, j) => {
         ss.stop = false;
         if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
       });
-
       s.stop = want;
       if (want) s.type = "STOP";
       if (want) s.R = 0.0;
@@ -477,7 +488,7 @@
     scheduleRenderPreview();
   }
 
-  // -------------------- math helpers --------------------
+  // -------------------- 2D math helpers --------------------
   function normalize(v) {
     const m = Math.hypot(v.x, v.y);
     if (m < 1e-12) return { x: 0, y: 0 };
@@ -506,13 +517,11 @@
 
     if (Math.abs(R) < 1e-9) {
       if (Math.abs(ray.d.x) < 1e-12) return null;
-
       const t = (vx - ray.p.x) / ray.d.x;
       if (!Number.isFinite(t) || t <= 1e-9) return null;
 
       const hit = add(ray.p, mul(ray.d, t));
       const vignetted = Math.abs(hit.y) > ap + 1e-9;
-
       const N = { x: -1, y: 0 };
       return { hit, t, vignetted, normal: N };
     }
@@ -567,196 +576,9 @@
         if (t !== "IMS") surfaces[i].vx += lensShift;
       }
     }
-
     return x;
   }
 
-  function findStopSurfaceIndex(surfaces) {
-    return surfaces.findIndex((s) => !!s.stop);
-  }
-
-  // ==================== 3D (axisymmetric) helpers ====================
-  function normalize3(v) {
-    const m = Math.hypot(v.x, v.y, v.z);
-    if (m < 1e-12) return { x: 0, y: 0, z: 0 };
-    return { x: v.x / m, y: v.y / m, z: v.z / m };
-  }
-  function dot3(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-  function add3(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
-  function mul3(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
-
-  function refract3(I, N, n1, n2) {
-    I = normalize3(I);
-    N = normalize3(N);
-    if (dot3(I, N) > 0) N = mul3(N, -1);
-
-    const cosi = -dot3(N, I);
-    const eta = n1 / n2;
-    const k = 1 - eta * eta * (1 - cosi * cosi);
-    if (k < 0) return null;
-
-    const T = add3(mul3(I, eta), mul3(N, eta * cosi - Math.sqrt(k)));
-    return normalize3(T);
-  }
-
-  function intersectSurface3D(ray, surf) {
-    const vx = surf.vx;
-    const R = Number(surf.R || 0);
-    const ap = Math.max(0, Number(surf.ap || 0));
-
-    const isPlane = Math.abs(R) < 1e-9;
-
-    if (isPlane) {
-      if (Math.abs(ray.d.x) < 1e-12) return null;
-      const t = (vx - ray.p.x) / ray.d.x;
-      if (!Number.isFinite(t) || t <= 1e-9) return null;
-
-      const hit = add3(ray.p, mul3(ray.d, t));
-      const r = Math.hypot(hit.y, hit.z);
-      const vignetted = r > ap + 1e-9;
-
-      const N = { x: -1, y: 0, z: 0 };
-      return { hit, t, vignetted, normal: N };
-    }
-
-    const cx = vx + R;
-    const rad = Math.abs(R);
-
-    const px = ray.p.x - cx;
-    const py = ray.p.y;
-    const pz = ray.p.z;
-    const dx = ray.d.x;
-    const dy = ray.d.y;
-    const dz = ray.d.z;
-
-    const A = dx * dx + dy * dy + dz * dz;
-    const B = 2 * (px * dx + py * dy + pz * dz);
-    const C = px * px + py * py + pz * pz - rad * rad;
-
-    const disc = B * B - 4 * A * C;
-    if (disc < 0) return null;
-
-    const sdisc = Math.sqrt(disc);
-    const t1 = (-B - sdisc) / (2 * A);
-    const t2 = (-B + sdisc) / (2 * A);
-
-    let t = null;
-    if (t1 > 1e-9 && t2 > 1e-9) t = Math.min(t1, t2);
-    else if (t1 > 1e-9) t = t1;
-    else if (t2 > 1e-9) t = t2;
-    else return null;
-
-    const hit = add3(ray.p, mul3(ray.d, t));
-    const r = Math.hypot(hit.y, hit.z);
-    const vignetted = r > ap + 1e-9;
-
-    const Nout = normalize3({ x: hit.x - cx, y: hit.y, z: hit.z });
-    return { hit, t, vignetted, normal: Nout };
-  }
-
-  function traceRayReverse3D(ray, surfaces, wavePreset) {
-    let vignetted = false;
-    let tir = false;
-
-    for (let i = surfaces.length - 1; i >= 0; i--) {
-      const s = surfaces[i];
-      const type = String(s?.type || "").toUpperCase();
-      const isIMS = type === "IMS";
-      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
-
-      const hitInfo = intersectSurface3D(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
-
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
-
-      if (isIMS || isMECH) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
-
-      const nRight = glassN(String(s.glass || "AIR"), wavePreset);
-      const nLeft = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
-
-      if (Math.abs(nLeft - nRight) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
-
-      const newDir = refract3(ray.d, hitInfo.normal, nRight, nLeft);
-      if (!newDir) { tir = true; break; }
-
-      ray = { p: hitInfo.hit, d: newDir };
-    }
-
-    return { vignetted, tir, endRay: ray };
-  }
-
-  function intersectPlaneX3D(ray, xPlane) {
-    if (Math.abs(ray.d.x) < 1e-12) return null;
-    const t = (xPlane - ray.p.x) / ray.d.x;
-    if (!Number.isFinite(t) || t <= 1e-9) return null;
-    return add3(ray.p, mul3(ray.d, t));
-  }
-
-  // -------------------- physical sanity clamps --------------------
-  const AP_SAFETY = 0.90;
-  const AP_MAX_PLANE = 30.0;
-  const AP_MIN = 0.01;
-
-  function maxApForSurface(s) {
-    const R = Number(s?.R || 0);
-    if (!Number.isFinite(R) || Math.abs(R) < 1e-9) return AP_MAX_PLANE;
-    return Math.max(AP_MIN, Math.abs(R) * AP_SAFETY);
-  }
-
-  function clampSurfaceAp(s) {
-    if (!s) return;
-    const t = String(s.type || "").toUpperCase();
-    if (t === "IMS" || t === "OBJ") return;
-    const lim = maxApForSurface(s);
-    const ap = Number(s.ap || 0);
-    s.ap = Math.max(AP_MIN, Math.min(ap, lim));
-  }
-
-  function clampAllApertures(surfaces) {
-    if (!Array.isArray(surfaces)) return;
-    for (const s of surfaces) clampSurfaceAp(s);
-  }
-
-  function surfaceXatY(s, y) {
-    const vx = s.vx;
-    const R = s.R;
-    if (Math.abs(R) < 1e-9) return vx;
-
-    const cx = vx + R;
-    const rad = Math.abs(R);
-    const sign = Math.sign(R) || 1;
-    const inside = rad * rad - y * y;
-    if (inside < 0) return null;
-    return cx - sign * Math.sqrt(inside);
-  }
-
-  function maxNonOverlappingSemiDiameter(sFront, sBack, minCT = 0.10) {
-    const apGuess = Math.max(0.01, Math.min(Number(sFront.ap || 0), Number(sBack.ap || 0)));
-    function gapAt(y) {
-      const xf = surfaceXatY(sFront, y);
-      const xb = surfaceXatY(sBack, y);
-      if (xf == null || xb == null) return -1e9;
-      return xb - xf;
-    }
-    if (gapAt(0) < minCT) return 0.01;
-    if (gapAt(apGuess) >= minCT) return apGuess;
-
-    let lo = 0, hi = apGuess;
-    for (let i = 0; i < 30; i++) {
-      const mid = (lo + hi) * 0.5;
-      if (gapAt(mid) >= minCT) lo = mid;
-      else hi = mid;
-    }
-    return Math.max(0.01, lo);
-  }
-
-  // -------------------- tracing (2D forward+reverse) --------------------
   function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const skipIMS = !!opts.skipIMS;
 
@@ -800,103 +622,7 @@
       ray = { p: hitInfo.hit, d: newDir };
       nBefore = nAfter;
     }
-
     return { pts, vignetted, tir, endRay: ray };
-  }
-
-  function traceRayReverse(ray, surfaces, wavePreset) {
-    let pts = [];
-    let vignetted = false;
-    let tir = false;
-
-    for (let i = surfaces.length - 1; i >= 0; i--) {
-      const s = surfaces[i];
-      const type = String(s?.type || "").toUpperCase();
-      const isIMS = type === "IMS";
-      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
-
-      const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
-
-      pts.push(hitInfo.hit);
-
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
-
-      if (isIMS || isMECH) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
-
-      const nRight = glassN(String(s.glass || "AIR"), wavePreset);
-      const nLeft = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
-
-      if (Math.abs(nLeft - nRight) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
-
-      const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
-      if (!newDir) { tir = true; break; }
-
-      ray = { p: hitInfo.hit, d: newDir };
-    }
-
-    return { pts, vignetted, tir, endRay: ray };
-  }
-
-  function intersectPlaneX(ray, xPlane) {
-    if (Math.abs(ray.d.x) < 1e-12) return null;
-    const t = (xPlane - ray.p.x) / ray.d.x;
-    if (!Number.isFinite(t) || t <= 1e-9) return null;
-    return add(ray.p, mul(ray.d, t));
-  }
-
-  // -------------------- ray bundles --------------------
-  function getRayReferencePlane(surfaces) {
-    const stopIdx = findStopSurfaceIndex(surfaces);
-    if (stopIdx >= 0) {
-      const s = surfaces[stopIdx];
-      return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10) * 0.98), refIdx: stopIdx };
-    }
-    let refIdx = 1;
-    if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") refIdx = 0;
-    const s = surfaces[refIdx] || surfaces[0];
-    return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10) * 0.98), refIdx };
-  }
-
-  function buildRays(surfaces, fieldAngleDeg, count) {
-    const n = Math.max(3, Math.min(101, count | 0));
-    const theta = (fieldAngleDeg * Math.PI) / 180;
-    const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
-
-    const xStart = (surfaces[0]?.vx ?? 0) - 80;
-    const { xRef, apRef } = getRayReferencePlane(surfaces);
-
-    const hMax = apRef * 0.98;
-    const rays = [];
-    const tanT = Math.abs(dir.x) < 1e-9 ? 0 : dir.y / dir.x;
-
-    for (let k = 0; k < n; k++) {
-      const a = (k / (n - 1)) * 2 - 1;
-      const yAtRef = a * hMax;
-      const y0 = yAtRef - tanT * (xRef - xStart);
-      rays.push({ p: { x: xStart, y: y0 }, d: dir });
-    }
-    return rays;
-  }
-
-  function buildChiefRay(surfaces, fieldAngleDeg) {
-    const theta = (fieldAngleDeg * Math.PI) / 180;
-    const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
-
-    const xStart = (surfaces[0]?.vx ?? 0) - 120;
-    const stopIdx = findStopSurfaceIndex(surfaces);
-    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
-    const xStop = stopSurf.vx;
-
-    const tanT = Math.abs(dir.x) < 1e-9 ? 0 : dir.y / dir.x;
-    const y0 = 0 - tanT * (xStop - xStart);
-    return { p: { x: xStart, y: y0 }, d: dir };
   }
 
   function rayHitYAtX(endRay, x) {
@@ -904,22 +630,6 @@
     const t = (x - endRay.p.x) / endRay.d.x;
     if (!Number.isFinite(t)) return null;
     return endRay.p.y + t * endRay.d.y;
-  }
-
-  function coverageTestMaxFieldDeg(surfaces, wavePreset, sensorX, halfH) {
-    let lo = 0, hi = 60, best = 0;
-    for (let iter = 0; iter < 18; iter++) {
-      const mid = (lo + hi) * 0.5;
-      const ray = buildChiefRay(surfaces, mid);
-      const tr = traceRayForward(clone(ray), surfaces, wavePreset);
-      if (!tr || tr.vignetted || tr.tir) { hi = mid; continue; }
-
-      const y = rayHitYAtX(tr.endRay, sensorX);
-      if (y == null) { hi = mid; continue; }
-      if (Math.abs(y) <= halfH) { best = mid; lo = mid; }
-      else hi = mid;
-    }
-    return best;
   }
 
   // -------------------- EFL/BFL (paraxial-ish) --------------------
@@ -933,7 +643,6 @@
     }
     return Number.isFinite(maxX) ? maxX : 0;
   }
-
   function firstPhysicalVertexX(surfaces) {
     if (!surfaces?.length) return 0;
     let minX = Infinity;
@@ -970,14 +679,13 @@
       if (Number.isFinite(f)) fVals.push(f);
 
       if (Math.abs(dy) > 1e-12) {
-        const tt = -er.p.y / dy;
-        const xCross = er.p.x + tt * dx;
+        const t = -er.p.y / dy;
+        const xCross = er.p.x + t * dx;
         if (Number.isFinite(xCross)) xCrossVals.push(xCross);
       }
     }
 
     if (fVals.length < 2) return { efl: null, bfl: null };
-
     const efl = fVals.reduce((a, b) => a + b, 0) / fVals.length;
 
     let bfl = null;
@@ -1008,90 +716,11 @@
     return { hfov: rad2deg(hfov), vfov: rad2deg(vfov), dfov: rad2deg(dfov) };
   }
 
-  function coversSensorYesNo({ fov, maxField, mode = "diag", marginDeg = 0.5 }) {
-    if (!fov || !Number.isFinite(maxField)) return { ok: false, req: null };
-    let req = null;
-    if (mode === "h") req = fov.hfov * 0.5;
-    else if (mode === "v") req = fov.vfov * 0.5;
-    else req = fov.dfov * 0.5;
-    const ok = maxField + marginDeg >= req;
-    return { ok, req };
-  }
-
-  // -------------------- autofocus --------------------
-  function spotRmsAtSensorX(traces, sensorX) {
-    const ys = [];
-    for (const tr of traces) {
-      if (!tr || tr.vignetted || tr.tir) continue;
-      const y = rayHitYAtX(tr.endRay, sensorX);
-      if (y == null) continue;
-      ys.push(y);
-    }
-    if (ys.length < 5) return { rms: null, n: ys.length };
-    const mean = ys.reduce((a, b) => a + b, 0) / ys.length;
-    const rms = Math.sqrt(ys.reduce((acc, y) => acc + (y - mean) ** 2, 0) / ys.length);
-    return { rms, n: ys.length };
-  }
-
-  function autoFocus() {
-    if (ui.focusMode) ui.focusMode.value = "lens";
-    if (ui.sensorOffset) ui.sensorOffset.value = "0";
-
-    const fieldAngle = Number(ui.fieldAngle?.value || 0);
-    const rayCount = Number(ui.rayCount?.value || 31);
-    const wavePreset = ui.wavePreset?.value || "d";
-
-    const currentLensShift = Number(ui.lensFocus?.value || 0);
-    const sensorX = 0.0;
-
-    const range = 20;
-    const coarseStep = 0.25;
-    const fineStep = 0.05;
-
-    let best = { shift: currentLensShift, rms: Infinity, n: 0 };
-
-    function evalShift(shift) {
-      computeVertices(lens.surfaces, shift);
-      const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-      const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
-      return spotRmsAtSensorX(traces, sensorX);
-    }
-
-    function scan(center, halfRange, step) {
-      const start = center - halfRange;
-      const end = center + halfRange;
-      for (let sh = start; sh <= end + 1e-9; sh += step) {
-        const { rms, n } = evalShift(sh);
-        if (rms == null) continue;
-        if (rms < best.rms) best = { shift: sh, rms, n };
-      }
-    }
-
-    scan(currentLensShift, range, coarseStep);
-    if (Number.isFinite(best.rms)) scan(best.shift, 2.0, fineStep);
-
-    if (!Number.isFinite(best.rms) || best.n < 5) {
-      if (ui.footerWarn) ui.footerWarn.textContent =
-        "Auto focus (lens) failed (too few valid rays). Try more rays / larger apertures.";
-      computeVertices(lens.surfaces, currentLensShift);
-      renderAll();
-      return;
-    }
-
-    if (ui.lensFocus) ui.lensFocus.value = best.shift.toFixed(2);
-    if (ui.footerWarn) ui.footerWarn.textContent =
-      `Auto focus (LENS): lensFocus=${best.shift.toFixed(2)}mm • RMS=${best.rms.toFixed(3)}mm • rays=${best.n}`;
-
-    renderAll();
-    scheduleRenderPreview();
-  }
-
-  // -------------------- drawing --------------------
+  // -------------------- Drawing skeleton (kept) --------------------
   let view = { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
 
   function drawBackgroundCSS(w, h) {
     if (!ctx) return;
-
     ctx.save();
     ctx.fillStyle = "#05070c";
     ctx.fillRect(0, 0, w, h);
@@ -1107,7 +736,6 @@
     for (let y = 0; y <= h; y += step) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
-
     ctx.restore();
   }
 
@@ -1125,18 +753,12 @@
     const r = previewCanvasEl.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
-    previewCanvasEl.width = Math.max(2, Math.floor(r.width * dpr));
+    previewCanvasEl.width  = Math.max(2, Math.floor(r.width  * dpr));
     previewCanvasEl.height = Math.max(2, Math.floor(r.height * dpr));
-
     pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     previewCanvasEl._cssW = Math.max(2, r.width);
     previewCanvasEl._cssH = Math.max(2, r.height);
-  }
-
-  function worldToScreen(p, world) {
-    const { cx, cy, s } = world;
-    return { x: cx + p.x * s, y: cy - p.y * s };
   }
 
   function makeWorldTransform() {
@@ -1147,6 +769,11 @@
     const base = Number(ui.renderScale?.value || 1.25) * 3.2;
     const s = base * view.zoom;
     return { cx, cy, s };
+  }
+
+  function worldToScreen(p, world) {
+    const { cx, cy, s } = world;
+    return { x: cx + p.x * s, y: cy - p.y * s };
   }
 
   function drawAxes(world) {
@@ -1163,128 +790,65 @@
     ctx.restore();
   }
 
-  function buildSurfacePolyline(s, ap, steps = 90) {
-    const pts = [];
-    for (let i = 0; i <= steps; i++) {
-      const y = -ap + (i / steps) * (2 * ap);
-      const x = surfaceXatY(s, y);
-      if (x == null) continue;
-      pts.push({ x, y });
-    }
-    return pts;
+  function getIMSIndex() {
+    return lens.surfaces.findIndex((s) => String(s.type).toUpperCase() === "IMS");
+  }
+  function setIMSVxTo(sensorX){
+    const imsIdx = getIMSIndex();
+    if (imsIdx < 0) return;
+    lens.surfaces[imsIdx].vx = sensorX;
   }
 
-  function drawElementBody(world, sFront, sBack, apRegion) {
-    if (!ctx) return;
-    const front = buildSurfacePolyline(sFront, apRegion, 90);
-    const back = buildSurfacePolyline(sBack, apRegion, 90);
-    if (front.length < 2 || back.length < 2) return;
-
-    const poly = front.concat(back.slice().reverse());
-
-    ctx.save();
-
-    ctx.globalAlpha = 1.0;
-    ctx.fillStyle = "rgba(120,180,255,0.10)";
-    ctx.beginPath();
-    let p0 = worldToScreen(poly[0], world);
-    ctx.moveTo(p0.x, p0.y);
-    for (let i = 1; i < poly.length; i++) {
-      const p = worldToScreen(poly[i], world);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(220,235,255,0.55)";
-    ctx.shadowColor = "rgba(70,140,255,0.35)";
-    ctx.shadowBlur = 10;
-    ctx.stroke();
-
-    ctx.restore();
+  // -------------------- render scheduler --------------------
+  let _rafAll = 0;
+  function scheduleRenderAll() {
+    if (_rafAll) return;
+    _rafAll = requestAnimationFrame(() => {
+      _rafAll = 0;
+      renderAll();
+    });
+  }
+  let _rafPrev = 0;
+  function scheduleRenderPreview() {
+    if (_rafPrev) return;
+    _rafPrev = requestAnimationFrame(() => {
+      _rafPrev = 0;
+      if (preview.ready) renderPreview();
+    });
   }
 
-  function drawElementsClosed(world, surfaces) {
-    let minNonOverlap = Infinity;
+  // -------------------- MAIN renderAll (kept minimal) --------------------
+  function renderAll() {
+    if (!canvas || !ctx) return;
+    if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-    for (let i = 0; i < surfaces.length - 1; i++) {
-      const sA = surfaces[i];
-      const sB = surfaces[i + 1];
+    const wavePreset = ui.wavePreset?.value || "d";
+    const { w: sensorW, h: sensorH, halfH } = getSensorWH();
 
-      const typeA = String(sA.type || "").toUpperCase();
-      const typeB = String(sB.type || "").toUpperCase();
+    const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
+    const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
+    computeVertices(lens.surfaces, lensShift);
 
-      if (typeA === "OBJ" || typeB === "OBJ") continue;
-      if (typeA === "IMS" || typeB === "IMS") continue;
+    const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+    setIMSVxTo(sensorX);
 
-      const medium = String(sA.glass || "AIR").toUpperCase();
-      if (medium === "AIR") continue;
+    const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
+    const T = estimateTStopApprox(efl, lens.surfaces);
+    const fov = computeFovDeg(efl, sensorW, sensorH);
 
-      const apA = Math.max(0, Number(sA.ap || 0));
-      const apB = Math.max(0, Number(sB.ap || 0));
-      const limA = maxApForSurface(sA);
-      const limB = maxApForSurface(sB);
+    if (ui.efl) ui.efl.textContent = `Focal Length: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+    if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+    if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+    if (ui.fov) ui.fov.textContent = !fov ? "FOV: —" : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-      let apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
+    resizeCanvasToCSS();
+    const r = canvas.getBoundingClientRect();
+    drawBackgroundCSS(r.width, r.height);
 
-      if (Math.abs(sA.R) > 1e-9 && Math.abs(sB.R) > 1e-9) {
-        const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
-        minNonOverlap = Math.min(minNonOverlap, nonOverlap);
-        apRegion = Math.min(apRegion, nonOverlap);
-      }
+    const world = makeWorldTransform();
+    drawAxes(world);
 
-      drawElementBody(world, sA, sB, apRegion);
-    }
-
-    if (Number.isFinite(minNonOverlap) && minNonOverlap < 0.5 && ui.footerWarn) {
-      ui.footerWarn.textContent =
-        "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
-    }
-  }
-
-  function drawSurface(world, s) {
-    if (!ctx) return;
-    ctx.save();
-    ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "rgba(255,255,255,.22)";
-
-    const vx = s.vx;
-    const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
-
-    if (Math.abs(s.R) < 1e-9) {
-      const a = worldToScreen({ x: vx, y: -ap }, world);
-      const b = worldToScreen({ x: vx, y: ap }, world);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-      ctx.restore();
-      return;
-    }
-
-    const R = s.R;
-    const cx = vx + R;
-    const rad = Math.abs(R);
-    const sign = Math.sign(R) || 1;
-
-    const steps = 90;
-    ctx.beginPath();
-    let moved = false;
-    for (let i = 0; i <= steps; i++) {
-      const y = -ap + (i / steps) * (2 * ap);
-      const inside = rad * rad - y * y;
-      if (inside < 0) continue;
-      const x = cx - sign * Math.sqrt(inside);
-      const sp = worldToScreen({ x, y }, world);
-      if (!moved) { ctx.moveTo(sp.x, sp.y); moved = true; }
-      else ctx.lineTo(sp.x, sp.y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawLens(world, surfaces) {
+   function drawLens(world, surfaces) {
     drawElementsClosed(world, surfaces);
     for (const s of surfaces) drawSurface(world, s);
   }
@@ -2309,42 +1873,281 @@
     });
   }
 
-  // -------------------- preview rendering (fast LUT OR DOF path trace) --------------------
-  function setPreviewProgress(p01, txt = "") {
+  // -------------------- PREVIEW (FAST LUT + DOF) --------------------
+  function setPreviewProgress(p01, txt=""){
     const host = document.getElementById("previewProgress");
-    const bar = document.getElementById("previewProgressBar");
-    const lab = document.getElementById("previewProgressText");
+    const bar  = document.getElementById("previewProgressBar");
+    const lab  = document.getElementById("previewProgressText");
     if (!host || !bar || !lab) return;
     host.style.display = "block";
     const p = Math.max(0, Math.min(1, p01));
     bar.style.transform = `scaleX(${p})`;
-    lab.textContent = txt || `${Math.round(p * 100)}%`;
+    lab.textContent = txt || `${Math.round(p*100)}%`;
   }
-  function hidePreviewProgress() {
+  function hidePreviewProgress(){
     const host = document.getElementById("previewProgress");
     if (host) host.style.display = "none";
   }
 
-  function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
-  function srgbToLin(u) {
+  function srgbToLin(u){
     u /= 255;
-    return (u <= 0.04045) ? (u / 12.92) : Math.pow((u + 0.055) / 1.055, 2.4);
+    return (u <= 0.04045) ? (u/12.92) : Math.pow((u+0.055)/1.055, 2.4);
   }
-  function linToSrgb(u) {
+  function linToSrgb(u){
     u = Math.max(0, Math.min(1, u));
-    const v = (u <= 0.0031308) ? (12.92 * u) : (1.055 * Math.pow(u, 1 / 2.4) - 0.055);
-    return Math.round(v * 255);
+    const v = (u <= 0.0031308) ? (12.92*u) : (1.055*Math.pow(u, 1/2.4) - 0.055);
+    return Math.round(v*255);
   }
 
-  function getOrMakeJitter(cache, n) {
-    const nn = n | 0;
-    if (cache.jitter && cache.jitter.n === nn && cache.jitter.u && cache.jitter.v) return cache.jitter;
-    const count = nn * nn;
-    const u = new Float32Array(count);
-    const v = new Float32Array(count);
-    for (let i = 0; i < count; i++) { u[i] = Math.random(); v[i] = Math.random(); }
-    cache.jitter = { n: nn, u, v };
-    return cache.jitter;
+  // ---- 3D axisymmetric helpers ----
+  function normalize3(v){
+    const m = Math.hypot(v.x, v.y, v.z);
+    if (m < 1e-12) return { x:0, y:0, z:0 };
+    return { x:v.x/m, y:v.y/m, z:v.z/m };
+  }
+  function dot3(a,b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
+  function add3(a,b){ return { x:a.x+b.x, y:a.y+b.y, z:a.z+b.z }; }
+  function mul3(a,s){ return { x:a.x*s, y:a.y*s, z:a.z*s }; }
+
+  function refract3(I, N, n1, n2){
+    I = normalize3(I);
+    N = normalize3(N);
+    if (dot3(I, N) > 0) N = mul3(N, -1);
+
+    const cosi = -dot3(N, I);
+    const eta = n1 / n2;
+    const k = 1 - eta*eta*(1 - cosi*cosi);
+    if (k < 0) return null;
+
+    const T = add3(mul3(I, eta), mul3(N, eta*cosi - Math.sqrt(k)));
+    return normalize3(T);
+  }
+
+  function intersectSurface3D(ray, surf){
+    const vx = surf.vx;
+    const R = Number(surf.R || 0);
+    const ap = Math.max(0, Number(surf.ap || 0));
+
+    const isPlane = Math.abs(R) < 1e-9;
+
+    if (isPlane){
+      if (Math.abs(ray.d.x) < 1e-12) return null;
+      const t = (vx - ray.p.x) / ray.d.x;
+      if (!Number.isFinite(t) || t <= 1e-9) return null;
+
+      const hit = add3(ray.p, mul3(ray.d, t));
+      const r = Math.hypot(hit.y, hit.z);
+      const vignetted = r > ap + 1e-9;
+
+      const N = { x:-1, y:0, z:0 };
+      return { hit, t, vignetted, normal: N };
+    }
+
+    const cx = vx + R;
+    const rad = Math.abs(R);
+
+    const px = ray.p.x - cx;
+    const py = ray.p.y;
+    const pz = ray.p.z;
+    const dx = ray.d.x;
+    const dy = ray.d.y;
+    const dz = ray.d.z;
+
+    const A = dx*dx + dy*dy + dz*dz;
+    const B = 2 * (px*dx + py*dy + pz*dz);
+    const C = px*px + py*py + pz*pz - rad*rad;
+
+    const disc = B*B - 4*A*C;
+    if (disc < 0) return null;
+
+    const sdisc = Math.sqrt(disc);
+    const t1 = (-B - sdisc) / (2*A);
+    const t2 = (-B + sdisc) / (2*A);
+
+    let t = null;
+    if (t1 > 1e-9 && t2 > 1e-9) t = Math.min(t1, t2);
+    else if (t1 > 1e-9) t = t1;
+    else if (t2 > 1e-9) t = t2;
+    else return null;
+
+    const hit = add3(ray.p, mul3(ray.d, t));
+    const r = Math.hypot(hit.y, hit.z);
+    const vignetted = r > ap + 1e-9;
+
+    const Nout = normalize3({ x: hit.x - cx, y: hit.y, z: hit.z });
+    return { hit, t, vignetted, normal: Nout };
+  }
+
+  function traceRayReverse3D(ray, surfaces, wavePreset){
+    let vignetted = false;
+    let tir = false;
+
+    for (let i = surfaces.length - 1; i >= 0; i--){
+      const s = surfaces[i];
+      const type = String(s?.type || "").toUpperCase();
+      const isIMS  = type === "IMS";
+      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+
+      const hitInfo = intersectSurface3D(ray, s);
+      if (!hitInfo){ vignetted = true; break; }
+
+      if (!isIMS && hitInfo.vignetted){ vignetted = true; break; }
+
+      if (isIMS || isMECH){
+        ray = { p: hitInfo.hit, d: ray.d };
+        continue;
+      }
+
+      const nRight = glassN(String(s.glass || "AIR"), wavePreset);
+      const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
+
+      if (Math.abs(nLeft - nRight) < 1e-9){
+        ray = { p: hitInfo.hit, d: ray.d };
+        continue;
+      }
+
+      const newDir = refract3(ray.d, hitInfo.normal, nRight, nLeft);
+      if (!newDir){ tir = true; break; }
+
+      ray = { p: hitInfo.hit, d: newDir };
+    }
+
+    return { vignetted, tir, endRay: ray };
+  }
+
+  function intersectPlaneX3D(ray, xPlane){
+    if (Math.abs(ray.d.x) < 1e-12) return null;
+    const t = (xPlane - ray.p.x) / ray.d.x;
+    if (!Number.isFinite(t) || t <= 1e-9) return null;
+    return add3(ray.p, mul3(ray.d, t));
+  }
+
+  // viewport helpers
+  function getSensorRectBaseInPane() {
+    if (!previewCanvasEl) return { x: 0, y: 0, w: 0, h: 0 };
+    const r = previewCanvasEl.getBoundingClientRect();
+    const pad = 22;
+    const paneW = r.width, paneH = r.height;
+    const { w: sensorW, h: sensorH } = getSensorWH();
+    const asp = sensorW / sensorH;
+
+    let rw = paneW - pad * 2;
+    let rh = rw / asp;
+    if (rh > paneH - pad * 2) {
+      rh = paneH - pad * 2;
+      rw = rh * asp;
+    }
+    const x = (paneW - rw) * 0.5;
+    const y = (paneH - rh) * 0.5;
+    return { x, y, w: rw, h: rh };
+  }
+
+  function applyViewToSensorRect(sr0, v) {
+    const cx0 = sr0.x + sr0.w * 0.5;
+    const cy0 = sr0.y + sr0.h * 0.5;
+    const cx = cx0 + v.panX;
+    const cy = cy0 + v.panY;
+    const w = sr0.w * v.zoom;
+    const h = sr0.h * v.zoom;
+    return { x: cx - w * 0.5, y: cy - h * 0.5, w, h };
+  }
+
+  function drawPreviewViewport() {
+    if (!previewCanvasEl || !pctx) return;
+
+    resizePreviewCanvasToCSS();
+    const Wc = previewCanvasEl._cssW || previewCanvasEl.getBoundingClientRect().width;
+    const Hc = previewCanvasEl._cssH || previewCanvasEl.getBoundingClientRect().height;
+
+    pctx.clearRect(0, 0, Wc, Hc);
+
+    const hasImg = !!(preview.imgData && preview.imgCanvas.width > 0 && preview.imgCanvas.height > 0);
+    pctx.fillStyle = hasImg ? "#000" : "#fff";
+    pctx.fillRect(0, 0, Wc, Hc);
+
+    if (!preview.worldReady) {
+      pctx.fillStyle = "rgba(255,255,255,.65)";
+      pctx.font = "12px " + (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace");
+      pctx.fillText("Preview: render first", 18, 24);
+      return;
+    }
+
+    const sr0 = getSensorRectBaseInPane();
+    const cx = sr0.x + sr0.w * 0.5;
+    const cy = sr0.y + sr0.h * 0.5;
+
+    pctx.save();
+    pctx.imageSmoothingEnabled = true;
+    pctx.imageSmoothingQuality = "high";
+
+    pctx.beginPath();
+    pctx.rect(sr0.x, sr0.y, sr0.w, sr0.h);
+    pctx.clip();
+
+    pctx.translate(cx + preview.view.panX, cy + preview.view.panY);
+    pctx.scale(preview.view.zoom, preview.view.zoom);
+
+    pctx.drawImage(preview.worldCanvas, -sr0.w * 0.5, -sr0.h * 0.5, sr0.w, sr0.h);
+    pctx.restore();
+
+    pctx.save();
+    pctx.lineWidth = 1;
+    pctx.strokeStyle = "rgba(255,255,255,.20)";
+    pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
+
+    const sr = applyViewToSensorRect(sr0, preview.view);
+    pctx.strokeStyle = "rgba(42,110,242,.55)";
+    pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+    pctx.restore();
+  }
+
+  function bindPreviewViewControls() {
+    if (!previewCanvasEl) return;
+    if (previewCanvasEl.dataset._pvBound === "1") return;
+    previewCanvasEl.dataset._pvBound = "1";
+    previewCanvasEl.style.touchAction = "none";
+
+    previewCanvasEl.addEventListener("pointerdown", (e) => {
+      preview.view.dragging = true;
+      preview.view.lastX = e.clientX;
+      preview.view.lastY = e.clientY;
+      previewCanvasEl.setPointerCapture(e.pointerId);
+    });
+
+    previewCanvasEl.addEventListener("pointerup", (e) => {
+      preview.view.dragging = false;
+      try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch (_) {}
+    });
+    previewCanvasEl.addEventListener("pointercancel", (e) => {
+      preview.view.dragging = false;
+      try { previewCanvasEl.releasePointerCapture(e.pointerId); } catch (_) {}
+    });
+
+    previewCanvasEl.addEventListener("pointermove", (e) => {
+      if (!preview.view.dragging) return;
+      const dx = e.clientX - preview.view.lastX;
+      const dy = e.clientY - preview.view.lastY;
+      preview.view.lastX = e.clientX;
+      preview.view.lastY = e.clientY;
+      preview.view.panX += dx;
+      preview.view.panY += dy;
+      drawPreviewViewport();
+    });
+
+    previewCanvasEl.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const delta = Math.sign(e.deltaY);
+      const factor = delta > 0 ? 0.92 : 1.08;
+      preview.view.zoom = Math.max(0.12, Math.min(20, preview.view.zoom * factor));
+      drawPreviewViewport();
+    }, { passive: false });
+
+    previewCanvasEl.addEventListener("dblclick", () => {
+      preview.view.panX = 0;
+      preview.view.panY = 0;
+      preview.view.zoom = 1.0;
+      drawPreviewViewport();
+    });
   }
 
   function renderPreview() {
@@ -2352,8 +2155,8 @@
     if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
 
     const doDOF = !!document.getElementById("optDOF")?.checked;
-    const doCA = !!document.getElementById("optCA")?.checked;
-    const q = String(document.getElementById("renderQuality")?.value || "normal");
+    const doCA  = !!document.getElementById("optCA")?.checked;
+    const q     = String(document.getElementById("renderQuality")?.value || "normal");
 
     const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;
     const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));
@@ -2373,11 +2176,11 @@
     const xStop = stopSurf.vx;
     const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
 
-    const objDist = Number(ui.prevObjDist?.value || 2000);
+    const objDist   = Number(ui.prevObjDist?.value || 2000);
     const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
-    const objH = Number(ui.prevObjH?.value || 1650);
-    const halfObjH = Math.max(1e-3, objH * 0.5);
+    const objH      = Number(ui.prevObjH?.value || 1650);
+    const halfObjH  = Math.max(1e-3, objH * 0.5);
 
     const base = Math.max(64, Number(ui.prevRes?.value || 720));
     const aspect = sensorW / sensorH;
@@ -2415,11 +2218,11 @@
       const lerp = (a, b, t) => a + (b - a) * t;
 
       const c0 = c00.map((v0, i) => lerp(v0, c10[i], tx));
-      const c1 = c01.map((v0, i) => lerp(v0, c11[i], ty));
+      const c1 = c01.map((v0, i) => lerp(v0, c11[i], tx));
       return c0.map((v0, i) => lerp(v0, c1[i], ty));
     }
 
-    const imgAsp = hasImg ? (imgW / imgH) : (16 / 9);
+    const imgAsp = hasImg ? (imgW / imgH) : (16/9);
     const halfObjW = halfObjH * imgAsp;
     function objectMmToUV(xmm, ymm) {
       const u = 0.5 + (xmm / (2 * halfObjW));
@@ -2427,72 +2230,72 @@
       return { u, v };
     }
 
-    function naturalCos4(rS) {
+    function naturalCos4(rS){
       const dirChief0 = normalize3({ x: xStop - (sensorX + 0.05), y: -rS, z: 0 });
       const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
       return Math.pow(cosT, 4);
     }
 
-    function renderFastLUT() {
+    function renderFastLUT(){
       const LUT_N = 900;
-      const WAVES = doCA ? ["c", "d", "g"] : [wavePreset, wavePreset, wavePreset];
+      const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
-      const rObjLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+      const rObjLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
       const transLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
       const naturalLUT = new Float32Array(LUT_N);
 
       const epsX = 0.05;
       const startX = sensorX + epsX;
 
-      function samplePupilDisk(u, v) {
+      function samplePupilDisk(u, v){
         const a = (u * 2 - 1);
         const b = (v * 2 - 1);
         let r, phi;
-        if (a === 0 && b === 0) { r = 0; phi = 0; }
-        else if (Math.abs(a) > Math.abs(b)) {
-          r = a; phi = (Math.PI / 4) * (b / a);
+        if (a === 0 && b === 0){ r = 0; phi = 0; }
+        else if (Math.abs(a) > Math.abs(b)){
+          r = a; phi = (Math.PI/4) * (b/a);
         } else {
-          r = b; phi = (Math.PI / 2) - (Math.PI / 4) * (a / b);
+          r = b; phi = (Math.PI/2) - (Math.PI/4) * (a/b);
         }
         const rr = Math.abs(r) * stopAp;
         return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
       }
 
-      function lookup(ch, absR) {
+      function lookup(ch, absR){
         const t = clamp(absR / rMaxSensor, 0, 1);
         const x = t * (LUT_N - 1);
         const i0 = Math.floor(x);
         const i1 = Math.min(LUT_N - 1, i0 + 1);
         const u = x - i0;
         return {
-          rObj: rObjLUT[ch][i0] * (1 - u) + rObjLUT[ch][i1] * u,
-          trans: transLUT[ch][i0] * (1 - u) + transLUT[ch][i1] * u,
-          nat: naturalLUT[i0] * (1 - u) + naturalLUT[i1] * u,
+          rObj:  rObjLUT[ch][i0]*(1-u) + rObjLUT[ch][i1]*u,
+          trans: transLUT[ch][i0]*(1-u) + transLUT[ch][i1]*u,
+          nat:   naturalLUT[i0]*(1-u) + naturalLUT[i1]*u,
         };
       }
 
-      for (let k = 0; k < LUT_N; k++) {
+      for (let k = 0; k < LUT_N; k++){
         const a = k / (LUT_N - 1);
         const rS = a * rMaxSensor;
         const pS = { x: startX, y: rS, z: 0 };
 
         naturalLUT[k] = naturalCos4(rS);
 
-        for (let ch = 0; ch < 3; ch++) {
+        for (let ch = 0; ch < 3; ch++){
           const wave = WAVES[ch];
 
           {
             const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
             const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wave);
-            if (!trC.vignetted && !trC.tir) {
+            if (!trC.vignetted && !trC.tir){
               const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
               rObjLUT[ch][k] = hitObj ? Math.hypot(hitObj.y, hitObj.z) : 0;
             } else rObjLUT[ch][k] = 0;
           }
 
           let ok = 0, total = 0;
-          for (let iy = 0; iy < lutPupilSqrt; iy++) {
-            for (let ix = 0; ix < lutPupilSqrt; ix++) {
+          for (let iy = 0; iy < lutPupilSqrt; iy++){
+            for (let ix = 0; ix < lutPupilSqrt; ix++){
               const uu = (ix + Math.random()) / lutPupilSqrt;
               const vv = (iy + Math.random()) / lutPupilSqrt;
 
@@ -2501,15 +2304,15 @@
               const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
 
               const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wave);
-              if (tr.vignetted || tr.tir) { total++; continue; }
+              if (tr.vignetted || tr.tir){ total++; continue; }
 
               const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-              if (!hitObj) { total++; continue; }
+              if (!hitObj){ total++; continue; }
 
               ok++; total++;
             }
           }
-          transLUT[ch][k] = total ? (ok / total) : 0;
+          transLUT[ch][k] = total ? (ok/total) : 0;
         }
       }
 
@@ -2522,7 +2325,6 @@
 
       for (let py = 0; py < H; py++) {
         const sy = (0.5 - (py + 0.5) / H) * sensorHv;
-
         for (let px = 0; px < W; px++) {
           const sx = ((px + 0.5) / W - 0.5) * sensorWv;
           const rS = Math.hypot(sx, sy);
@@ -2531,17 +2333,17 @@
           if (!doCA) {
             const L = lookup(1, rS);
             const g = clamp(L.trans * L.nat, 0, 1);
-            if (g < 1e-4) { outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255; continue; }
+            if (g < 1e-4) { outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255; continue; }
 
-            let ox = 0, oy = 0;
+            let ox=0, oy=0;
             if (rS > 1e-9) { const s = L.rObj / rS; ox = sx * s; oy = sy * s; }
             const uv = objectMmToUV(ox, oy);
             const c = sample(uv.u, uv.v);
 
-            outD[idx] = clamp(c[0] * g, 0, 255);
-            outD[idx + 1] = clamp(c[1] * g, 0, 255);
-            outD[idx + 2] = clamp(c[2] * g, 0, 255);
-            outD[idx + 3] = 255;
+            outD[idx]   = clamp(c[0] * g, 0, 255);
+            outD[idx+1] = clamp(c[1] * g, 0, 255);
+            outD[idx+2] = clamp(c[2] * g, 0, 255);
+            outD[idx+3] = 255;
             continue;
           }
 
@@ -2554,11 +2356,11 @@
           const gb = clamp(Lb.trans * Lb.nat, 0, 1);
 
           if (gr < 1e-4 && gg < 1e-4 && gb < 1e-4) {
-            outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255; continue;
+            outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255; continue;
           }
 
-          function objXY(L) {
-            if (rS <= 1e-9) return { ox: 0, oy: 0 };
+          function objXY(L){
+            if (rS <= 1e-9) return { ox:0, oy:0 };
             const s = L.rObj / rS;
             return { ox: sx * s, oy: sy * s };
           }
@@ -2567,10 +2369,10 @@
           const pg = objXY(Lg); const uvg = objectMmToUV(pg.ox, pg.oy); const cg = sample(uvg.u, uvg.v);
           const pb = objXY(Lb); const uvb = objectMmToUV(pb.ox, pb.oy); const cb = sample(uvb.u, uvb.v);
 
-          outD[idx] = clamp(cr[0] * gr, 0, 255);
-          outD[idx + 1] = clamp(cg[1] * gg, 0, 255);
-          outD[idx + 2] = clamp(cb[2] * gb, 0, 255);
-          outD[idx + 3] = 255;
+          outD[idx]   = clamp(cr[0] * gr, 0, 255);
+          outD[idx+1] = clamp(cg[1] * gg, 0, 255);
+          outD[idx+2] = clamp(cb[2] * gb, 0, 255);
+          outD[idx+3] = 255;
         }
       }
 
@@ -2579,7 +2381,7 @@
       drawPreviewViewport();
     }
 
-    function renderDOFPath() {
+    function renderDOFPath(){
       preview.worldCanvas.width = W;
       preview.worldCanvas.height = H;
 
@@ -2590,33 +2392,32 @@
       const epsX = 0.05;
       const startX = sensorX + epsX;
 
-      function samplePupilDisk(u, v) {
+      function samplePupilDisk(u, v){
         const a = (u * 2 - 1);
         const b = (v * 2 - 1);
         let r, phi;
-        if (a === 0 && b === 0) { r = 0; phi = 0; }
-        else if (Math.abs(a) > Math.abs(b)) {
-          r = a; phi = (Math.PI / 4) * (b / a);
+        if (a === 0 && b === 0){ r = 0; phi = 0; }
+        else if (Math.abs(a) > Math.abs(b)){
+          r = a; phi = (Math.PI/4) * (b/a);
         } else {
-          r = b; phi = (Math.PI / 2) - (Math.PI / 4) * (a / b);
+          r = b; phi = (Math.PI/2) - (Math.PI/4) * (a/b);
         }
         const rr = Math.abs(r) * stopAp;
         return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
       }
 
-      const WAVES = doCA ? ["c", "d", "g"] : [wavePreset, wavePreset, wavePreset];
+      const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
 
       let y = 0;
       const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 24 : 16);
 
-      function step() {
+      function step(){
         const yEnd = Math.min(H, y + rowsPerChunk);
-        setPreviewProgress(y / H, `DOF ${Math.round((y / H) * 100)}%`);
+        setPreviewProgress(y / H, `DOF ${Math.round((y/H)*100)}%`);
 
-        for (; y < yEnd; y++) {
+        for (; y < yEnd; y++){
           const sy = (0.5 - (y + 0.5) / H) * sensorHv;
-
-          for (let x = 0; x < W; x++) {
+          for (let x = 0; x < W; x++){
             const sx = ((x + 0.5) / W - 0.5) * sensorWv;
             const rS = Math.hypot(sx, sy);
 
@@ -2625,7 +2426,7 @@
             let accR = 0, accG = 0, accB = 0;
             let wSum = 0;
 
-            for (let s = 0; s < spp; s++) {
+            for (let s = 0; s < spp; s++){
               const jx = (Math.random() - 0.5) * (sensorWv / W) * 0.6;
               const jy = (Math.random() - 0.5) * (sensorHv / H) * 0.6;
               const pSj = { x: startX, y: sx + jx, z: sy + jy };
@@ -2634,10 +2435,10 @@
               const target = { x: xStop, y: pp.y, z: pp.z };
               const dir0 = normalize3({ x: target.x - pSj.x, y: target.y - pSj.y, z: target.z - pSj.z });
 
-              let colLin = [0, 0, 0];
+              let colLin = [0,0,0];
               let okAny = false;
 
-              for (let ch = 0; ch < 3; ch++) {
+              for (let ch = 0; ch < 3; ch++){
                 const wave = WAVES[ch];
                 const tr = traceRayReverse3D({ p: pSj, d: dir0 }, lens.surfaces, wave);
                 if (tr.vignetted || tr.tir) continue;
@@ -2662,16 +2463,13 @@
             }
 
             const idx = (y * W + x) * 4;
-            if (wSum <= 1e-9) {
-              outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+            if (wSum <= 1e-9){
+              outD[idx]=0; outD[idx+1]=0; outD[idx+2]=0; outD[idx+3]=255;
             } else {
-              const r = accR / wSum;
-              const g = accG / wSum;
-              const b = accB / wSum;
-              outD[idx] = linToSrgb(r);
-              outD[idx + 1] = linToSrgb(g);
-              outD[idx + 2] = linToSrgb(b);
-              outD[idx + 3] = 255;
+              outD[idx]   = linToSrgb(accR / wSum);
+              outD[idx+1] = linToSrgb(accG / wSum);
+              outD[idx+2] = linToSrgb(accB / wSum);
+              outD[idx+3] = 255;
             }
           }
         }
@@ -2681,14 +2479,13 @@
         drawPreviewViewport();
 
         if (y < H) requestAnimationFrame(step);
-        else { hidePreviewProgress(); }
+        else hidePreviewProgress();
       }
 
       requestAnimationFrame(step);
     }
 
     preview.worldReady = false;
-    preview.dirtyKey = "";
 
     if (!doDOF) {
       hidePreviewProgress();
@@ -2698,289 +2495,7 @@
     }
   }
 
-  // -------------------- toolbar actions: Scale → FL, Set T --------------------
-  function scaleToTargetFocal() {
-    const wavePreset = ui.wavePreset?.value || "d";
-    const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
-    if (!Number.isFinite(cur) || cur <= 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Scale→FL: current EFL not solvable (try a valid stop + lens).";
-      return;
-    }
-
-    const target = num(prompt("Target focal length (mm)?", String(Math.round(cur))), cur);
-    if (!Number.isFinite(target) || target <= 0) return;
-
-    const k = target / cur;
-
-    for (let i = 0; i < lens.surfaces.length; i++) {
-      const s = lens.surfaces[i];
-      const t = String(s.type).toUpperCase();
-      if (t !== "OBJ" && t !== "IMS") s.t = Number(s.t || 0) * k;
-      if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
-    }
-
-    computeVertices(lens.surfaces);
-    clampAllApertures(lens.surfaces);
-    buildTable();
-    renderAll();
-    scheduleRenderPreview();
-
-    if (ui.footerWarn) ui.footerWarn.textContent = `Scale→FL: EFL ${cur.toFixed(2)} → target ${target.toFixed(2)} (k=${k.toFixed(4)}).`;
-  }
-
-  function setTargetTStop() {
-    const wavePreset = ui.wavePreset?.value || "d";
-    const { efl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-    if (!Number.isFinite(efl) || efl <= 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: EFL unknown (try Scale→FL or fix geometry).";
-      return;
-    }
-
-    const stopIdx = findStopSurfaceIndex(lens.surfaces);
-    if (stopIdx < 0) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Set T: no STOP surface marked.";
-      return;
-    }
-
-    const currentT = estimateTStopApprox(efl, lens.surfaces);
-    const targetT = num(prompt("Target T-stop? (approx)", currentT ? currentT.toFixed(2) : "2.00"), currentT || 2.0);
-    if (!Number.isFinite(targetT) || targetT <= 0) return;
-
-    const newAp = efl / (2 * targetT);
-    lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
-
-    clampAllApertures(lens.surfaces);
-    buildTable();
-    renderAll();
-    scheduleRenderPreview();
-
-    if (ui.footerWarn) ui.footerWarn.textContent = `Set T: stop ap → ${lens.surfaces[stopIdx].ap.toFixed(2)}mm (semi-diam) for T${targetT.toFixed(2)} @ EFL ${efl.toFixed(2)}mm.`;
-  }
-
-  // -------------------- New Lens modal --------------------
-  function openNewLensModal() {
-    if (!ui.newLensModal) return;
-    ui.newLensModal.classList.remove("hidden");
-  }
-  function closeNewLensModal() {
-    if (!ui.newLensModal) return;
-    ui.newLensModal.classList.add("hidden");
-  }
-
-  function makeTemplate(templateName) {
-    const t = String(templateName || "blank");
-    if (t === "doubleGauss") return omit50ConceptV1();
-    if (t === "tessar") {
-      return sanitizeLens({
-        name: "Tessar-ish (simple)",
-        surfaces: [
-          { type: "OBJ", R: 0, t: 0, ap: 60, glass: "AIR", stop: false },
-          { type: "1", R: 70, t: 4.5, ap: 18, glass: "BK7", stop: false },
-          { type: "2", R: -35, t: 1.2, ap: 18, glass: "AIR", stop: false },
-          { type: "STOP", R: 0, t: 6.0, ap: 8, glass: "AIR", stop: true },
-          { type: "4", R: -50, t: 3.8, ap: 16, glass: "F2", stop: false },
-          { type: "5", R: 120, t: 18, ap: 16, glass: "AIR", stop: false },
-          { type: "IMS", R: 0, t: 0, ap: 12.77, glass: "AIR", stop: false },
-        ],
-      });
-    }
-    if (t === "omit50v1") return omit50ConceptV1();
-    return sanitizeLens({
-      name: "Blank",
-      surfaces: [
-        { type: "OBJ", R: 0.0, t: 0.0, ap: 60.0, glass: "AIR", stop: false },
-        { type: "STOP", R: 0.0, t: 20.0, ap: 8.0, glass: "AIR", stop: true },
-        { type: "IMS", R: 0.0, t: 0.0, ap: 12.77, glass: "AIR", stop: false },
-      ],
-    });
-  }
-
-  function createNewLensFromModal() {
-    const template = ui.nlTemplate?.value || "blank";
-    const targetF = num(ui.nlFocal?.value, 50);
-    const targetT = num(ui.nlT?.value, 2.8);
-    const stopPos = ui.nlStopPos?.value || "keep";
-    const name = (ui.nlName?.value || "New lens").trim();
-
-    let L = sanitizeLens(makeTemplate(template));
-    L.name = name || L.name;
-
-    if (stopPos === "middle") {
-      const stopIdx = findStopSurfaceIndex(L.surfaces);
-      if (stopIdx >= 0) L.surfaces[stopIdx].stop = false;
-      const mid = Math.max(1, Math.min(L.surfaces.length - 2, Math.floor(L.surfaces.length / 2)));
-      L.surfaces[mid].stop = true;
-      L.surfaces[mid].type = "STOP";
-      const f = findStopSurfaceIndex(L.surfaces);
-      L.surfaces.forEach((s, i) => { if (i !== f) s.stop = false; });
-    }
-
-    loadLens(L);
-
-    {
-      const wavePreset = ui.wavePreset?.value || "d";
-      const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
-      if (Number.isFinite(cur) && cur > 0 && Number.isFinite(targetF) && targetF > 0) {
-        const k = targetF / cur;
-        for (let i = 0; i < lens.surfaces.length; i++) {
-          const s = lens.surfaces[i];
-          const tt = String(s.type).toUpperCase();
-          if (tt !== "OBJ" && tt !== "IMS") s.t = Number(s.t || 0) * k;
-          if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
-        }
-      }
-    }
-
-    {
-      const wavePreset = ui.wavePreset?.value || "d";
-      const { efl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-      const stopIdx = findStopSurfaceIndex(lens.surfaces);
-      if (stopIdx >= 0 && Number.isFinite(efl) && efl > 0 && Number.isFinite(targetT) && targetT > 0) {
-        const newAp = efl / (2 * targetT);
-        lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
-      }
-    }
-
-    clampAllApertures(lens.surfaces);
-    buildTable();
-    renderAll();
-    scheduleRenderPreview();
-    closeNewLensModal();
-  }
-
-  // -------------------- fullscreen helpers --------------------
-  async function togglePaneFullscreen(pane) {
-    if (!pane) return;
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await pane.requestFullscreen();
-    } catch (e) {
-      if (ui.footerWarn) ui.footerWarn.textContent = `Fullscreen failed: ${e.message}`;
-    }
-  }
-
-  async function togglePreviewFullscreen() {
-    await togglePaneFullscreen(ui.previewPane);
-  }
-  async function toggleRaysFullscreen() {
-    await togglePaneFullscreen(ui.raysPane);
-  }
-
-  // -------------------- buttons --------------------
-  on("#btnAdd", "click", () => {
-    insertAfterSelected({ type: "", R: 0, t: 5.0, ap: 12.0, glass: "AIR", stop: false });
-  });
-
-  on("#btnAddElement", "click", () => {
-    if (openElementModal()) return;
-    if (ui.footerWarn) ui.footerWarn.textContent = "Add Element modal not found (#elementModal etc).";
-  });
-
-  on("#btnNew", "click", () => openNewLensModal());
-
-  on("#btnDuplicate", "click", () => {
-    clampSelected();
-    const s = lens.surfaces[selectedIndex];
-    if (!s) return;
-    const copy = clone(s);
-    lens.surfaces.splice(selectedIndex + 1, 0, copy);
-    selectedIndex += 1;
-    buildTable(); applySensorToIMS(); renderAll(); scheduleRenderPreview();
-  });
-
-  on("#btnMoveUp", "click", () => {
-    clampSelected();
-    if (selectedIndex <= 0) return;
-    const a = lens.surfaces[selectedIndex];
-    lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex - 1];
-    lens.surfaces[selectedIndex - 1] = a;
-    selectedIndex -= 1;
-    buildTable(); applySensorToIMS(); renderAll(); scheduleRenderPreview();
-  });
-
-  on("#btnMoveDown", "click", () => {
-    clampSelected();
-    if (selectedIndex >= lens.surfaces.length - 1) return;
-    const a = lens.surfaces[selectedIndex];
-    lens.surfaces[selectedIndex] = lens.surfaces[selectedIndex + 1];
-    lens.surfaces[selectedIndex + 1] = a;
-    selectedIndex += 1;
-    buildTable(); applySensorToIMS(); renderAll(); scheduleRenderPreview();
-  });
-
-  on("#btnRemove", "click", () => {
-    clampSelected();
-    if (lens.surfaces.length <= 2) return;
-    if (isProtectedIndex(selectedIndex)) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "OBJ/IMS kun je niet deleten.";
-      return;
-    }
-    lens.surfaces.splice(selectedIndex, 1);
-    selectedIndex = Math.max(0, selectedIndex - 1);
-    buildTable(); applySensorToIMS(); renderAll(); scheduleRenderPreview();
-  });
-
-  on("#btnSave", "click", () => {
-    const payload = JSON.stringify(lens, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = (lens.name || "lens") + ".json";
-    a.click();
-    URL.revokeObjectURL(url);
-    toast("Saved JSON");
-  });
-
-  on("#btnAutoFocus", "click", () => autoFocus());
-  on("#btnLoadOmit", "click", () => { loadLens(omit50ConceptV1()); toast("Loaded OMIT preset"); });
-  on("#btnLoadDemo", "click", () => { loadLens(demoLensSimple()); toast("Loaded demo lens"); });
-
-  on("#btnScaleToFocal", "click", () => scaleToTargetFocal());
-  on("#btnSetTStop", "click", () => setTargetTStop());
-
-  // New Lens modal bindings
-  if (ui.newLensModal) {
-    on("#nlClose", "click", (e) => { e.preventDefault(); closeNewLensModal(); });
-    on("#nlCreate", "click", (e) => { e.preventDefault(); createNewLensFromModal(); });
-    ui.newLensModal.addEventListener("mousedown", (e) => { if (e.target === ui.newLensModal) closeNewLensModal(); });
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && ui.newLensModal && !ui.newLensModal.classList.contains("hidden")) closeNewLensModal();
-    });
-  }
-
-  if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
-  if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
-  if (ui.btnRaysFS) on("#btnRaysFS", "click", () => toggleRaysFullscreen());
-
-  window.addEventListener("keydown", (e) => {
-    const tag = (e.target?.tagName || "").toUpperCase();
-    const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
-    if (typing) return;
-
-    if (e.key?.toLowerCase() === "p") togglePreviewFullscreen();
-    if (e.key?.toLowerCase() === "r") toggleRaysFullscreen();
-  });
-
-  document.addEventListener("fullscreenchange", () => {
-    resizeCanvasToCSS();
-    resizePreviewCanvasToCSS();
-    renderAll();
-    if (preview.worldReady) drawPreviewViewport();
-    else if (preview.ready) scheduleRenderPreview();
-  });
-
-  window.addEventListener("resize", () => {
-    preview.view.panX = 0;
-    preview.view.panY = 0;
-    preview.view.zoom = 1.0;
-
-    scheduleRenderAll();
-
-    if (preview.worldReady) drawPreviewViewport();
-    else if (preview.ready) scheduleRenderPreview();
-  });
-
+  // -------------------- preview image load --------------------
   function setPreviewImage(im) {
     preview.img = im;
 
@@ -3019,53 +2534,16 @@
 
       const url = URL.createObjectURL(f);
       const im = new Image();
-
-      im.onload = () => {
-        setPreviewImage(im);
-        URL.revokeObjectURL(url);
-      };
+      im.onload = () => { setPreviewImage(im); URL.revokeObjectURL(url); };
       im.onerror = () => {
         URL.revokeObjectURL(url);
         if (ui.footerWarn) ui.footerWarn.textContent = "Preview image load failed.";
       };
-
       im.src = url;
     });
   }
 
-  // -------------------- file load --------------------
-  on("#fileLoad", "change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const txt = await file.text();
-      const obj = JSON.parse(txt);
-      if (!obj || !Array.isArray(obj.surfaces)) throw new Error("Invalid JSON format.");
-
-      if (obj.glass_note && typeof obj.glass_note === "object") {
-        for (const [k, v] of Object.entries(obj.glass_note)) {
-          const nd = Number(v?.nd);
-          if (Number.isFinite(nd)) {
-            GLASS_DB[k] = GLASS_DB[k] || { nd, Vd: 50.0 };
-            GLASS_DB[k].nd = nd;
-            if (!Number.isFinite(GLASS_DB[k].Vd)) GLASS_DB[k].Vd = 50.0;
-          }
-        }
-      }
-
-      loadLens(obj);
-      scheduleRenderAll();
-      scheduleRenderPreview();
-      toast("Loaded JSON");
-    } catch (err) {
-      if (ui.footerWarn) ui.footerWarn.textContent = `Load failed: ${err?.message || err}`;
-      console.error(err);
-    } finally {
-      if (ui.fileLoad) ui.fileLoad.value = "";
-    }
-  });
-
-  // -------------------- sensor UI bindings --------------------
+  // -------------------- Controls --------------------
   function resetPreviewView() {
     preview.view.panX = 0;
     preview.view.panY = 0;
@@ -3074,7 +2552,7 @@
 
   function bindControlRerenders() {
     const all = [
-      ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.lensFocus, ui.renderScale,
+      ui.wavePreset, ui.lensFocus, ui.renderScale,
       ui.sensorW, ui.sensorH, ui.sensorPreset,
       ui.focusMode, ui.sensorOffset,
     ].filter(Boolean);
@@ -3082,26 +2560,15 @@
     for (const el of all) {
       el.addEventListener("input", () => {
         const isSensor = (el === ui.sensorW || el === ui.sensorH);
-        if (isSensor) {
-          applySensorToIMS();
-          resetPreviewView();
-        }
+        if (isSensor) { applySensorToIMS(); resetPreviewView(); }
         scheduleRenderAll();
         scheduleRenderPreview();
       });
 
       el.addEventListener("change", () => {
-        if (el === ui.sensorPreset) {
-          applyPreset(ui.sensorPreset.value);
-          resetPreviewView();
-        }
-
+        if (el === ui.sensorPreset) { applyPreset(ui.sensorPreset.value); resetPreviewView(); }
         const isSensor = (el === ui.sensorW || el === ui.sensorH);
-        if (isSensor) {
-          applySensorToIMS();
-          resetPreviewView();
-        }
-
+        if (isSensor) { applySensorToIMS(); resetPreviewView(); }
         scheduleRenderAll();
         scheduleRenderPreview();
       });
@@ -3144,6 +2611,7 @@
     }
   }
 
+  // -------------------- init --------------------
   async function init() {
     populateSensorPresetsSelect();
     if (ui.sensorPreset) ui.sensorPreset.value = "Fuji GFX (MF)";
@@ -3151,7 +2619,6 @@
 
     await loadDefaultLensFromUrl(DEFAULT_LENS_URL);
 
-    bindViewControls();
     bindPreviewViewControls();
     bindControlRerenders();
 
