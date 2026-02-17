@@ -1701,107 +1701,134 @@ function setIMSVxTo(sensorX){
   lens.surfaces[imsIdx].vx = sensorX;
 }
    
-  function renderAll() {
-    if (!canvas || !ctx) return;
-    if (ui.footerWarn) ui.footerWarn.textContent = "";
+function renderAll() {
+  if (!canvas || !ctx) return;
+  if (ui.footerWarn) ui.footerWarn.textContent = "";
 
-    const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
+  // ---- UI reads (WAS MISSING) ----
+  const fieldAngle = Number(ui.fieldAngle?.value || 0);
+  const rayCount   = Number(ui.rayCount?.value || 31);
+  const wavePreset = ui.wavePreset?.value || "d";
 
-const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
-computeVertices(lens.surfaces, lensShift);
+  const { w: sensorW, h: sensorH, halfH } = getSensorWH();
 
-const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+  const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
 
-// IMS vlak mee verplaatsen als cam focus actief is
-setIMSVxTo(sensorX);
+  const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
+  computeVertices(lens.surfaces, lensShift);
 
-    const plX = -PL_FFD;
+  const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
 
-    const frontVx = firstPhysicalVertexX(lens.surfaces);
-    const lenToFlange = plX - frontVx;
-    const totalLen = lenToFlange + PL_LENS_LIP;
-    const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
-      ? `LEN≈ ${totalLen.toFixed(1)}mm (front→PL + mount)`
-      : `LEN≈ —`;
+  // IMS vlak mee verplaatsen als cam focus actief is
+  setIMSVxTo(sensorX);
 
-    const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
+  // ---- PL reference ----
+  const plX = -PL_FFD;
 
-    const vCount = traces.filter((t) => t.vignetted).length;
-    const tirCount = traces.filter((t) => t.tir).length;
-    const vigPct = Math.round((vCount / traces.length) * 100);
+  // ---- rays ----
+  const rays = buildRays(lens.surfaces, fieldAngle, rayCount);
+  const traces = rays.map((r) => traceRayForward(clone(r), lens.surfaces, wavePreset));
 
-    const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-    const T = estimateTStopApprox(efl, lens.surfaces);
+  const vCount = traces.filter((t) => t.vignetted).length;
+  const tirCount = traces.filter((t) => t.tir).length;
+  const vigPct = traces.length ? Math.round((vCount / traces.length) * 100) : 0;
 
-    const fov = computeFovDeg(efl, sensorW, sensorH);
-    const fovTxt = !fov
-      ? "FOV: —"
-      : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
+  // ---- EFL/BFL/T ----
+  const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
+  const T = estimateTStopApprox(efl, lens.surfaces);
 
-    const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
-    const covMode = "v";
-    const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+  // ---- FOV/COV ----
+  const fov = computeFovDeg(efl, sensorW, sensorH);
+  const fovTxt = !fov
+    ? "FOV: —"
+    : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-    const covTxt = !fov
-      ? "COV(V): —"
-      : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+  const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
+  const covMode = "v";
+  const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
 
-    const rearVx = lastPhysicalVertexX(lens.surfaces);
-    const intrusion = rearVx - plX;
-    const rearTxt = (intrusion > 0)
-      ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
-      : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
+  const covTxt = !fov
+    ? "COV(V): —"
+    : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
-    if (ui.efl) ui.efl.textContent = `Focal Length: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
-    if (ui.fov) ui.fov.textContent = fovTxt;
-    if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
+  // ---- rear intrusion vs PL ----
+  const rearVx = lastPhysicalVertexX(lens.surfaces);
+  const intrusion = rearVx - plX;
+  const rearTxt = (intrusion > 0)
+    ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
+    : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
 
-    if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
-    if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
-    if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
-    if (ui.fovTop) ui.fovTop.textContent = fovTxt;
-    if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
+  // ---- approx length front->PL ----
+  const frontVx = firstPhysicalVertexX(lens.surfaces);
+  const lenToFlange = plX - frontVx;
+  const totalLen = lenToFlange + PL_LENS_LIP;
+  const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
+    ? `LEN≈ ${totalLen.toFixed(1)}mm (front→PL + mount)`
+    : `LEN≈ —`;
 
-    if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+  // ---- badges ----
+  if (ui.efl) ui.efl.textContent = `Focal Length: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bfl) ui.bfl.textContent = `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+  if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
+  if (ui.fov) ui.fov.textContent = fovTxt;
+  if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
 
-    if (ui.status) {
-      ui.status.textContent = `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
-    }
-    if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+  if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
+  if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
+  if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
+  if (ui.fovTop) ui.fovTop.textContent = fovTxt;
+  if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-    resizeCanvasToCSS();
-const r = canvas.getBoundingClientRect();
-drawBackgroundCSS(r.width, r.height);
-     
-const world = makeWorldTransform();
-drawAxes(world);
+  if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
-    drawRuler(world, 0, -200);
-
-    const xMinPL = Math.min(frontVx - 20, plX - 20);
-    drawRulerFrom(world, plX, xMinPL, null, "", +12);
-
-    drawPLFlange(world, plX);
-    drawLens(world, lens.surfaces);
-    drawStop(world, lens.surfaces);
-    drawRays(world, traces, sensorX);
-    drawPLMountCutout(world, plX);
-    drawSensor(world, sensorX, halfH);
-
-    const eflTxt = efl == null ? "—" : efl.toFixed(2) + "mm";
-    const tTxt = T == null ? "—" : "T" + T.toFixed(2);
-   const focusTxt = (focusMode === "cam")
-  ? `CamFocus ${sensorX.toFixed(2)}mm`
-  : `LensFocus ${lensShift.toFixed(2)}mm`;
-...
-focusTxt,
-    ];
-    drawTitleOverlay(titleParts);
+  if (ui.status) {
+    ui.status.textContent =
+      `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
   }
+  if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+
+  // ---- draw ----
+  resizeCanvasToCSS();
+  const r = canvas.getBoundingClientRect();
+  drawBackgroundCSS(r.width, r.height);
+
+  const world = makeWorldTransform();
+  drawAxes(world);
+
+  // rulers
+  drawRuler(world, 0, -200);
+  const xMinPL = Math.min(frontVx - 20, plX - 20);
+  drawRulerFrom(world, plX, xMinPL, null, "", +12);
+
+  // PL + lens + rays + sensor
+  drawPLFlange(world, plX);
+  drawLens(world, lens.surfaces);
+  drawStop(world, lens.surfaces);
+  drawRays(world, traces, sensorX);
+  drawPLMountCutout(world, plX);
+  drawSensor(world, sensorX, halfH);
+
+  // ---- title overlay ----
+  const eflTxt = efl == null ? "—" : `${efl.toFixed(2)}mm`;
+  const tTxt   = T == null ? "—" : `T${T.toFixed(2)}`;
+  const focusTxt = (focusMode === "cam")
+    ? `CamFocus ${sensorX.toFixed(2)}mm`
+    : `LensFocus ${lensShift.toFixed(2)}mm`;
+
+  const titleParts = [
+    lens?.name || "Lens",
+    `EFL ${eflTxt}`,
+    `BFL ${bfl == null ? "—" : bfl.toFixed(2) + "mm"}`,
+    tTxt,
+    fovTxt,
+    covTxt,
+    rearTxt,
+    lenTxt,
+    focusTxt,
+  ];
+  drawTitleOverlay(titleParts);
+}
 
   // -------------------- view controls (RAYS canvas) --------------------
   function bindViewControls() {
@@ -2942,10 +2969,11 @@ function resetPreviewView() {
 }
 
 function bindControlRerenders() {
-  const all = [
-    ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.lensFocus, ui.renderScale,
-    ui.sensorW, ui.sensorH, ui.sensorPreset,
-  ].filter(Boolean);
+const all = [
+  ui.fieldAngle, ui.rayCount, ui.wavePreset, ui.lensFocus, ui.renderScale,
+  ui.sensorW, ui.sensorH, ui.sensorPreset,
+  ui.focusMode, ui.sensorOffset,   // <-- toevoegen
+].filter(Boolean);
 
   for (const el of all) {
     el.addEventListener("input", () => {
@@ -2982,15 +3010,7 @@ function bindControlRerenders() {
     el.addEventListener("change", () => scheduleRenderPreview());
   }
 
-  // focusMode: cam focus disabled here
-  if (ui.focusMode) {
-    ui.focusMode.addEventListener("change", () => {
-      if (ui.focusMode.value === "cam") {
-        toast("Cam focus is disabled in this build (sensor plane fixed). Use Lens focus.");
-        ui.focusMode.value = "lens";
-      }
-    });
-  }
+  
 }
 async function loadDefaultLensFromUrl(url) {
   try {
