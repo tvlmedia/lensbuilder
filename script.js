@@ -1926,6 +1926,7 @@ function drawPreviewViewport() {
 
   // sensor kader (binnen de pane)
   const sr0 = getSensorRectBaseInPane();
+  const sr  = applyViewToSensorRect(sr0, preview.view);
 
   // worldCanvas -> pane (met padding), behoud aspect van worldCanvas
   const pad = 14;
@@ -1952,16 +1953,16 @@ function drawPreviewViewport() {
  
 );
 
-pctx.save();
-pctx.lineWidth = 1;
+ pctx.save();
+  pctx.lineWidth = 1;
 
-pctx.strokeStyle = "rgba(255,255,255,.20)";
-pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
+  pctx.strokeStyle = "rgba(255,255,255,.20)";
+  pctx.strokeRect(sr0.x, sr0.y, sr0.w, sr0.h);
 
-pctx.strokeStyle = "rgba(42,110,242,.55)";
-pctx.strokeRect(sr.x, sr.y, sr.w, sr.h); // <-- sr is undefined
-   
-pctx.restore();
+  pctx.strokeStyle = "rgba(42,110,242,.55)";
+  pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+
+  pctx.restore();
 }
 
   function bindPreviewViewControls() {
