@@ -450,3 +450,39 @@ canvas{
   line-height:1;
   padding:10px 12px;
 }
+/* ---- Preview render progress (DOF/CA) ---- */
+#previewProgress{
+  position:absolute;
+  left:18px;
+  right:18px;
+  bottom:18px;
+  height:10px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(0,0,0,.35);
+  overflow:hidden;
+  pointer-events:none;
+  opacity:0;
+  transform:translateY(6px);
+  transition:opacity .18s ease, transform .18s ease;
+  z-index:5;
+}
+#previewProgress.isOn{
+  opacity:1;
+  transform:translateY(0);
+}
+#previewProgressBar{
+  height:100%;
+  width:0%;
+  background:rgba(42,110,242,.75);
+}
+#previewProgressText{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:16px;
+  text-align:center;
+  font-size:12px;
+  color:rgba(255,255,255,.82);
+  text-shadow:0 1px 10px rgba(0,0,0,.65);
+}
