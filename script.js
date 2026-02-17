@@ -55,11 +55,13 @@ function resizeCanvasToCSS() {
 // guard: fullscreen/layout transitions can briefly report 0x0
 if (cssW < 10 || cssH < 10) {
   // retry next frame until layout is stable
-  requestAnimationFrame(() => {
-    resizePreviewCanvasToCSS();
-    if (preview.worldReady) drawPreviewViewport();
-  });
-  return;
+ requestAnimationFrame(() => {
+  resizeCanvasToCSS();               // ✅ retry rays canvas
+  resizePreviewCanvasToCSS();        // ✅ retry preview canvas
+  renderAll();                       // ✅ redraw rays view zodra sizes terug zijn
+  if (preview.worldReady) drawPreviewViewport();
+});
+return;
 }
 
   _lastCanvasCSS.w = cssW;
