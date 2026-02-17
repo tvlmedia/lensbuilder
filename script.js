@@ -97,6 +97,13 @@
     btnPreviewFS: $("#btnPreviewFS"),
     previewPane: $("#previewPane"),
 
+
+prevDofOn: $("#prevDofOn"),
+prevSamples: $("#prevSamples"),
+prevCaOn: $("#prevCaOn"),
+prevProgressive: $("#prevProgressive"),
+btnCancelPreview: $("#btnCancelPreview"),
+     
     raysPane: $("#raysPane"),
     btnRaysFS: $("#btnRaysFS"),
 
@@ -2324,6 +2331,31 @@ pctx.restore();
     });
   }
 
+
+function waveForChannel(ch){
+  // simpele mapping: R=c (red), G=d (yellow), B=g (blue)
+  if (ch === 0) return "c";
+  if (ch === 2) return "g";
+  return "d";
+}
+
+function samplePupilDiskConcentric(u, v, stopAp){
+  // concentric map (zoals je al hebt, maar als helper)
+  const a = (u * 2 - 1);
+  const b = (v * 2 - 1);
+  let r, phi;
+  if (a === 0 && b === 0){ r = 0; phi = 0; }
+  else if (Math.abs(a) > Math.abs(b)){
+    r = a;
+    phi = (Math.PI/4) * (b/a);
+  } else {
+    r = b;
+    phi = (Math.PI/2) - (Math.PI/4) * (a/b);
+  }
+  const rr = Math.abs(r) * stopAp;
+  return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
+}
+   
  // -------------------- preview rendering (split-view) --------------------
 function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
