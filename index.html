@@ -6,15 +6,10 @@
   <meta name="color-scheme" content="dark light" />
   <meta name="theme-color" content="#0b0f16" />
   <title>Meridional Raytracer (2D) — TVL Lens Builder</title>
-
   <link rel="stylesheet" href="./style.css" />
-
-  <!-- (optioneel) favicon: zet je eigen pad -->
-  <!-- <link rel="icon" href="./favicon.png" /> -->
 </head>
 
 <body>
-  <!-- a11y: skip link -->
   <a class="skipLink" href="#appMain">Skip to main</a>
 
   <header class="topbar" role="banner">
@@ -66,7 +61,6 @@
         </div>
       </section>
 
-      <!-- controls + table in 1 scroll container -->
       <div class="leftScroll">
         <section class="controls" aria-label="Lens and render controls">
           <div class="controlGrid">
@@ -127,7 +121,6 @@
               <input id="renderScale" type="range" min="0.6" max="2.6" step="0.05" value="1.25" />
             </div>
 
-            <!-- PREVIEW CONTROLS -->
             <div class="ctrl two">
               <label for="prevImg">Preview image</label>
               <input id="prevImg" type="file" accept="image/*" />
@@ -222,14 +215,12 @@
 
       <div class="canvasFrame">
         <div class="canvasSplit" id="tvlCanvasSplit">
-          <!-- LEFT: Rays -->
           <div class="pane" id="raysPane">
             <div class="paneTag">Rays</div>
             <button id="btnRaysFS" class="fsBtn" type="button" title="Full Screen (R)">Full Screen (R)</button>
             <canvas id="canvas"></canvas>
           </div>
 
-          <!-- RIGHT: Preview -->
           <div class="pane" id="previewPane">
             <div class="paneTag">Preview</div>
             <button id="btnPreviewFS" class="fsBtn" type="button" title="Full Screen (P)">Full Screen (P)</button>
@@ -432,7 +423,6 @@
     </div>
   </div>
 
-  <!-- “toasts” / messages (optioneel; script kan dit gebruiken) -->
   <div id="toastHost" class="toastHost" aria-live="polite" aria-atomic="true"></div>
 
   <script src="./script.js"></script>
