@@ -2364,7 +2364,8 @@ const rMax = Math.hypot(halfWv, halfHv); // diag/2 in mm (met OV)
 
 for (let k = 0; k < LUT_N; k++) {
   const r = (k / (LUT_N - 1)) * rMax; // ✅ radius in mm
-  const y = Math.min(r, halfHv);      // ✅ clamp naar top-edge (belangrijk!)
+  // ✅ map radius (0..diag/2) to a representative Y inside the sensor rectangle
+const y = (rMax > 1e-9) ? (r * (halfHv / rMax)) : 0;
 
   // Chief ray door stop center
   let rObjVals = [];
