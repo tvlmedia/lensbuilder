@@ -29,11 +29,9 @@ body{
   font-family:var(--sans);
   background:var(--bg);
   color:var(--text);
-
-  /* was: overflow:hidden; */
   overflow:hidden;
 
-  /* NEW: laat layout de hoogte automatisch verdelen */
+  /* belangrijk: topbar + main verdelen hoogte goed */
   display:flex;
   flex-direction:column;
   min-height:100vh;
@@ -51,45 +49,67 @@ body{
 }
 .skipLink:focus{ left:10px; }
 
-/* topbar */
-.topbar{
-  /* was: height:72px; */
-  min-height:72px;
+/* ===========================
+   TOPBAR
+   =========================== */
 
+.topbar{
+  min-height:72px;
   display:flex;
   align-items:center;
   justify-content:space-between;
   padding:12px 14px;
   gap:14px;
+
   background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,0));
   border-bottom:1px solid var(--stroke);
 
-  position: sticky;
-  top: 0;
-  z-index: 5000;
+  position:sticky;
+  top:0;
+  z-index:5000;
   backdrop-filter: blur(10px);
 }
 
-.brand{ display:flex; align-items:center; gap:12px; min-width:260px; }
+/* links: alleen dot laten zien */
+.brand{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width:auto;
+}
 .dot{
   width:14px;height:14px;border-radius:999px;
   background:var(--accent);
   box-shadow:0 0 0 4px rgba(42,110,242,.18);
 }
-.brandText .title{ font-weight:700; letter-spacing:.2px; }
-.brandText .subtitle{ font-size:12px; color:var(--muted); margin-top:2px; }
+.brandText{ display:none !important; }
 
 .toolbar{
   display:flex;
   align-items:center;
-  gap:10px;
-  flex-wrap:wrap;
   justify-content:flex-end;
+  gap:10px;
+
+  /* alles 1 rij */
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;
 }
+.toolbar::-webkit-scrollbar{ height:8px; }
+.toolbar::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,.12);
+  border-radius:999px;
+}
+.toolbar::-webkit-scrollbar-track{
+  background:rgba(0,0,0,.12);
+}
+
 .sep{
   width:1px; height:28px;
   background:var(--stroke);
-  margin:0 4px;
+  margin:0 2px;
 }
 
 .btn{
@@ -103,6 +123,8 @@ body{
   cursor:pointer;
   user-select:none;
   line-height:1;
+  flex:0 0 auto;
+  white-space:nowrap;
 }
 .btn:hover{ background:rgba(255,255,255,.06); }
 .btn:active{ transform:translateY(1px); }
@@ -126,9 +148,11 @@ body{
   cursor:pointer;
 }
 
-/* layout */
+/* ===========================
+   LAYOUT
+   =========================== */
+
 .layout{
-  /* was: height:calc(100% - 72px); */
   flex:1;
   min-height:0;
 
@@ -146,20 +170,36 @@ body{
   min-height:0;
 }
 
+/* left panel: echte flex kolom (fixes afgesneden status) */
+.panel.left{
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+
 .panelHeader{
   padding:14px 14px 10px 14px;
   border-bottom:1px solid var(--stroke);
+  flex:0 0 auto;
 }
+
 .h1{ font-weight:800; letter-spacing:.2px; margin-bottom:6px; }
 .hint{ font-size:12px; color:var(--muted); line-height:1.35; }
 
+/* scrollbare content tussen header en status */
 .leftScroll{
-  padding:12px 12px 0 12px;
+  flex:1 1 auto;
+  min-height:0;
   overflow:auto;
-  height:calc(100% - 178px);
+  padding:12px 12px 0 12px;
 }
 
+/* ===========================
+   CONTROLS
+   =========================== */
+
 .controls{ margin-bottom:12px; }
+
 .controlGrid{
   display:grid;
   grid-template-columns: 1fr 1fr;
@@ -180,7 +220,10 @@ body{
 }
 .ctrl input[type="range"]{ padding:0; height:34px; }
 
-/* table */
+/* ===========================
+   TABLE
+   =========================== */
+
 .tableWrap{
   background:rgba(0,0,0,.16);
   border:1px solid var(--stroke);
@@ -222,22 +265,35 @@ body{
 .cellChk{ text-align:center; }
 .cellChk input{ transform:scale(1.1); }
 
-/* status */
+/* ===========================
+   STATUS (onderin links) - groter/duidelijker
+   =========================== */
+
 .status{
+  flex:0 0 auto;
   border-top:1px solid var(--stroke);
   padding:12px 14px;
   background:rgba(0,0,0,.12);
 }
-.statusLine{ font-size:12px; color:var(--muted); margin-bottom:10px; }
-.badges{ display:flex; gap:10px; flex-wrap:wrap; }
+
+.statusLine{
+  font-size:14px;
+  line-height:1.35;
+  color:rgba(255,255,255,.72);
+  margin-bottom:10px;
+  white-space:normal;
+  word-break:break-word;
+}
+
+.badges{ display:flex; gap:12px; flex-wrap:wrap; }
 .badge{
-  padding:7px 10px;
+  padding:9px 14px;
   border:1px solid var(--stroke2);
   border-radius:999px;
-  font-size:12px;
+  font-size:14px;
   background:rgba(255,255,255,.03);
 }
-.badgeWide{ flex:1; min-width:220px; }
+.badgeWide{ flex:1; min-width:260px; }
 
 .footerRow{
   display:flex;
@@ -246,10 +302,24 @@ body{
   align-items:center;
   justify-content:space-between;
 }
-.meta{ font-size:12px; color:var(--muted2); }
-.warn{ font-size:12px; color:rgba(217,91,91,.92); min-height:16px; }
+.meta{
+  font-size:13px;
+  color:var(--muted2);
+  white-space:normal;
+  word-break:break-word;
+}
+.warn{
+  font-size:13px;
+  color:rgba(217,91,91,.92);
+  min-height:16px;
+  white-space:normal;
+  word-break:break-word;
+}
 
-/* right */
+/* ===========================
+   RIGHT PANEL
+   =========================== */
+
 .right{ display:flex; flex-direction:column; min-height:0; }
 
 .canvasHeader{
@@ -261,6 +331,7 @@ body{
   gap:12px;
 }
 .canvasTitle .hint{ margin-top:4px; }
+
 .topBadges{
   display:flex;
   gap:8px;
@@ -343,7 +414,10 @@ canvas{
   font-size:12px;
 }
 
-/* modal */
+/* ===========================
+   MODALS
+   =========================== */
+
 .modal{
   position:fixed;
   inset:0;
@@ -382,6 +456,7 @@ canvas{
   cursor:pointer;
 }
 .modalScroll{ padding:14px 16px; overflow:auto; max-height:520px; }
+
 .modalGrid{
   display:grid;
   grid-template-columns: 1fr 1fr;
@@ -390,6 +465,7 @@ canvas{
 .field{ display:flex; flex-direction:column; gap:6px; }
 .fieldFull{ grid-column: span 2; }
 .field label{ font-size:12px; color:var(--muted); }
+
 .glassNote{
   width:100%;
   padding:10px 10px;
@@ -400,13 +476,15 @@ canvas{
   font-size:12px;
   min-height:64px;
 }
+
 .modalBottom{
   padding:12px 16px 16px 16px;
   border-top:1px solid rgba(255,255,255,.10);
   display:flex;
   justify-content:flex-end;
 }
-.modalBottom .btnPrimary, .modalBottom .btnPrimary:visited{
+.modalBottom .btnPrimary,
+.modalBottom .btnPrimary:visited{
   padding:10px 14px;
   border-radius:14px;
   border:1px solid rgba(42,110,242,.55);
@@ -415,7 +493,10 @@ canvas{
   cursor:pointer;
 }
 
-/* toast */
+/* ===========================
+   TOAST
+   =========================== */
+
 .toastHost{
   position:fixed;
   right:14px;
@@ -445,7 +526,10 @@ canvas{
   border:0;
 }
 
-/* Preview progress (werkt nu echt met jouw HTML ids) */
+/* ===========================
+   PREVIEW PROGRESS
+   =========================== */
+
 #previewProgress{
   position:absolute;
   left:18px;
@@ -482,127 +566,15 @@ canvas{
   text-shadow:0 1px 10px rgba(0,0,0,.65);
 }
 
+/* ===========================
+   RESPONSIVE
+   =========================== */
+
 @media (max-width: 1100px){
   body{ overflow:auto; }
   .layout{ grid-template-columns: 1fr; height:auto; }
-  .leftScroll{ height:auto; max-height:540px; }
   .canvasSplit{ grid-template-columns: 1fr; }
   .pane{ height:420px; }
   .topbar{ height:auto; min-height:56px; padding:10px 12px; }
   .toolbar{ gap:8px; }
-}
-/* ===========================
-   TOPBAR: alles op 1 lijn
-   - verberg linkse titel/subtitle
-   - toolbar niet meer wrappen
-   - Load JSON in dezelfde rij
-   =========================== */
-
-/* verberg linkse tekst (Meridional Raytracer / subtitle) */
-.brandText{ display:none !important; }
-
-/* laat brand niet onnodig breed zijn */
-.brand{ min-width:auto !important; }
-
-/* toolbar altijd 1 rij, met horizontale scroll als het echt te krap wordt */
-.toolbar{
-  flex-wrap:nowrap !important;
-  overflow-x:auto;
-  overflow-y:hidden;
-  -webkit-overflow-scrolling:touch;
-  scrollbar-width:thin;
-}
-
-/* optioneel: nettere scrollbar in webkit */
-.toolbar::-webkit-scrollbar{ height:8px; }
-.toolbar::-webkit-scrollbar-thumb{
-  background:rgba(255,255,255,.12);
-  border-radius:999px;
-}
-.toolbar::-webkit-scrollbar-track{
-  background:rgba(0,0,0,.12);
-}
-
-/* maak separator wat compacter zodat je meer knoppen kwijt kan */
-.sep{ margin:0 2px; }
-
-/* ===========================
-   STATUS ONDERIN: groter/duidelijker
-   (screenshot 3)
-   =========================== */
-
-.statusLine{
-  font-size:13px !important;
-  color:rgba(255,255,255,.70) !important;
-}
-
-.badges{ gap:12px !important; }
-
-.badge{
-  font-size:13px !important;
-  padding:8px 12px !important;
-}
-
-/* als FOV badge te snel breekt: iets ruimer */
-.badgeWide{ min-width:260px; }
-
-/* tekst die te lang is mag wrappen i.p.v. “wegvallen” */
-.statusLine, .meta, .warn{
-  white-space:normal;
-  word-break:break-word;
-}
-/* ===========================
-   FIX: LEFT PANEL layout (geen afgesneden status)
-   =========================== */
-
-/* maak left panel een flex kolom */
-.panel.left{
-  display:flex;
-  flex-direction:column;
-  min-height:0;
-}
-
-/* header blijft bovenaan */
-.panel.left .panelHeader{
-  flex:0 0 auto;
-}
-
-/* scroll area pakt alle resterende hoogte */
-.panel.left .leftScroll{
-  flex:1 1 auto;
-  min-height:0;
-  height:auto !important;     /* override calc(100% - 178px) */
-  overflow:auto;
-  padding:12px 12px 0 12px;
-}
-
-/* status blijft onderaan en mag groter worden */
-.panel.left .status{
-  flex:0 0 auto;
-}
-
-/* ===========================
-   STATUS duidelijker (iets meer dan jouw vorige)
-   =========================== */
-
-.panel.left .statusLine{
-  font-size:14px !important;
-  line-height:1.35;
-}
-
-.panel.left .badge{
-  font-size:14px !important;
-  padding:9px 14px !important;
-}
-
-.panel.left .badges{
-  gap:12px !important;
-}
-
-/* voorkom dat lange tekst “wegvalt” */
-.panel.left .statusLine,
-.panel.left .meta,
-.panel.left .warn{
-  white-space:normal;
-  word-break:break-word;
 }
