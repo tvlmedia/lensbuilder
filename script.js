@@ -306,7 +306,18 @@ function glassN_lambda(glassName, lambdaNm){
   }
   return cauchyN_um(fit, lambda_um);
 }
+function wavePresetToLambdaNm(w){
+  const ww = String(w || "d");
+  if (ww === "c" || ww === "C") return WL.C;
+  if (ww === "F") return WL.F;
+  if (ww === "g") return WL.g;
+  return WL.d;
+}
 
+function glassN(glassName, wavePreset){
+  const lambdaNm = wavePresetToLambdaNm(wavePreset);
+  return glassN_lambda(String(glassName || "AIR"), lambdaNm);
+}
   // -------------------- built-in lenses --------------------
   function demoLensSimple() {
     return {
@@ -880,12 +891,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     // OSLO-ish: glass = medium AFTER surface
-const lambdaNm = (wavePreset === "c") ? WL.C
-               : (wavePreset === "F") ? WL.F
-               : (wavePreset === "g") ? WL.g
-               : WL.d; // default 'd'
-
-const nAfter = glassN_lambda(String(s.glass || "AIR"), lambdaNm);
+const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
 
      
     if (Math.abs(nAfter - nBefore) < 1e-9) {
@@ -3273,6 +3279,25 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
   if (ui.btnPreviewFS) on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
   if (ui.btnRaysFS) on("#btnRaysFS", "click", () => toggleRaysFullscreen());
 
+// Preview bindings
+if (ui.btnRenderPreview) on("#btnRenderPreview", "click", () => renderPreview());
+if (ui.btnPreviewFS)     on("#btnPreviewFS", "click", () => togglePreviewFullscreen());
+
+// Rays fullscreen
+if (ui.btnRaysFS)        on("#btnRaysFS", "click", () => toggleRaysFullscreen());
+
+// File load lens JSON
+if (ui.fileLoad) {
+  ui.fileLoad.addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const txt = await f.text();
+    try { loadLens(JSON.parse(txt)); toast("Loaded JSON"); }
+    catch (err) { if (ui.footerWarn) ui.footerWarn.textContent = "Invalid JSON"; }
+    e.target.value = "";
+  });
+}
+   
   // Keyboard shortcuts: P = preview fullscreen, R = rays fullscreen (ignore typing)
   window.addEventListener("keydown", (e) => {
     const tag = (e.target?.tagName || "").toUpperCase();
