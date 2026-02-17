@@ -2364,29 +2364,21 @@ function samplePupilDiskConcentric(u, v, stopAp){
   return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
 }
    // -------------------- DOF helper: 1 sample naar object plane --------------------
-function traceOneSampleToObject(sx, sy, wavePreset, xStop, stopAp, xObjPlane){
-  // Kies willekeurig punt in pupil (stop)
+function traceOneSampleToObject(sensorX, sx, sy, wavePreset, xStop, stopAp, xObjPlane){
   const pp = samplePupilDiskConcentric(Math.random(), Math.random(), stopAp);
 
-  // Ray start net vóór sensor (richting lens)
   const epsX = 0.05;
-  const start = { x: (Number(ui.sensorOffset?.value || 0) + epsX), y: sy, z: sx }; 
-  // ^ let op: we gebruiken z = sx zodat we 2D-sensor naar 3D-rotatie mappen:
-  //   - y = verticale sensor-as
-  //   - z = horizontale sensor-as
+  const start = { x: sensorX + epsX, y: sy, z: sx };
 
-  // Richting naar stop-punt
   const target = { x: xStop, y: pp.y, z: pp.z };
   const dir = normalize3({ x: target.x - start.x, y: target.y - start.y, z: target.z - start.z });
 
-  // Trace reverse door lens naar object plane
   const tr = traceRayReverse3D({ p: start, d: dir }, lens.surfaces, wavePreset);
   if (tr.vignetted || tr.tir) return null;
 
   const hit = intersectPlaneX3D(tr.endRay, xObjPlane);
   if (!hit) return null;
 
-  // Gewicht (simpel): cos^4 benadering vanaf sensor-ray richting stop
   const cosT = Math.max(0, Math.min(1, Math.abs(dir.x)));
   const w = Math.pow(cosT, 4);
 
@@ -2651,8 +2643,8 @@ function renderPreview() {
           if (token !== preview.renderToken) { preview.isRendering=false; return; }
 
           if (!caOn){
-            const hit = traceOneSampleToObject(sx, sy, wavePreset, xStop, stopAp, xObjPlane);
-            if (!hit) continue;
+const hit = traceOneSampleToObject(sensorX, sx, sy, wavePreset, xStop, stopAp, xObjPlane);
+             if (!hit) continue;
 
             const uv = objectMmToUV(hit.ox, hit.oy);
             const c = sample(uv.u, uv.v);
@@ -2662,9 +2654,9 @@ function renderPreview() {
             b += c[2]*hit.w;
             wsum += hit.w;
           } else {
-            const hitR = traceOneSampleToObject(sx, sy, "c", xStop, stopAp, xObjPlane);
-            const hitG = traceOneSampleToObject(sx, sy, "d", xStop, stopAp, xObjPlane);
-            const hitB = traceOneSampleToObject(sx, sy, "g", xStop, stopAp, xObjPlane);
+            const hitR = traceOneSampleToObject(sensorX, sx, sy, "c", xStop, stopAp, xObjPlane);
+const hitG = traceOneSampleToObject(sensorX, sx, sy, "d", xStop, stopAp, xObjPlane);
+const hitB = traceOneSampleToObject(sensorX, sx, sy, "g", xStop, stopAp, xObjPlane);
             if (!hitR || !hitG || !hitB) continue;
 
             const uvR = objectMmToUV(hitR.ox, hitR.oy);
