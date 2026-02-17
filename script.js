@@ -2541,7 +2541,7 @@ for (let py = 0; py < H; py++) {
 wctx.putImageData(out, 0, 0);
 preview.worldReady = true;
 drawPreviewViewport();
-} // END renderPreview
+
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
