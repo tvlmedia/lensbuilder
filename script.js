@@ -165,11 +165,11 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "Fuji GFX (M
 
   const OV = 1.6; // overscan factor for preview
 
-const assetUrl = (p) => new URL(p, window.location.href).toString();
+const BASE_URL = new URL("./", window.location.href); // directory van de huidige page
+const assetUrl = (p) => new URL(p, BASE_URL).toString();
 
-// ✅ zet ze als “relative to current page”, maar dan robust
 const DEFAULT_PREVIEW_URL = assetUrl("TVL_Focus_Distortion_Chart_3x2_6000x4000.png");
-const DEFAULT_LENS_URL = assetUrl("bijna-goed.json");
+const DEFAULT_LENS_URL    = assetUrl("bijna-goed.json");
    
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
