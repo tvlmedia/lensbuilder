@@ -603,8 +603,8 @@ function getSurfacesForMetrics(lensShift) {
   }
 
 function buildSurfacesWithBarrelApertures(baseSurfaces, k = 1.0) {
-  // k = 1.0 => barrel == glas-aperture (debug / “no extra vignette”)
-  // k < 1.0 => barrel iets strakker (realistischer, maar kan vignette geven)
+  // ✅ Als k>=1: GEEN barrel planes toevoegen (anders knijp je de bundel af in air-gaps)
+  if (k >= 0.999) return baseSurfaces.map(s => ({ ...s }));
 
   const out = [];
   const N = baseSurfaces.length;
@@ -613,10 +613,8 @@ function buildSurfacesWithBarrelApertures(baseSurfaces, k = 1.0) {
     const s = baseSurfaces[i];
     const sNext = baseSurfaces[i + 1];
 
-    // clone current
     const cur = { ...s };
     out.push(cur);
-
     if (!sNext) continue;
 
     const typeA = String(cur.type || "").toUpperCase();
@@ -624,28 +622,29 @@ function buildSurfacesWithBarrelApertures(baseSurfaces, k = 1.0) {
     if (typeA === "OBJ" || typeA === "IMS") continue;
     if (typeB === "IMS") continue;
 
-    // medium AFTER cur determines segment medium
     const mediumAfter = String(cur.glass || "AIR").toUpperCase();
     if (mediumAfter !== "AIR") continue;
 
     const segT = Number(cur.t || 0);
-    if (!Number.isFinite(segT) || segT <= 1e-6) continue; // geen gap => geen barrel
+    if (!Number.isFinite(segT) || segT <= 1e-6) continue;
 
     const apA = Math.max(0.01, Number(cur.ap || 0));
     const apB = Math.max(0.01, Number(sNext.ap || 0));
-    const apBarrel = Math.max(0.01, Math.min(apA, apB) * Math.max(0.01, k));
 
-    // SPLIT de air-gap, zodat BAR in het MIDDEN komt (belangrijk!)
+    // ✅ realistischer: barrel kleiner dan glas *kan* vignette geven, daarom alleen bij k<1
+    // en we gebruiken max(apA, apB) als basis, niet min.
+    const apBarrel = Math.max(0.01, Math.max(apA, apB) * k);
+
     const tHalf = segT * 0.5;
     cur.t = tHalf;
 
     out.push({
       type: "BAR",
       R: 0.0,
-      t: segT - tHalf,   // andere helft van de gap
+      t: segT - tHalf,
       ap: apBarrel,
       glass: "AIR",
-      stop: false
+      stop: false,
     });
   }
 
