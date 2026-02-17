@@ -24,7 +24,12 @@
     const x = parseFloat(s);
     return Number.isFinite(x) ? x : fallback;
   }
-
+  function clamp01(x){ return x < 0 ? 0 : (x > 1 ? 1 : x); }
+  function smoothstep(a, b, x){
+    const t = clamp01((x - a) / (b - a));
+    return t * t * (3 - 2 * t);
+  }
+   
   // -------------------- canvases --------------------
   const canvas = $("#canvas");
   const ctx = canvas?.getContext("2d");
@@ -2201,7 +2206,7 @@ drawAxes(world);
 
     function sample(u, v) {
       if (!hasImg) return [255, 255, 255, 255];
-      if (u < 0 || u > 1 || v < 0 || v > 1) return [255, 0, 0, 255];
+      if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
 
       const x = u * (imgW - 1);
       const y = v * (imgH - 1);
@@ -2226,7 +2231,11 @@ drawAxes(world);
     const halfWv = sensorWv * 0.5;
     const halfHv = sensorHv * 0.5;
 
-    const rMaxSensor = Math.hypot(halfWv, halfHv);
+        const rMaxSensor = Math.min(halfWv, halfHv); // FIX corners: inscribed circle
+    const featherPx = Math.max(6, Math.round(Math.min(W, H) * 0.012));
+    const rFade0 = rMaxSensor - featherPx;
+    const rFade1 = rMaxSensor;
+
     const LUT_N = 512;
     const rObjLUT = new Float32Array(LUT_N);
     const transLUT = new Float32Array(LUT_N);
@@ -2340,6 +2349,14 @@ drawAxes(world);
         const sx = ((px + 0.5) / W - 0.5) * sensorWv;
         const r = Math.hypot(sx, sy);
         const idx = (py * W + px) * 4;
+                 // outside valid radial domain (corners) -> black
+        if (r >= rFade1) {
+          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+          continue;
+        }
+
+        // soft edge fade
+        const edge = 1.0 - smoothstep(rFade0, rFade1, r);
 
         if (r < 1e-9) {
           const { u, v } = objectMmToUV(0, 0);
@@ -2350,7 +2367,7 @@ drawAxes(world);
 
         const { rObj, trans, cos4 } = lookupROutTransCos4(r);
         const mech = Math.max(0, Math.min(1, trans));
-        const gain = mech * Math.max(0, Math.min(1, cos4));
+        const gain = mech * Math.max(0, Math.min(1, cos4)) * edge;
 
         if (gain < 1e-4) {
           outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
@@ -2362,6 +2379,12 @@ drawAxes(world);
         const oy = sy * kScale;
 
         const { u, v } = objectMmToUV(ox, oy);
+
+        if (u <= 0 || u >= 1 || v <= 0 || v >= 1) {
+          outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+          continue;
+        }
+
         const c = sample(u, v);
 
         outD[idx] = Math.max(0, Math.min(255, c[0] * gain));
