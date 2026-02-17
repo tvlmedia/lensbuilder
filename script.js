@@ -2413,12 +2413,35 @@ const wctx = preview.worldCtx;
 const out = wctx.createImageData(W, H);
 const outD = out.data;
 
-const imgAsp = hasImg ? (imgW / imgH) : 1.7777778;
-const halfObjW = halfObjH * imgAsp;
+const sensorAsp = sensorW / sensorH;
+const imgAsp    = hasImg ? (imgW / imgH) : sensorAsp;
 
-function objectMmToUV(xmm, ymm) {
-  const u = 0.5 + (xmm / (2 * halfObjW));
-  const v = 0.5 - (ymm / (2 * halfObjH));
+// “view window” = jouw object plane in SENSOR aspect
+const halfViewH = halfObjH;
+const halfViewW = halfObjH * sensorAsp;
+const viewW = halfViewW * 2;
+const viewH = halfViewH * 2;
+
+// image “contain” in view (no stretch)
+// -> als image breder is dan view: letterbox (boven/onder)
+// -> als image smaller is: pillarbox (links/rechts)
+let dispW, dispH;
+if (imgAsp >= sensorAsp) {
+  // fit width
+  dispW = viewW;
+  dispH = viewW / imgAsp;
+} else {
+  // fit height
+  dispH = viewH;
+  dispW = viewH * imgAsp;
+}
+
+function objectMmToUVContain(xmm, ymm) {
+  // buiten de “contained” image -> zwart
+  if (Math.abs(xmm) > dispW * 0.5 || Math.abs(ymm) > dispH * 0.5) return null;
+
+  const u = 0.5 + (xmm / dispW);
+  const v = 0.5 - (ymm / dispH);
   return { u, v };
 }
 
@@ -2449,14 +2472,13 @@ for (let py = 0; py < H; py++) {
     const ox = sx * kScaleR;
     const oy = sy * kScaleR;
 
-    const { u, v } = objectMmToUV(ox, oy);
+    const uv = objectMmToUVContain(ox, oy);
+if (!uv) {
+  outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+  continue;
+}
 
-    if (u <= 0 || u >= 1 || v <= 0 || v >= 1) {
-      outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-      continue;
-    }
-
-    const c = sample(u, v);
+const c = sample(uv.u, uv.v);
 
     outD[idx]     = Math.max(0, Math.min(255, c[0] * g));
     outD[idx + 1] = Math.max(0, Math.min(255, c[1] * g));
