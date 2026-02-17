@@ -594,33 +594,53 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
     for (const s of surfaces) clampSurfaceAp(s);
   }
 
-function buildSurfacesWithBarrelApertures(baseSurfaces, k = 0.92) {
-  // k < 1 maakt de barrel net iets strakker dan de glas-apertures (realistisch)
+function buildSurfacesWithBarrelApertures(baseSurfaces, k = 1.0) {
+  // k = 1.0 => barrel == glas-aperture (debug / “no extra vignette”)
+  // k < 1.0 => barrel iets strakker (realistischer, maar kan vignette geven)
+
   const out = [];
-  for (let i = 0; i < baseSurfaces.length; i++) {
+  const N = baseSurfaces.length;
+
+  for (let i = 0; i < N; i++) {
     const s = baseSurfaces[i];
-    out.push(s);
+    const sNext = baseSurfaces[i + 1];
 
-    const tA = String(s.type || "").toUpperCase();
-    const sN = baseSurfaces[i + 1];
-    if (!sN) continue;
+    // clone current
+    const cur = { ...s };
+    out.push(cur);
 
-    const tB = String(sN.type || "").toUpperCase();
-    if (tA === "IMS" || tB === "IMS") continue; // geen barrel NA sensor
-    if (tA === "OBJ") continue;                 // geen barrel vóór OBJ
+    if (!sNext) continue;
 
-    // géén barrel “in” een glasblok; we plaatsen 'm alleen in AIR segmenten:
-    // medium na surface s = s.glass; als dat AIR is, dan is t-segment lucht.
-    const mediumAfter = String(s.glass || "AIR").toUpperCase();
+    const typeA = String(cur.type || "").toUpperCase();
+    const typeB = String(sNext.type || "").toUpperCase();
+    if (typeA === "OBJ" || typeA === "IMS") continue;
+    if (typeB === "IMS") continue;
+
+    // medium AFTER cur determines segment medium
+    const mediumAfter = String(cur.glass || "AIR").toUpperCase();
     if (mediumAfter !== "AIR") continue;
 
-    const apA = Math.max(0.01, Number(s.ap || 0));
-    const apB = Math.max(0.01, Number(sN.ap || 0));
-    const apBarrel = Math.max(0.01, Math.min(apA, apB) * k);
+    const segT = Number(cur.t || 0);
+    if (!Number.isFinite(segT) || segT <= 1e-6) continue; // geen gap => geen barrel
 
-    // “BAR” plane: R=0 => plane. glass blijft AIR.
-    out.push({ type: "BAR", R: 0.0, t: 0.0, ap: apBarrel, glass: "AIR", stop: false });
+    const apA = Math.max(0.01, Number(cur.ap || 0));
+    const apB = Math.max(0.01, Number(sNext.ap || 0));
+    const apBarrel = Math.max(0.01, Math.min(apA, apB) * Math.max(0.01, k));
+
+    // SPLIT de air-gap, zodat BAR in het MIDDEN komt (belangrijk!)
+    const tHalf = segT * 0.5;
+    cur.t = tHalf;
+
+    out.push({
+      type: "BAR",
+      R: 0.0,
+      t: segT - tHalf,   // andere helft van de gap
+      ap: apBarrel,
+      glass: "AIR",
+      stop: false
+    });
   }
+
   return out;
 }
    
@@ -1579,8 +1599,8 @@ function drawRuler(world, x0 = 0, xMin = -200, yWorld = null) {
    const lensShift = Number(ui.lensFocus?.value || 0);
 
 // 1) maak trace-surfaces met barrel apertures
-const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 0.92);
-
+const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
+     
 // 2) vertices op trace-surfaces (want we gaan hiermee raytracen)
 computeVertices(surfacesTrace, lensShift);
     clampSelected();
@@ -2186,8 +2206,8 @@ drawAxes(world);
 const lensShift = Number(ui.lensFocus?.value || 0);
 
 // 1) maak trace-surfaces met barrel apertures
-const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 0.92);
-
+const surfacesTrace = buildSurfacesWithBarrelApertures(lens.surfaces, 1.0);
+     
 // 2) vertices op trace-surfaces (want we gaan hiermee raytracen)
 computeVertices(surfacesTrace, lensShift);
 
