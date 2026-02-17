@@ -2662,7 +2662,7 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
           const rS = Math.hypot(sx, sy);
 
           // starting point on (overscanned) sensor plane, 3D
-          const pS = { x: startX, y: sy, z: sx }; // NOTE: we use (y,z) as 2D sensor axes; axis is x
+         const pS = { x: startX, y: sx, z: sy };
           // natural cos4 approximated by chief to stop-axis length
           const nat = naturalCos4(rS);
 
@@ -2673,7 +2673,7 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
             // jitter inside pixel slightly helps noise
             const jx = (Math.random() - 0.5) * (sensorWv / W) * 0.6;
             const jy = (Math.random() - 0.5) * (sensorHv / H) * 0.6;
-            const pSj = { x: startX, y: sy + jy, z: sx + jx };
+            const pSj = { x: startX, y: sx + jx, z: sy + jy };
 
             const pp = samplePupilDisk(Math.random(), Math.random());
             const target = { x: xStop, y: pp.y, z: pp.z };
@@ -2691,7 +2691,7 @@ const q     = String(document.getElementById("renderQuality")?.value || "normal"
               const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
               if (!hitObj) continue;
 
-              const { u, v } = objectMmToUV(hitObj.z, hitObj.y); // map object coords to chart
+              const { u, v } = objectMmToUV(hitObj.y, hitObj.z);
               const c = sample(u, v);
 
               colLin[ch] = srgbToLin(c[ch]);
