@@ -567,6 +567,142 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
     return surfaces.findIndex((s) => !!s.stop);
   }
 
+// ==================== 3D (axisymmetric) helpers ====================
+function normalize3(v){
+  const m = Math.hypot(v.x, v.y, v.z);
+  if (m < 1e-12) return { x:0, y:0, z:0 };
+  return { x:v.x/m, y:v.y/m, z:v.z/m };
+}
+function dot3(a,b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
+function add3(a,b){ return { x:a.x+b.x, y:a.y+b.y, z:a.z+b.z }; }
+function mul3(a,s){ return { x:a.x*s, y:a.y*s, z:a.z*s }; }
+
+// Snell 3D: I,N are 3D vectors. N should point "out of surface" (we flip if needed).
+function refract3(I, N, n1, n2){
+  I = normalize3(I);
+  N = normalize3(N);
+  if (dot3(I, N) > 0) N = mul3(N, -1);
+
+  const cosi = -dot3(N, I);
+  const eta = n1 / n2;
+  const k = 1 - eta*eta*(1 - cosi*cosi);
+  if (k < 0) return null;
+
+  const T = add3(mul3(I, eta), mul3(N, eta*cosi - Math.sqrt(k)));
+  return normalize3(T);
+}
+
+// 3D intersection with a surface of revolution around x-axis.
+// Spherical surface: sphere center (cx,0,0), radius=|R|, vertex at vx.
+// Plane: x = vx. Aperture is radial: r = sqrt(y^2+z^2) <= ap
+function intersectSurface3D(ray, surf){
+  const vx = surf.vx;
+  const R = Number(surf.R || 0);
+  const ap = Math.max(0, Number(surf.ap || 0));
+
+  // Special: MECH/BAFFLE = plane clip only, no refraction (handled in tracer via nBefore=nAfter)
+  // But geometry is identical to plane.
+  const isPlane = Math.abs(R) < 1e-9;
+
+  if (isPlane){
+    if (Math.abs(ray.d.x) < 1e-12) return null;
+    const t = (vx - ray.p.x) / ray.d.x;
+    if (!Number.isFinite(t) || t <= 1e-9) return null;
+
+    const hit = add3(ray.p, mul3(ray.d, t));
+    const r = Math.hypot(hit.y, hit.z);
+    const vignetted = r > ap + 1e-9;
+
+    // plane normal pointing toward object side (-x)
+    const N = { x:-1, y:0, z:0 };
+    return { hit, t, vignetted, normal: N };
+  }
+
+  const cx = vx + R;
+  const rad = Math.abs(R);
+
+  const px = ray.p.x - cx;
+  const py = ray.p.y;
+  const pz = ray.p.z;
+  const dx = ray.d.x;
+  const dy = ray.d.y;
+  const dz = ray.d.z;
+
+  const A = dx*dx + dy*dy + dz*dz;
+  const B = 2 * (px*dx + py*dy + pz*dz);
+  const C = px*px + py*py + pz*pz - rad*rad;
+
+  const disc = B*B - 4*A*C;
+  if (disc < 0) return null;
+
+  const sdisc = Math.sqrt(disc);
+  const t1 = (-B - sdisc) / (2*A);
+  const t2 = (-B + sdisc) / (2*A);
+
+  let t = null;
+  if (t1 > 1e-9 && t2 > 1e-9) t = Math.min(t1, t2);
+  else if (t1 > 1e-9) t = t1;
+  else if (t2 > 1e-9) t = t2;
+  else return null;
+
+  const hit = add3(ray.p, mul3(ray.d, t));
+  const r = Math.hypot(hit.y, hit.z);
+  const vignetted = r > ap + 1e-9;
+
+  // normal on sphere
+  const Nout = normalize3({ x: hit.x - cx, y: hit.y, z: hit.z });
+  return { hit, t, vignetted, normal: Nout };
+}
+
+// Axisymmetric reverse tracer (sensor -> lens -> object)
+// - Treats IMS as non-clipping (like your 2D)
+// - Treats MECH as CLIP ONLY (no refraction): use same nBefore/nAfter
+function traceRayReverse3D(ray, surfaces, wavePreset){
+  let vignetted = false;
+  let tir = false;
+
+  for (let i = surfaces.length - 1; i >= 0; i--){
+    const s = surfaces[i];
+    const type = String(s?.type || "").toUpperCase();
+    const isIMS  = type === "IMS";
+    const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+
+    const hitInfo = intersectSurface3D(ray, s);
+    if (!hitInfo){ vignetted = true; break; }
+
+    if (!isIMS && hitInfo.vignetted){ vignetted = true; break; }
+
+    // IMS and MECH don't refract
+    if (isIMS || isMECH){
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
+    }
+
+    // n on right side (after surface) vs left side (before surface) in reverse
+    const nRight = glassN(String(s.glass || "AIR"), wavePreset);
+    const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
+
+    if (Math.abs(nLeft - nRight) < 1e-9){
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
+    }
+
+    const newDir = refract3(ray.d, hitInfo.normal, nRight, nLeft);
+    if (!newDir){ tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
+  }
+
+  return { vignetted, tir, endRay: ray };
+}
+
+function intersectPlaneX3D(ray, xPlane){
+  if (Math.abs(ray.d.x) < 1e-12) return null;
+  const t = (xPlane - ray.p.x) / ray.d.x;
+  if (!Number.isFinite(t) || t <= 1e-9) return null;
+  return add3(ray.p, mul3(ray.d, t));
+}
+   
   // -------------------- physical sanity clamps --------------------
   const AP_SAFETY = 0.90;
   const AP_MAX_PLANE = 30.0;
@@ -2227,92 +2363,110 @@ drawAxes(world);
     const halfWv = sensorWv * 0.5;
     const halfHv = sensorHv * 0.5;
 
-       // -------------------- VIGNETTE / MAPPING LUT (by SENSOR Y, not radial) --------------------
-const LUT_N = 768; // more = smoother vignet
-const yObjLUT = new Float32Array(LUT_N);   // object-space Y at object plane for chief ray
-const transLUT = new Float32Array(LUT_N);  // mechanical throughput at that sensor Y
-const cos4LUT  = new Float32Array(LUT_N);  // cos^4 approx using chief ray angle
+// -------------------- VIGNETTE / MAPPING LUT (axisymmetric 3D, RADIAL) --------------------
+// We build a LUT over sensor radius r_s = sqrt(x^2+y^2) (with overscan).
+// For each r_s: we (1) map chief ray to object radius, (2) compute mechanical throughput
+// by sampling the STOP pupil disk, tracing sensor->pupil->lens in 3D.
 
-const STOP_SAMPLES = 17; // more = cleaner mechanical vignet
+const LUT_N = 900;
+const rObjLUT  = new Float32Array(LUT_N);
+const transLUT = new Float32Array(LUT_N);
+
+// Pupil sampling quality (trade speed/accuracy)
+const PUPIL_SQRT = 10;                 // 10 => 100 samples
+const PUPIL_SAMPLES = PUPIL_SQRT * PUPIL_SQRT;
+
 const epsX = 0.05;
 const startX = sensorX + epsX;
 
-function stopYs(stopAp) {
-  const ys = [];
-  const N = Math.max(5, STOP_SAMPLES | 0);
-  for (let i = 0; i < N; i++) {
-    const t = (i / (N - 1)) * 2 - 1;
-    ys.push(t * stopAp);
-  }
-  return ys;
-}
-
-function median(arr) {
-  const a = arr.slice().sort((x, y) => x - y);
-  return a[(a.length / 2) | 0];
-}
-
-// Use SENSOR HEIGHT (with overscan) as the domain.
-// This is the critical fix: rectangle sensor, and vignette depends on |y| in meridional model.
-const yMaxSensor = halfHv; // sensorHv * 0.5
-
 const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
-const yStopSamples = stopYs(stopAp);
 
-// Build LUT at sensor Y positions (0..yMaxSensor), symmetric in y
-for (let k = 0; k < LUT_N; k++) {
-  const a = k / (LUT_N - 1);
-  const y = a * yMaxSensor;
+// overscanned sensor extents in mm (already computed above in your code)
+const rMaxSensor = Math.hypot(halfWv, halfHv); // half diagonal of overscanned sensor
 
-  // Chief ray (through stop center) for mapping + cos4
-  let yObjVals = [];
-  let cos4Sum = 0;
+function samplePupilDisk(u, v){
+  // stratified square -> concentric disk mapping-ish (simple, good enough)
+  // u,v in [0,1)
+  const a = (u * 2 - 1);
+  const b = (v * 2 - 1);
 
-  {
-    const dirChief = normalize({ x: xStop - startX, y: 0 - y });
-    const trChief = traceRayReverse({ p: { x: startX, y }, d: dirChief }, lens.surfaces, wavePreset);
-    if (!trChief.vignetted && !trChief.tir) {
-      const hitObj = intersectPlaneX(trChief.endRay, xObjPlane);
-      if (hitObj) yObjVals.push(Math.abs(hitObj.y));
-      const cos = Math.max(0, Math.min(1, Math.abs(dirChief.x)));
-      cos4Sum += cos ** 4;
-    } else {
-      cos4Sum += 0;
-    }
+  // map square to disk (Shirley-Chiu)
+  let r, phi;
+  if (a === 0 && b === 0){ r = 0; phi = 0; }
+  else if (Math.abs(a) > Math.abs(b)){
+    r = a;
+    phi = (Math.PI/4) * (b/a);
+  } else {
+    r = b;
+    phi = (Math.PI/2) - (Math.PI/4) * (a/b);
   }
 
-  // Mechanical throughput: sample rays across stop at this sensor Y
-  let ok = 0;
-  for (let ssi = 0; ssi < yStopSamples.length; ssi++) {
-    const yStop = yStopSamples[ssi];
-    const dir = normalize({ x: xStop - startX, y: yStop - y });
-
-    const tr = traceRayReverse({ p: { x: startX, y }, d: dir }, lens.surfaces, wavePreset);
-    if (tr.vignetted || tr.tir) continue;
-
-    const hitObj = intersectPlaneX(tr.endRay, xObjPlane);
-    if (!hitObj) continue;
-
-    ok++;
-  }
-
-  yObjLUT[k]  = yObjVals.length ? median(yObjVals) : 0;
-  transLUT[k] = ok / yStopSamples.length;
-  cos4LUT[k]  = cos4Sum; // only 1 chief sample here
+  const rr = Math.abs(r) * stopAp;
+  return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
 }
 
-function lookupYObjTransCos4(absY) {
-  const t = Math.max(0, Math.min(1, absY / yMaxSensor));
+function lookupRadial(absR){
+  const t = Math.max(0, Math.min(1, absR / rMaxSensor));
   const x = t * (LUT_N - 1);
   const i0 = Math.floor(x);
   const i1 = Math.min(LUT_N - 1, i0 + 1);
   const u = x - i0;
 
-  const yObj  = yObjLUT[i0]  * (1 - u) + yObjLUT[i1]  * u;
+  const rObj  = rObjLUT[i0]  * (1 - u) + rObjLUT[i1]  * u;
   const trans = transLUT[i0] * (1 - u) + transLUT[i1] * u;
-  const cos4  = cos4LUT[i0]  * (1 - u) + cos4LUT[i1]  * u;
+  return { rObj, trans };
+}
 
-  return { yObj, trans, cos4 };
+// Build LUT
+for (let k = 0; k < LUT_N; k++){
+  const a = k / (LUT_N - 1);
+  const rS = a * rMaxSensor;
+
+  // Put the sensor sample on +Y axis (rotation symmetry)
+  const pS = { x: startX, y: rS, z: 0 };
+
+  // 1) Chief ray for mapping: aim at stop center (y=z=0)
+  {
+    const dirChief = normalize3({ x: xStop - startX, y: -rS, z: 0 });
+    const trC = traceRayReverse3D({ p: pS, d: dirChief }, lens.surfaces, wavePreset);
+
+    if (!trC.vignetted && !trC.tir){
+      const hitObj = intersectPlaneX3D(trC.endRay, xObjPlane);
+      if (hitObj){
+        rObjLUT[k] = Math.hypot(hitObj.y, hitObj.z);
+      } else {
+        rObjLUT[k] = 0;
+      }
+    } else {
+      rObjLUT[k] = 0;
+    }
+  }
+
+  // 2) Mechanical throughput: sample pupil disk points
+  let ok = 0;
+  let total = 0;
+
+  for (let iy = 0; iy < PUPIL_SQRT; iy++){
+    for (let ix = 0; ix < PUPIL_SQRT; ix++){
+      // stratified jitter
+      const u = (ix + 0.5) / PUPIL_SQRT;
+      const v = (iy + 0.5) / PUPIL_SQRT;
+
+      const pp = samplePupilDisk(u, v);
+      const target = { x: xStop, y: pp.y, z: pp.z };
+      const dir = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
+
+      const tr = traceRayReverse3D({ p: pS, d: dir }, lens.surfaces, wavePreset);
+      if (tr.vignetted || tr.tir){ total++; continue; }
+
+      const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+      if (!hitObj){ total++; continue; }
+
+      ok++; total++;
+    }
+  }
+
+  transLUT[k] = total > 0 ? (ok / total) : 0;
 }
 
 // -------------------- render world canvas --------------------
@@ -2333,63 +2487,54 @@ function objectMmToUV(xmm, ymm) {
 }
 
 for (let py = 0; py < H; py++) {
-  const sy = (0.5 - (py + 0.5) / H) * sensorHv;     // sensor mm (with overscan)
-  const aSy = Math.abs(sy);
-
-  const { yObj, trans, cos4 } = lookupYObjTransCos4(aSy);
-
-  // 2D meridional model: use Y-based magnification for both axes (good for charts)
-  // Avoid divide-by-zero near center:
-  const kScaleY = (aSy > 1e-9) ? (yObj / aSy) : 0;
-
-  // If center pixel: map to center object
-  const mech = Math.max(0, Math.min(1, trans));
-  const gRow = mech * Math.max(0, Math.min(1, cos4));
+  const sy = (0.5 - (py + 0.5) / H) * sensorHv;
 
   for (let px = 0; px < W; px++) {
-    const sx = ((px + 0.5) / W - 0.5) * sensorWv;   // sensor mm (with overscan)
+    const sx = ((px + 0.5) / W - 0.5) * sensorWv; // sensor mm (overscan)
+    const rS = Math.hypot(sx, sy);
+
+    const { rObj, trans } = lookupRadial(rS);
+
+    // scale factor: object radius / sensor radius
+    const kScale = (rS > 1e-9) ? (rObj / rS) : 0;
+
+    // throughput = purely mechanical
+    const g = Math.max(0, Math.min(1, trans));
+
     const idx = (py * W + px) * 4;
 
-    // If fully vignetted, go black
-    if (gRow < 1e-4) {
-      outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+    // Fully vignetted => black
+    if (g < 1e-4) {
+      outD[idx] = 0;
+      outD[idx + 1] = 0;
+      outD[idx + 2] = 0;
+      outD[idx + 3] = 255;
       continue;
     }
 
-    let ox = 0, oy = 0;
-    if (aSy < 1e-9) {
-      // center row: no reliable kScaleY; map via sx->0 at center (keeps chart stable)
-      ox = 0;
-      oy = 0;
+    // object coords (mm)
+    let ox, oy;
+    if (rS < 1e-9) {
+      ox = 0; oy = 0;
     } else {
-      ox = sx * kScaleY;
-      oy = sy * kScaleY;
+      ox = sx * kScale;
+      oy = sy * kScale;
     }
 
     const { u, v } = objectMmToUV(ox, oy);
-
-    // Outside chart -> black
-    if (u <= 0 || u >= 1 || v <= 0 || v >= 1) {
-      outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
-      continue;
-    }
-
     const c = sample(u, v);
 
-    // apply gain (mechanical vignette + cos^4)
-    outD[idx]     = Math.max(0, Math.min(255, c[0] * gRow));
-    outD[idx + 1] = Math.max(0, Math.min(255, c[1] * gRow));
-    outD[idx + 2] = Math.max(0, Math.min(255, c[2] * gRow));
+    outD[idx]     = Math.max(0, Math.min(255, c[0] * g));
+    outD[idx + 1] = Math.max(0, Math.min(255, c[1] * g));
+    outD[idx + 2] = Math.max(0, Math.min(255, c[2] * g));
     outD[idx + 3] = 255;
   }
 }
 
+// ✅ pas NA alle pixels:
 wctx.putImageData(out, 0, 0);
 preview.worldReady = true;
 drawPreviewViewport();
-
-      
-  }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
   function scaleToTargetFocal() {
