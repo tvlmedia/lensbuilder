@@ -1731,15 +1731,17 @@ function renderAll() {
 
   const { w: sensorW, h: sensorH, halfH } = getSensorWH();
 
-  const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
+ const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
+const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
+const sensorX   = (focusMode === "cam")  ? Number(ui.sensorOffset?.value || 0) : 0.0;
 
-  const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
-  computeVertices(lens.surfaces, lensShift);
+// ✅ lens verschuiven t.o.v. sensor (IMS blijft 0)
+const totalShift = lensShift - sensorX;
+computeVertices(lens.surfaces, totalShift);
 
-  const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+// ✅ teken sensor op 0 (want IMS=0 is sensorplane)
+const sensorPlaneX = 0.0;
 
-  // IMS vlak mee verplaatsen als cam focus actief is
-  setIMSVxTo(sensorX);
 
   // ---- PL reference ----
   const plX = -PL_FFD;
@@ -2404,7 +2406,7 @@ function renderPreview() {
 
   const wavePreset = ui.wavePreset?.value || "d";
   const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
-  setIMSVxTo(sensorX);
+
 
   const { w: sensorW, h: sensorH } = getSensorWH();
 
