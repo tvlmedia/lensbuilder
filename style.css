@@ -19,6 +19,8 @@
 
   --r:16px;
   --r2:22px;
+
+  --topbarH:72px;
 }
 
 *{ box-sizing:border-box; }
@@ -31,12 +33,13 @@ body{
   color:var(--text);
   overflow:hidden;
 
-  /* belangrijk: topbar + main verdelen hoogte goed */
+  /* topbar + main */
   display:flex;
   flex-direction:column;
   min-height:100vh;
 }
 
+/* accessibility */
 .skipLink{
   position:absolute;
   left:-9999px;
@@ -54,12 +57,14 @@ body{
    =========================== */
 
 .topbar{
-  min-height:72px;
+  height:var(--topbarH);
+  flex:0 0 var(--topbarH);
+
   display:flex;
   align-items:center;
   justify-content:space-between;
-  padding:12px 14px;
   gap:14px;
+  padding:12px 14px;
 
   background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,0));
   border-bottom:1px solid var(--stroke);
@@ -70,13 +75,8 @@ body{
   backdrop-filter: blur(10px);
 }
 
-/* links: alleen dot laten zien */
-.brand{
-  display:flex;
-  align-items:center;
-  gap:12px;
-  min-width:auto;
-}
+/* links: alleen dot */
+.brand{ display:flex; align-items:center; gap:12px; min-width:auto; }
 .dot{
   width:14px;height:14px;border-radius:999px;
   background:var(--accent);
@@ -84,27 +84,27 @@ body{
 }
 .brandText{ display:none !important; }
 
+/* toolbar = 1 rij */
 .toolbar{
   display:flex;
   align-items:center;
   justify-content:flex-end;
   gap:10px;
 
-  /* alles 1 rij */
   flex-wrap:nowrap;
   overflow-x:auto;
   overflow-y:hidden;
   -webkit-overflow-scrolling:touch;
   scrollbar-width:thin;
+
+  max-width:calc(100vw - 70px);
 }
 .toolbar::-webkit-scrollbar{ height:8px; }
 .toolbar::-webkit-scrollbar-thumb{
   background:rgba(255,255,255,.12);
   border-radius:999px;
 }
-.toolbar::-webkit-scrollbar-track{
-  background:rgba(0,0,0,.12);
-}
+.toolbar::-webkit-scrollbar-track{ background:rgba(0,0,0,.12); }
 
 .sep{
   width:1px; height:28px;
@@ -112,6 +112,7 @@ body{
   margin:0 2px;
 }
 
+/* buttons */
 .btn{
   appearance:none;
   border:1px solid var(--stroke2);
@@ -123,6 +124,7 @@ body{
   cursor:pointer;
   user-select:none;
   line-height:1;
+
   flex:0 0 auto;
   white-space:nowrap;
 }
@@ -140,6 +142,7 @@ body{
   background:rgba(217,91,91,.10);
 }
 
+/* file button */
 .fileBtn{ position:relative; overflow:hidden; }
 .fileBtn input[type="file"]{
   position:absolute;
@@ -149,7 +152,7 @@ body{
 }
 
 /* ===========================
-   LAYOUT
+   MAIN LAYOUT
    =========================== */
 
 .layout{
@@ -162,6 +165,7 @@ body{
   padding:12px;
 }
 
+/* cards */
 .panel{
   background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
   border:1px solid var(--stroke);
@@ -170,7 +174,7 @@ body{
   min-height:0;
 }
 
-/* left panel: echte flex kolom (fixes afgesneden status) */
+/* LEFT = flex column (fix status cutting) */
 .panel.left{
   display:flex;
   flex-direction:column;
@@ -186,7 +190,7 @@ body{
 .h1{ font-weight:800; letter-spacing:.2px; margin-bottom:6px; }
 .hint{ font-size:12px; color:var(--muted); line-height:1.35; }
 
-/* scrollbare content tussen header en status */
+/* scroll area between header and status */
 .leftScroll{
   flex:1 1 auto;
   min-height:0;
@@ -266,7 +270,7 @@ body{
 .cellChk input{ transform:scale(1.1); }
 
 /* ===========================
-   STATUS (onderin links) - groter/duidelijker
+   STATUS (left bottom)
    =========================== */
 
 .status{
@@ -317,7 +321,7 @@ body{
 }
 
 /* ===========================
-   RIGHT PANEL
+   RIGHT
    =========================== */
 
 .right{ display:flex; flex-direction:column; min-height:0; }
@@ -330,6 +334,7 @@ body{
   justify-content:space-between;
   gap:12px;
 }
+
 .canvasTitle .hint{ margin-top:4px; }
 
 .topBadges{
@@ -338,6 +343,7 @@ body{
   flex-wrap:wrap;
   justify-content:flex-end;
 }
+
 .pill{
   padding:7px 10px;
   border-radius:999px;
@@ -352,20 +358,24 @@ body{
   min-height:0;
   padding:12px;
 }
+
 .canvasSplit{
   height:100%;
+  min-height:0;
   display:grid;
   grid-template-columns: 1fr 1fr;
   gap:12px;
 }
+
 .pane{
   position:relative;
+  min-height:0;
   border-radius:var(--r2);
   border:1px solid var(--stroke);
   background:rgba(0,0,0,.18);
   overflow:hidden;
-  min-height:0;
 }
+
 .paneTag{
   position:absolute;
   left:10px; top:10px;
@@ -377,6 +387,7 @@ body{
   background:rgba(0,0,0,.45);
   border:1px solid rgba(255,255,255,.10);
 }
+
 .fsBtn{
   position:absolute;
   right:10px; top:10px;
@@ -391,12 +402,14 @@ body{
 }
 .fsBtn:hover{ background:rgba(0,0,0,.48); }
 
+/* canvas always fills pane */
 canvas{
   width:100%;
   height:100%;
   display:block;
 }
 
+/* overlay text */
 .canvasOverlay{
   position:absolute;
   left:18px;
@@ -546,19 +559,11 @@ canvas{
   transition:opacity .18s ease, transform .18s ease;
   z-index:5;
 }
-#previewProgress.isOn{
-  opacity:1;
-  transform:translateY(0);
-}
-#previewProgressBar{
-  height:100%;
-  width:0%;
-  background:rgba(42,110,242,.75);
-}
+#previewProgress.isOn{ opacity:1; transform:translateY(0); }
+#previewProgressBar{ height:100%; width:0%; background:rgba(42,110,242,.75); }
 #previewProgressText{
   position:absolute;
-  left:0;
-  right:0;
+  left:0; right:0;
   bottom:16px;
   text-align:center;
   font-size:12px;
@@ -575,64 +580,6 @@ canvas{
   .layout{ grid-template-columns: 1fr; height:auto; }
   .canvasSplit{ grid-template-columns: 1fr; }
   .pane{ height:420px; }
-  .topbar{ height:auto; min-height:56px; padding:10px 12px; }
+  .topbar{ height:auto; flex:0 0 auto; }
   .toolbar{ gap:8px; }
-}
-/* ===========================
-   HARD LAYOUT LOCK (FIXES “kut doen”)
-   =========================== */
-
-/* 1) force exact viewport height (desktop + modern browsers) */
-html, body { height: 100%; }
-body{
-  height: 100vh;        /* fallback */
-  min-height: 0 !important;
-}
-@supports (height: 100dvh){
-  body{ height: 100dvh; }
-}
-
-/* 2) topbar mag NOOIT mee schalen/rekken */
-.topbar{
-  flex: 0 0 auto;
-}
-
-/* 3) main layout vult precies de rest, en knipt overflow weg */
-.layout{
-  flex: 1 1 auto;
-  min-height: 0 !important;
-  overflow: hidden; /* SUPER belangrijk: panels beheren hun eigen scroll */
-  align-content: stretch;
-}
-
-/* 4) grid children moeten kunnen “krimpen” (anders duwt content alles stuk) */
-.layout > .panel{
-  min-height: 0 !important;
-}
-
-/* 5) left panel: alleen .leftScroll scrollt, status blijft altijd zichtbaar */
-.panel.left{
-  min-height: 0 !important;
-}
-.panel.left .leftScroll{
-  flex: 1 1 auto;
-  min-height: 0 !important;
-  overflow: auto;
-  padding-bottom: 12px; /* voorkomt dat laatste controls tegen rand plakken */
-}
-.panel.left .status{
-  flex: 0 0 auto;
-}
-
-/* 6) right panel ook netjes “shrinkable” */
-.panel.right,
-.panel.right .canvasFrame,
-.panel.right .canvasSplit,
-.panel.right .pane{
-  min-height: 0 !important;
-}
-
-/* 7) voorkom dat sticky/blur rare repaint issues geven in sommige builds */
-.topbar{
-  will-change: transform;
 }
