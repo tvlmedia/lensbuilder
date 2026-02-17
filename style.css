@@ -29,7 +29,14 @@ body{
   font-family:var(--sans);
   background:var(--bg);
   color:var(--text);
+
+  /* was: overflow:hidden; */
   overflow:hidden;
+
+  /* NEW: laat layout de hoogte automatisch verdelen */
+  display:flex;
+  flex-direction:column;
+  min-height:100vh;
 }
 
 .skipLink{
@@ -46,7 +53,9 @@ body{
 
 /* topbar */
 .topbar{
-  height:72px;
+  /* was: height:72px; */
+  min-height:72px;
+
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -119,7 +128,10 @@ body{
 
 /* layout */
 .layout{
-  height:calc(100% - 72px);
+  /* was: height:calc(100% - 72px); */
+  flex:1;
+  min-height:0;
+
   display:grid;
   grid-template-columns: 520px 1fr;
   gap:12px;
