@@ -214,17 +214,24 @@ const DEFAULT_LENS_URL = "./bijna-goed.json";
     CZJ_6: { nd: 1.6229, Vd: 60.0 },
   };
 
-  function glassN(glassName, preset /* d,g,c */) {
-    const g = GLASS_DB[glassName] || GLASS_DB.AIR;
-    if (glassName === "AIR") return 1.0;
+ function glassN(glassName, preset /* d,g,c */) {
+  const g = GLASS_DB[glassName] || GLASS_DB.AIR;
+  if (glassName === "AIR") return 1.0;
 
-    const base = g.nd;
-    const strength = 1.0 / Math.max(10.0, g.Vd);
-    if (preset === "g") return base + 35.0 * strength;
-    if (preset === "c") return base - 20.0 * strength;
-    return base;
-  }
+  const nd = g.nd;
+  const Vd = Math.max(1e-6, g.Vd || 999);
 
+  // Abbe: nF - nC = (nd - 1)/Vd
+  const dn_FC = (nd - 1) / Vd;   // typisch ~0.005..0.02
+
+  // simpele mapping:
+  // c (rood)  ~ nd - 0.5*dn_FC
+  // d (geel)  = nd
+  // g (blauw) ~ nd + 0.8*dn_FC  (iets sterker dan F)
+  if (preset === "c") return nd - 0.50 * dn_FC;
+  if (preset === "g") return nd + 0.80 * dn_FC;
+  return nd; // "d"
+}
   // -------------------- built-in lenses --------------------
   function demoLensSimple() {
     return {
