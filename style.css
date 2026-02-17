@@ -433,20 +433,20 @@ canvas{
   .pane{ height:420px; }
 }
 .topbar{
-  height:auto;              /* belangrijk */
-  min-height:56px;          /* of wat je wil */
-  padding:10px 12px;        /* geeft ruimte */
+  height:auto !important;
+  min-height:56px;
+  padding:10px 12px;
+  overflow:visible !important;
   align-items:center;
-  overflow:visible;         /* NIET hidden */
 }
 
 .toolbar{
   align-items:center;
-  flex-wrap:wrap;           /* voorkomt krappe clipping op kleinere breedtes */
+  flex-wrap:wrap;
   gap:8px;
 }
 
 .btn{
-  line-height:1;            /* voorkomt rare “vertical crop” */
+  line-height:1;
   padding:10px 12px;
 }
