@@ -147,6 +147,32 @@
 </select>
             </div>
 
+
+            <div class="ctrl">
+              <label for="optDOF">Depth of Field</label>
+              <label class="hint" style="display:flex; gap:10px; align-items:center;">
+                <input id="optDOF" type="checkbox" />
+                <span>Enable DOF (slower)</span>
+              </label>
+            </div>
+
+            <div class="ctrl">
+              <label for="optCA">Chromatic Aberration</label>
+              <label class="hint" style="display:flex; gap:10px; align-items:center;">
+                <input id="optCA" type="checkbox" />
+                <span>Enable CA (slower)</span>
+              </label>
+            </div>
+
+            <div class="ctrl">
+              <label for="renderQuality">Quality / speed</label>
+              <select id="renderQuality">
+                <option value="draft">Draft (fast)</option>
+                <option value="normal" selected>Normal</option>
+                <option value="hq">High (slow)</option>
+              </select>
+            </div>
+
             <div class="ctrl two">
               <label>&nbsp;</label>
               <button id="btnRenderPreview" class="btn btnPrimary" type="button">Render Preview</button>
@@ -226,7 +252,16 @@
             <div class="paneTag">Preview</div>
             <button id="btnPreviewFS" class="fsBtn" type="button" title="Full Screen (P)">Full Screen (P)</button>
             <canvas id="previewCanvas"></canvas>
-          </div>
+          
+            <div id="previewProgress" class="previewProgress hidden" aria-hidden="true">
+              <div class="previewProgressRow">
+                <div class="previewProgressBar">
+                  <div id="previewProgressBar" class="previewProgressFill" style="width:0%"></div>
+                </div>
+                <div id="previewProgressText" class="previewProgressText">0%</div>
+              </div>
+            </div>
+</div>
         </div>
 
         <div class="canvasOverlay">
