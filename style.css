@@ -23,6 +23,7 @@
 
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
+
 body{
   margin:0;
   font-family:var(--sans);
@@ -43,6 +44,7 @@ body{
 }
 .skipLink:focus{ left:10px; }
 
+/* topbar */
 .topbar{
   height:72px;
   display:flex;
@@ -52,6 +54,11 @@ body{
   gap:14px;
   background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,0));
   border-bottom:1px solid var(--stroke);
+
+  position: sticky;
+  top: 0;
+  z-index: 5000;
+  backdrop-filter: blur(10px);
 }
 
 .brand{ display:flex; align-items:center; gap:12px; min-width:260px; }
@@ -86,6 +93,7 @@ body{
   font-size:12px;
   cursor:pointer;
   user-select:none;
+  line-height:1;
 }
 .btn:hover{ background:rgba(255,255,255,.06); }
 .btn:active{ transform:translateY(1px); }
@@ -109,6 +117,7 @@ body{
   cursor:pointer;
 }
 
+/* layout */
 .layout{
   height:calc(100% - 72px);
   display:grid;
@@ -129,11 +138,7 @@ body{
   padding:14px 14px 10px 14px;
   border-bottom:1px solid var(--stroke);
 }
-.h1{
-  font-weight:800;
-  letter-spacing:.2px;
-  margin-bottom:6px;
-}
+.h1{ font-weight:800; letter-spacing:.2px; margin-bottom:6px; }
 .hint{ font-size:12px; color:var(--muted); line-height:1.35; }
 
 .leftScroll{
@@ -151,6 +156,7 @@ body{
 .ctrl{ display:flex; flex-direction:column; gap:6px; }
 .ctrl.two{ grid-column: span 2; }
 .ctrl label{ font-size:12px; color:var(--muted); }
+
 .ctrl input, .ctrl select{
   width:100%;
   padding:10px 10px;
@@ -162,6 +168,7 @@ body{
 }
 .ctrl input[type="range"]{ padding:0; height:34px; }
 
+/* table */
 .tableWrap{
   background:rgba(0,0,0,.16);
   border:1px solid var(--stroke);
@@ -188,9 +195,8 @@ body{
   border-bottom:1px solid rgba(255,255,255,.06);
   padding:6px 8px;
 }
-.tbl tbody tr.selected{
-  background:rgba(42,110,242,.10);
-}
+.tbl tbody tr.selected{ background:rgba(42,110,242,.10); }
+
 .cellInput, .cellSelect{
   width:100%;
   padding:8px 8px;
@@ -204,6 +210,7 @@ body{
 .cellChk{ text-align:center; }
 .cellChk input{ transform:scale(1.1); }
 
+/* status */
 .status{
   border-top:1px solid var(--stroke);
   padding:12px 14px;
@@ -230,11 +237,9 @@ body{
 .meta{ font-size:12px; color:var(--muted2); }
 .warn{ font-size:12px; color:rgba(217,91,91,.92); min-height:16px; }
 
-.right{
-  display:flex;
-  flex-direction:column;
-  min-height:0;
-}
+/* right */
+.right{ display:flex; flex-direction:column; min-height:0; }
+
 .canvasHeader{
   padding:14px;
   border-bottom:1px solid var(--stroke);
@@ -326,6 +331,7 @@ canvas{
   font-size:12px;
 }
 
+/* modal */
 .modal{
   position:fixed;
   inset:0;
@@ -397,6 +403,7 @@ canvas{
   cursor:pointer;
 }
 
+/* toast */
 .toastHost{
   position:fixed;
   right:14px;
@@ -415,6 +422,7 @@ canvas{
   color:rgba(255,255,255,.9);
   font-size:12px;
 }
+
 .srOnly{
   position:absolute;
   width:1px;height:1px;
@@ -425,32 +433,7 @@ canvas{
   border:0;
 }
 
-@media (max-width: 1100px){
-  body{ overflow:auto; }
-  .layout{ grid-template-columns: 1fr; height:auto; }
-  .leftScroll{ height:auto; max-height:540px; }
-  .canvasSplit{ grid-template-columns: 1fr; }
-  .pane{ height:420px; }
-}
-.topbar{
-  height:auto !important;
-  min-height:56px;
-  padding:10px 12px;
-  overflow:visible !important;
-  align-items:center;
-}
-
-.toolbar{
-  align-items:center;
-  flex-wrap:wrap;
-  gap:8px;
-}
-
-.btn{
-  line-height:1;
-  padding:10px 12px;
-}
-/* ---- Preview render progress (DOF/CA) ---- */
+/* Preview progress (werkt nu echt met jouw HTML ids) */
 #previewProgress{
   position:absolute;
   left:18px;
@@ -487,10 +470,12 @@ canvas{
   text-shadow:0 1px 10px rgba(0,0,0,.65);
 }
 
-/* Fix: URL has #appMain so browser scrolls -> keep topbar visible */
-.topbar{
-  position: sticky;
-  top: 0;
-  z-index: 5000;
-  backdrop-filter: blur(10px);
+@media (max-width: 1100px){
+  body{ overflow:auto; }
+  .layout{ grid-template-columns: 1fr; height:auto; }
+  .leftScroll{ height:auto; max-height:540px; }
+  .canvasSplit{ grid-template-columns: 1fr; }
+  .pane{ height:420px; }
+  .topbar{ height:auto; min-height:56px; padding:10px 12px; }
+  .toolbar{ gap:8px; }
 }
