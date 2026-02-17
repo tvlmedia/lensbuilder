@@ -1910,6 +1910,22 @@ function renderAll() {
     return { x: cx - w * 0.5, y: cy - h * 0.5, w, h };
   }
 
+function getWorldCropRectForSensor() {
+  // worldCanvas is rendered in OVERSCAN:
+  // sensorWv = sensorW * OV, sensorHv = sensorH * OV
+  // We want to DISPLAY only the center 1/OV area (the real sensor)
+  const wc = preview.worldCanvas;
+  const w = wc.width, h = wc.height;
+  if (!w || !h) return { sx: 0, sy: 0, sw: w, sh: h };
+
+  const sw = w / OV;
+  const sh = h / OV;
+  const sx = (w - sw) * 0.5;
+  const sy = (h - sh) * 0.5;
+  return { sx, sy, sw, sh };
+}
+
+   
 function drawPreviewViewport() {
   if (!previewCanvasEl || !pctx) return;
 
@@ -1951,13 +1967,15 @@ function drawPreviewViewport() {
   pctx.translate(cx + preview.view.panX, cy + preview.view.panY);
   pctx.scale(preview.view.zoom, preview.view.zoom);
 
-  // draw worldCanvas fitted in sr0 (maar nu rond center, dus makkelijk)
-  // let op: in transformed space is sr0.w/h de "unzoomed" size
-  pctx.drawImage(
-    preview.worldCanvas,
-    -sr0.w * 0.5, -sr0.h * 0.5,
-    sr0.w, sr0.h
-  );
+ // Draw ONLY the central sensor-crop from the overscanned render
+const crop = getWorldCropRectForSensor();
+
+pctx.drawImage(
+  preview.worldCanvas,
+  crop.sx, crop.sy, crop.sw, crop.sh,     // source rect (crop)
+  -sr0.w * 0.5, -sr0.h * 0.5,             // dest rect (fits in sensor frame)
+  sr0.w, sr0.h
+);
 
   pctx.restore();
 
