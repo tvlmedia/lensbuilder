@@ -38,45 +38,28 @@
   const pctx = previewCanvasEl?.getContext("2d");
 
   // -------------------- preview state --------------------
-  const preview = {
-    img: null,
-    imgCanvas: document.createElement("canvas"),
-    imgCtx: null,
-    ready: false,
+ const preview = {
+  img: null,
+  imgCanvas: document.createElement("canvas"),
+  imgCtx: null,
+  ready: false,
 
-    imgData: null, // cached pixels
+  imgData: null, // cached pixels
 
-    worldCanvas: document.createElement("canvas"),
-    worldCtx: null,
-    worldReady: false,
-    dirtyKey: "",
+  worldCanvas: document.createElement("canvas"),
+  worldCtx: null,
+  worldReady: false,
+  dirtyKey: "",
 
-    view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
-  };
-  preview.imgCtx = preview.imgCanvas.getContext("2d");
-  preview.worldCtx = preview.worldCanvas.getContext("2d");
+  view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
 
-  const preview = {
-    img: null,
-    imgCanvas: document.createElement("canvas"),
-    imgCtx: null,
-    ready: false,
-
-    imgData: null,
-
-    worldCanvas: document.createElement("canvas"),
-    worldCtx: null,
-    worldReady: false,
-    dirtyKey: "",
-
-    view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
-
-    // ✅ NEW: manual render gating
-    manualOnly: true,      // only render after clicking "Render Preview"
-    allowOnce: false,      // set true by the button, consumed by scheduler
-    needsRender: false,    // optional: tells you "dirty"
-  };
-   
+  // manual render gating
+  manualOnly: true,   // only render after clicking "Render Preview"
+  allowOnce: false,   // set true by the button, consumed by scheduler
+  needsRender: false, // marks "dirty"
+};
+preview.imgCtx = preview.imgCanvas.getContext("2d");
+preview.worldCtx = preview.worldCanvas.getContext("2d");
   // -------------------- UI --------------------
   const ui = {
     tbody: $("#surfTbody"),
