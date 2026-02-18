@@ -2780,15 +2780,19 @@ function rasterStep(){
   // partial present (optioneel elke chunk)
 if ((py % (rowsPerChunk * 3)) === 0) wctx.putImageData(out, 0, 0);
    
-   if (py < H) {
-    if (abortIfNeeded()) return;
-    requestAnimationFrame(rasterStep);
-  } else {
-    if (abortIfNeeded()) return;
-    preview.worldReady = true;
-    hidePreviewProgress();
-    drawPreviewViewport();
-  }
+  if (py < H) {
+  if (abortIfNeeded()) return;
+  requestAnimationFrame(rasterStep);
+} else {
+  if (abortIfNeeded()) return;
+
+  // ✅ FINAL present: dit is "wctx.putImageData(out,0,0);"
+  wctx.putImageData(out, 0, 0);
+
+  preview.worldReady = true;
+  hidePreviewProgress();
+  drawPreviewViewport();
+}
 }
 if (!abortIfNeeded()) requestAnimationFrame(rasterStep);
 
