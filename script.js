@@ -2878,14 +2878,16 @@ function requestManualPreviewRender() {
     requestAnimationFrame(step);
   }
 
-  // --- run ---
-  preview.worldReady = false;
+// --- run ---
+preview.worldReady = false;
 
-  if (!doDOF) {
-    renderFastLUT();
-  } else {
-    renderDOFPath();
-  }
+if (!doDOF) {
+  renderFastLUT();
+} else {
+  renderDOFPath();
+}
+
+// ✅ IMPORTANT: close renderPreview here
 }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
@@ -3164,156 +3166,206 @@ function requestManualPreviewRender() {
       if (ui.footerWarn) ui.footerWarn.textContent = `Save failed: ${e?.message || e}`;
     }
   }
-
 // -------------------- init + bindings --------------------
 function wireUI() {
-  // sensor presets
-  populateSensorPresetsSelect();
+  // tiny safe binder
+  const bind = (el, ev, fn, opts) => {
+    if (!el) return;
+    el.addEventListener(ev, fn, opts);
+  };
 
-  if (ui.sensorPreset) {
-    ui.sensorPreset.addEventListener("change", (e) => {
-      applyPreset(e.target.value);
+  // ---------- scheduling (prevents spam renders) ----------
+  let rafAll = 0;
+  let rafPrev = 0;
+
+  // If you already have scheduleRenderAll/scheduleRenderPreview, keep using them.
+  // Otherwise, these wrappers make them safe + rAF throttled.
+  const safeScheduleAll = () => {
+    if (typeof scheduleRenderAll === "function") return scheduleRenderAll();
+    if (rafAll) return;
+    rafAll = requestAnimationFrame(() => {
+      rafAll = 0;
       renderAll();
-      scheduleRenderPreview();
     });
-  }
+  };
 
-  // manual sensor dims
-  if (ui.sensorW) ui.sensorW.addEventListener("change", () => {
-    applySensorToIMS();
-    renderAll();
-    scheduleRenderPreview();
-  });
-  if (ui.sensorH) ui.sensorH.addEventListener("change", () => {
-    applySensorToIMS();
-    renderAll();
-    scheduleRenderPreview();
-  });
-
-  // render preview button (manual gate)
-  if (ui.btnRenderPreview) {
-    ui.btnRenderPreview.addEventListener("click", (e) => {
-      e.preventDefault();
-      requestManualPreviewRender();
+  const safeSchedulePreview = () => {
+    if (typeof scheduleRenderPreview === "function") return scheduleRenderPreview();
+    if (rafPrev) return;
+    rafPrev = requestAnimationFrame(() => {
+      rafPrev = 0;
+      // If you have a dedicated preview render call, use it here.
+      // Fallback: drawPreviewViewport if ready.
+      if (typeof requestManualPreviewRender === "function") requestManualPreviewRender();
+      else if (preview?.ready && typeof drawPreviewViewport === "function") drawPreviewViewport();
     });
-  }
+  };
 
-  // fullscreen buttons
-  if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", (e) => { e.preventDefault(); togglePreviewFullscreen(); });
-  if (ui.btnRaysFS)    ui.btnRaysFS.addEventListener("click", (e) => { e.preventDefault(); toggleRaysFullscreen(); });
+  // Unified handler for sliders/inputs
+  const bindLive = (el, { onInput, onChange } = {}) => {
+    if (!el) return;
+    // input = cheap / frequent -> schedule only
+    bind(el, "input", () => {
+      onInput && onInput();
+      safeScheduleAll();
+      safeSchedulePreview();
+    }, { passive: true });
 
-  // toolbar actions
-  if (ui.btnScaleToFocal) ui.btnScaleToFocal.addEventListener("click", (e) => { e.preventDefault(); scaleToTargetFocal(); });
-  if (ui.btnSetTStop)     ui.btnSetTStop.addEventListener("click", (e) => { e.preventDefault(); setTargetTStop(); });
-
-  if (ui.btnNew) ui.btnNew.addEventListener("click", (e) => { e.preventDefault(); newClearLens(); });
-
-  if (ui.btnLoadOmit) ui.btnLoadOmit.addEventListener("click", (e) => {
-    e.preventDefault();
-    loadLens(omit50ConceptV1());
-    toast("Loaded OMIT concept");
-  });
-
-  if (ui.btnLoadDemo) ui.btnLoadDemo.addEventListener("click", (e) => {
-    e.preventDefault();
-    loadLens(demoLensSimple());
-    toast("Loaded demo lens");
-  });
-
-  if (ui.btnAdd) ui.btnAdd.addEventListener("click", (e) => { e.preventDefault(); addSurface(); });
-  if (ui.btnDuplicate) ui.btnDuplicate.addEventListener("click", (e) => { e.preventDefault(); duplicateSelected(); });
-  if (ui.btnMoveUp) ui.btnMoveUp.addEventListener("click", (e) => { e.preventDefault(); moveSelected(-1); });
-  if (ui.btnMoveDown) ui.btnMoveDown.addEventListener("click", (e) => { e.preventDefault(); moveSelected(+1); });
-  if (ui.btnRemove) ui.btnRemove.addEventListener("click", (e) => { e.preventDefault(); removeSelected(); });
-
-  if (ui.btnSave) ui.btnSave.addEventListener("click", (e) => { e.preventDefault(); saveLensToFile(); });
-
-  // +ELEMENT modal opener (if exists in your HTML)
-  if (ui.btnAddElement) ui.btnAddElement.addEventListener("click", (e) => {
-    e.preventDefault();
-    const ok = openElementModal();
-    if (!ok) toast("Element modal missing in HTML");
-  });
-
-  // autofocus
-  if (ui.btnAutoFocus) ui.btnAutoFocus.addEventListener("click", (e) => { e.preventDefault(); autoFocus(); });
-
-  // file load lens
-  if (ui.fileLoad) {
-    ui.fileLoad.addEventListener("change", async (e) => {
-      const f = e.target.files && e.target.files[0];
-      if (!f) return;
-      await loadLensFromFile(f).catch(() => {});
-      // reset input so same file can be re-selected
-      e.target.value = "";
+    // change = “commit” -> do immediate + schedule
+    bind(el, "change", () => {
+      onChange && onChange();
+      if (typeof renderAll === "function") renderAll();
+      safeSchedulePreview();
     });
-  }
+  };
 
-  // preview image load (file input)
-  if (ui.prevImg) {
-    ui.prevImg.addEventListener("change", async (e) => {
-      const f = e.target.files && e.target.files[0];
-      if (!f) return;
-      await loadPreviewImageFromFile(f).catch(() => {});
-      e.target.value = "";
-    });
-  }
+  // ---------- sensor presets ----------
+  if (typeof populateSensorPresetsSelect === "function") populateSensorPresetsSelect();
 
-  // live render controls
-  [
-    "fieldAngle","rayCount","wavePreset",
-    "sensorOffset","focusMode","lensFocus",
-    "renderScale","prevObjDist","prevObjH","prevRes"
-  ].forEach((id) => {
+  bind(ui.sensorPreset, "change", (e) => {
+    if (typeof applyPreset === "function") applyPreset(e.target.value);
+    if (typeof renderAll === "function") renderAll();
+    safeSchedulePreview();
+  });
+
+  // ---------- manual sensor dims ----------
+  bind(ui.sensorW, "change", () => {
+    if (typeof applySensorToIMS === "function") applySensorToIMS();
+    if (typeof renderAll === "function") renderAll();
+    safeSchedulePreview();
+  });
+
+  bind(ui.sensorH, "change", () => {
+    if (typeof applySensorToIMS === "function") applySensorToIMS();
+    if (typeof renderAll === "function") renderAll();
+    safeSchedulePreview();
+  });
+
+  // ---------- ray settings ----------
+  ["fieldAngle","rayCount","wavePreset","sensorOffset","focusMode","lensFocus","renderScale"].forEach((id) => {
+    bindLive(ui[id]);
+  });
+
+  // ---------- preview settings ----------
+  ["prevObjDist","prevObjH","prevRes"].forEach((id) => {
     const el = ui[id];
     if (!el) return;
-    el.addEventListener("input", () => { renderAll(); scheduleRenderPreview(); });
-    el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
+    bind(el, "input", () => safeSchedulePreview(), { passive: true });
+    bind(el, "change", () => safeSchedulePreview());
   });
 
-  // when focus mode changes, keep things coherent
-  if (ui.focusMode) {
-    ui.focusMode.addEventListener("change", () => {
-      // make sure sensorX/lensShift is reflected right away
-      renderAll();
-      scheduleRenderPreview();
-    });
-  }
+  // ---------- buttons ----------
+  bind(ui.btnRenderPreview, "click", (e) => {
+    e.preventDefault();
+    if (typeof requestManualPreviewRender === "function") requestManualPreviewRender();
+    else safeSchedulePreview();
+  });
 
-  // new lens modal (optional)
-  if (ui.nlClose) ui.nlClose.addEventListener("click", (e) => { e.preventDefault(); closeNewLensModal(); });
-  if (ui.nlCreate) ui.nlCreate.addEventListener("click", (e) => { e.preventDefault(); createNewLensFromModal(); });
+  bind(ui.btnPreviewFS, "click", (e) => { e.preventDefault(); togglePreviewFullscreen?.(); });
+  bind(ui.btnRaysFS, "click", (e) => { e.preventDefault(); toggleRaysFullscreen?.(); });
 
-  // bind pan/zoom
-  bindViewControls();
-  bindPreviewViewControls();
+  bind(ui.btnScaleToFocal, "click", (e) => { e.preventDefault(); scaleToTargetFocal?.(); });
+  bind(ui.btnSetTStop, "click", (e) => { e.preventDefault(); setTargetTStop?.(); });
 
-  // resize redraw
+  bind(ui.btnNew, "click", (e) => { e.preventDefault(); openNewLensModal?.(); });
+  bind(ui.nlClose, "click", (e) => { e.preventDefault(); closeNewLensModal?.(); });
+  bind(ui.nlCreate, "click", (e) => { e.preventDefault(); createNewLensFromModal?.(); });
+
+  bind(ui.newLensModal, "mousedown", (e) => {
+    if (e.target === ui.newLensModal) closeNewLensModal?.();
+  });
+
+  bind(ui.btnLoadOmit, "click", (e) => {
+    e.preventDefault();
+    try {
+      loadLens?.(omit50ConceptV1?.());
+      toast?.("Loaded OMIT preset");
+    } catch (_) {}
+    safeScheduleAll();
+    safeSchedulePreview();
+  });
+
+  bind(ui.btnLoadDemo, "click", (e) => {
+    e.preventDefault();
+    try {
+      loadLens?.(demoLensSimple?.());
+      toast?.("Loaded demo lens");
+    } catch (_) {}
+    safeScheduleAll();
+    safeSchedulePreview();
+  });
+
+  bind(ui.btnAdd, "click", (e) => { e.preventDefault(); addSurface?.(); safeScheduleAll(); safeSchedulePreview(); });
+
+  bind(ui.btnAddElement, "click", (e) => {
+    e.preventDefault();
+    const ok = openElementModal?.();
+    if (!ok) toast?.("Element modal not found in HTML");
+  });
+
+  bind(ui.btnDuplicate, "click", (e) => { e.preventDefault(); duplicateSelected?.(); safeScheduleAll(); safeSchedulePreview(); });
+  bind(ui.btnMoveUp, "click", (e) => { e.preventDefault(); moveSelected?.(-1); safeScheduleAll(); safeSchedulePreview(); });
+  bind(ui.btnMoveDown, "click", (e) => { e.preventDefault(); moveSelected?.(+1); safeScheduleAll(); safeSchedulePreview(); });
+  bind(ui.btnRemove, "click", (e) => { e.preventDefault(); removeSelected?.(); safeScheduleAll(); safeSchedulePreview(); });
+
+  bind(ui.btnSave, "click", (e) => { e.preventDefault(); saveLensToFile?.(); });
+
+  bind(ui.fileLoad, "change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try { await loadLensFromFile?.(f); } finally { e.target.value = ""; }
+    safeScheduleAll();
+    safeSchedulePreview();
+  });
+
+  bind(ui.btnAutoFocus, "click", (e) => {
+    e.preventDefault();
+    autoFocus?.();
+    safeScheduleAll();
+    safeSchedulePreview();
+  });
+
+  // preview image input (file)
+  bind(ui.prevImg, "change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try { await loadPreviewImageFromFile?.(f); } finally { e.target.value = ""; }
+    safeSchedulePreview();
+  });
+
+  // ---------- canvas interactions ----------
+  bindViewControls?.();
+  bindPreviewViewControls?.();
+
+  // ---------- resize (throttled) ----------
+  let resizeRAF = 0;
   window.addEventListener("resize", () => {
-    resizeCanvasToCSS();
-    resizePreviewCanvasToCSS();
-    renderAll();
-    drawPreviewViewport();
-  });
+    if (resizeRAF) return;
+    resizeRAF = requestAnimationFrame(() => {
+      resizeRAF = 0;
+      resizeCanvasToCSS?.();
+      renderAll?.();
+      resizePreviewCanvasToCSS?.();
+      if (preview?.ready) drawPreviewViewport?.();
+    });
+  }, { passive: true });
 
-  // initial table + render
-  clampAllApertures(lens.surfaces);
-  buildTable();
-  applySensorToIMS();
-  renderAll();
-  drawPreviewViewport();
+  // ---------- initial UI / table ----------
+  clampAllApertures?.(lens?.surfaces);
+  buildTable?.();
+  applySensorToIMS?.();
+  renderAll?.();
 
-  // load default assets (best-effort)
-  loadPreviewImageFromURL(DEFAULT_PREVIEW_URL).catch(() => {
-    if (ui.footerWarn) ui.footerWarn.textContent = "Default preview chart not found (check path).";
-  });
-
-  loadLensFromURL(DEFAULT_LENS_URL).catch(() => {
-    // not fatal; we already have OMIT loaded
-  });
+  // defaults (chart + lens json)
+  // (Lens json is optional; if it fails we keep current lens)
+  loadPreviewImageFromURL?.(DEFAULT_PREVIEW_URL).catch(() => {});
+  loadLensFromURL?.(DEFAULT_LENS_URL).catch(() => {});
 }
 
-// kick
-wireUI();
-
-})(); // end IIFE
+// run after DOM is ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", wireUI);
+} else {
+  wireUI();
+}
+   })();
