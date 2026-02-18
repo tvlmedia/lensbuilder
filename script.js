@@ -56,6 +56,27 @@
   preview.imgCtx = preview.imgCanvas.getContext("2d");
   preview.worldCtx = preview.worldCanvas.getContext("2d");
 
+  const preview = {
+    img: null,
+    imgCanvas: document.createElement("canvas"),
+    imgCtx: null,
+    ready: false,
+
+    imgData: null,
+
+    worldCanvas: document.createElement("canvas"),
+    worldCtx: null,
+    worldReady: false,
+    dirtyKey: "",
+
+    view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
+
+    // ✅ NEW: manual render gating
+    manualOnly: true,      // only render after clicking "Render Preview"
+    allowOnce: false,      // set true by the button, consumed by scheduler
+    needsRender: false,    // optional: tells you "dirty"
+  };
+   
   // -------------------- UI --------------------
   const ui = {
     tbody: $("#surfTbody"),
@@ -1736,12 +1757,24 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     });
   }
 
-  let _rafPrev = 0;
+    let _rafPrev = 0;
   function scheduleRenderPreview() {
+    // In manual-only mode: mark dirty, but DO NOT render unless allowOnce=true
+    if (preview.manualOnly && !preview.allowOnce) {
+      preview.needsRender = true;
+      return;
+    }
+
     if (_rafPrev) return;
     _rafPrev = requestAnimationFrame(() => {
       _rafPrev = 0;
-      if (preview.ready) renderPreview();
+      if (!preview.ready) return;
+
+      // consume the "allow once" token
+      if (preview.manualOnly) preview.allowOnce = false;
+      preview.needsRender = false;
+
+      renderPreview();
     });
   }
 
@@ -3232,7 +3265,10 @@ function wireUI() {
   }
 
   // preview buttons
-  if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => scheduleRenderPreview());
+  if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => {
+  preview.allowOnce = true;
+  scheduleRenderPreview();
+});
   if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
   if (ui.btnRaysFS) ui.btnRaysFS.addEventListener("click", toggleRaysFullscreen);
 
