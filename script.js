@@ -30,34 +30,6 @@
     return t * t * (3 - 2 * t);
   }
 
-  // -------------------- render scheduler (MAAKT ALLES VEEL SNELLER) --------------------
-  // Voorkomt dat je 50x per seconde een mega-render start door sliders/mousemove.
-  let _renderQueued = false;
-  let _renderQueuedReason = "";
-  let _renderLastTs = 0;
-
-  // max FPS voor zware renders tijdens draggen (kan je tunen)
-  const RENDER_MIN_INTERVAL_MS = 33; // ~30fps
-
-  function requestRender(reason = "ui") {
-  _renderQueuedReason = reason;
-  if (_renderQueued) return;
-  _renderQueued = true;
-
-  requestAnimationFrame((ts) => {
-    _renderQueued = false;
-
-    if ((ts - _renderLastTs) < RENDER_MIN_INTERVAL_MS && reason !== "final") {
-      requestRender(reason);
-      return;
-    }
-    _renderLastTs = ts;
-
-    // FIX: jij hebt renderAll(), geen render()
-    renderAll();
-  });
-}
-   
   // -------------------- canvases --------------------
   const canvas = $("#canvas");
   const ctx = canvas?.getContext("2d");
@@ -66,28 +38,24 @@
   const pctx = previewCanvasEl?.getContext("2d");
 
   // -------------------- preview state --------------------
- const preview = {
-  img: null,
-  imgCanvas: document.createElement("canvas"),
-  imgCtx: null,
-  ready: false,
+  const preview = {
+    img: null,
+    imgCanvas: document.createElement("canvas"),
+    imgCtx: null,
+    ready: false,
 
-  imgData: null, // cached pixels
+    imgData: null, // cached pixels
 
-  worldCanvas: document.createElement("canvas"),
-  worldCtx: null,
-  worldReady: false,
-  dirtyKey: "",
+    worldCanvas: document.createElement("canvas"),
+    worldCtx: null,
+    worldReady: false,
+    dirtyKey: "",
 
-  view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
+    view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
+  };
+  preview.imgCtx = preview.imgCanvas.getContext("2d");
+  preview.worldCtx = preview.worldCanvas.getContext("2d");
 
-  // manual render gating
-  manualOnly: true,   // only render after clicking "Render Preview"
-  allowOnce: false,   // set true by the button, consumed by scheduler
-  needsRender: false, // marks "dirty"
-};
-preview.imgCtx = preview.imgCanvas.getContext("2d");
-preview.worldCtx = preview.worldCanvas.getContext("2d");
   // -------------------- UI --------------------
   const ui = {
     tbody: $("#surfTbody"),
@@ -1768,34 +1736,14 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     });
   }
 
- let _rafPrev = 0;
-
-function scheduleRenderPreview(force = false) {
-  if (!preview.ready) return;
-
-  // Manual-only: alleen render als force=true of allowOnce=true
-  if (preview.manualOnly && !force && !preview.allowOnce) {
-    preview.needsRender = true;
-    return;
+  let _rafPrev = 0;
+  function scheduleRenderPreview() {
+    if (_rafPrev) return;
+    _rafPrev = requestAnimationFrame(() => {
+      _rafPrev = 0;
+      if (preview.ready) renderPreview();
+    });
   }
-
-  // consume token (als we render)
-  if (preview.manualOnly) preview.allowOnce = false;
-  preview.needsRender = false;
-
-  if (_rafPrev) return;
-  _rafPrev = requestAnimationFrame(() => {
-    _rafPrev = 0;
-    if (!preview.ready) return;
-    renderPreview();
-  });
-}
-
-// Helper voor je button: 1x render toestaan
-function requestManualPreviewRender() {
-  preview.allowOnce = true;
-  scheduleRenderPreview(true);
-}
 
   // ===========================
   // RENDER ALL (rays pane)
@@ -2906,16 +2854,14 @@ function requestManualPreviewRender() {
     requestAnimationFrame(step);
   }
 
-// --- run ---
-preview.worldReady = false;
+  // --- run ---
+  preview.worldReady = false;
 
-if (!doDOF) {
-  renderFastLUT();
-} else {
-  renderDOFPath();
-}
-
-// ✅ IMPORTANT: close renderPreview here
+  if (!doDOF) {
+    renderFastLUT();
+  } else {
+    renderDOFPath();
+  }
 }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
@@ -3115,9 +3061,8 @@ if (!doDOF) {
         preview.ready = true;
 
         if (ui.footerWarn) ui.footerWarn.textContent = `Preview image loaded: ${preview.imgCanvas.width}×${preview.imgCanvas.height}`;
-        preview.allowOnce = true;
-        scheduleRenderPreview(true);
-         resolve(true);
+        scheduleRenderPreview();
+        resolve(true);
       };
       img.onerror = (e) => {
         if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${url}`;
@@ -3194,146 +3139,152 @@ if (!doDOF) {
       if (ui.footerWarn) ui.footerWarn.textContent = `Save failed: ${e?.message || e}`;
     }
   }
+
 // -------------------- init + bindings --------------------
 function wireUI() {
-  const bind = (el, ev, fn, opts) => { if (el) el.addEventListener(ev, fn, opts); };
+  // sensor presets
+  populateSensorPresetsSelect();
 
-  // ---------- sensor presets ----------
-  populateSensorPresetsSelect?.();
-  applyPreset?.(ui.sensorPreset?.value);
+  if (ui.sensorPreset) {
+    ui.sensorPreset.addEventListener("change", (e) => {
+      applyPreset(e.target.value);
+      renderAll();
+      scheduleRenderPreview();
+    });
+  }
 
-  // ---------- keep preview “manual only” (render only on button) ----------
-  // preview.manualOnly = true;  // (staat al in je preview state)
-
-  // ---------- live inputs (cheap -> schedule) ----------
-  const bindLiveAll = (el) => {
-    if (!el) return;
-    bind(el, "input", () => { scheduleRenderAll(); scheduleRenderPreview(); }, { passive: true });
-    bind(el, "change", () => { renderAll(); scheduleRenderPreview(); });
-  };
-
-  // Rays pane settings
-  bindLiveAll(ui.fieldAngle);
-  bindLiveAll(ui.rayCount);
-  bind(ui.wavePreset, "change", () => { renderAll(); scheduleRenderPreview(); });
-
-  bindLiveAll(ui.renderScale);
-
-  // Focus controls
-  bind(ui.focusMode, "change", () => { renderAll(); scheduleRenderPreview(); });
-  bindLiveAll(ui.sensorOffset);
-  bindLiveAll(ui.lensFocus);
-
-  // Sensor dims
-  bind(ui.sensorPreset, "change", (e) => {
-    applyPreset(e.target.value);
+  // manual sensor dims
+  if (ui.sensorW) ui.sensorW.addEventListener("change", () => {
+    applySensorToIMS();
     renderAll();
     scheduleRenderPreview();
   });
-  bind(ui.sensorW, "change", () => { applySensorToIMS(); renderAll(); scheduleRenderPreview(); });
-  bind(ui.sensorH, "change", () => { applySensorToIMS(); renderAll(); scheduleRenderPreview(); });
+  if (ui.sensorH) ui.sensorH.addEventListener("change", () => {
+    applySensorToIMS();
+    renderAll();
+    scheduleRenderPreview();
+  });
 
-  // Preview settings (alleen preview “dirty” maken)
-  ["prevObjDist", "prevObjH", "prevRes"].forEach((k) => {
-    const el = ui[k];
+  // live render controls
+  [
+    "fieldAngle","rayCount","wavePreset",
+    "sensorOffset","focusMode","lensFocus",
+    "renderScale","prevObjDist","prevObjH","prevRes"
+  ].forEach((id) => {
+    const el = ui[id];
     if (!el) return;
-    bind(el, "input", () => scheduleRenderPreview(), { passive: true });
-    bind(el, "change", () => scheduleRenderPreview());
+    el.addEventListener("input", () => { scheduleRenderAll(); scheduleRenderPreview(); });
+    el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
   });
 
-  // ---------- buttons ----------
-  bind(ui.btnRenderPreview, "click", (e) => {
-    e.preventDefault();
-    requestManualPreviewRender();     // ✅ dit is de enige plek die preview écht rendert als manualOnly=true
+  // preview options (DOF/CA/quality)
+  ["optDOF","optCA","renderQuality"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("change", () => scheduleRenderPreview());
   });
 
-  bind(ui.btnPreviewFS, "click", (e) => { e.preventDefault(); togglePreviewFullscreen(); });
-  bind(ui.btnRaysFS, "click", (e) => { e.preventDefault(); toggleRaysFullscreen(); });
+  // toolbar buttons
+  on("#btnNew", "click", newClearLens);
+  on("#btnLoadOmit", "click", () => loadLens(omit50ConceptV1()));
+  on("#btnLoadDemo", "click", () => loadLens(demoLensSimple()));
 
-  bind(ui.btnAutoFocus, "click", (e) => { e.preventDefault(); autoFocus(); });
+  on("#btnAdd", "click", addSurface);
+  on("#btnAddElement", "click", () => {
+  if (typeof openElementModal === "function") {
+    const ok = openElementModal();
+    if (ok === false) toast("Element modal missing");
+  } else {
+    toast("Element modal missing");
+  }
+});
 
-  bind(ui.btnScaleToFocal, "click", (e) => { e.preventDefault(); scaleToTargetFocal(); });
-  bind(ui.btnSetTStop, "click", (e) => { e.preventDefault(); setTargetTStop(); });
+  on("#btnDuplicate", "click", duplicateSelected);
+  on("#btnMoveUp", "click", () => moveSelected(-1));
+  on("#btnMoveDown", "click", () => moveSelected(+1));
+  on("#btnRemove", "click", removeSelected);
 
-  bind(ui.btnNew, "click", (e) => { e.preventDefault(); newClearLens(); });
+  on("#btnScaleToFocal", "click", scaleToTargetFocal);
+  on("#btnSetTStop", "click", setTargetTStop);
+  on("#btnAutoFocus", "click", autoFocus);
 
-  bind(ui.btnLoadOmit, "click", async (e) => {
-    e.preventDefault();
-    loadLens(omit50ConceptV1());
-    toast("Loaded OMIT preset");
+  on("#btnSave", "click", saveLensToFile);
+
+  // lens JSON file picker
+  if (ui.fileLoad) {
+    ui.fileLoad.addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      await loadLensFromFile(f);
+      ui.fileLoad.value = "";
+    });
+  }
+
+  // preview image picker
+  if (ui.prevImg) {
+    ui.prevImg.addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      try { await loadPreviewImageFromFile(f); }
+      catch (_) {}
+      ui.prevImg.value = "";
+    });
+  }
+
+  // preview buttons
+  if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => scheduleRenderPreview());
+  if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
+  if (ui.btnRaysFS) ui.btnRaysFS.addEventListener("click", toggleRaysFullscreen);
+
+  // New Lens modal buttons (optional)
+  on("#btnNewLens", "click", () => (typeof openNewLensModal === "function") && openNewLensModal());
+  if (ui.nlClose) ui.nlClose.addEventListener("click", (e) => { e.preventDefault(); closeNewLensModal(); });
+  if (ui.nlCreate) ui.nlCreate.addEventListener("click", (e) => { e.preventDefault(); createNewLensFromModal(); });
+  if (ui.newLensModal) {
+    ui.newLensModal.addEventListener("mousedown", (e) => {
+      if (e.target === ui.newLensModal) closeNewLensModal();
+    });
+  }
+
+  // selection hotkeys
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Delete" || e.key === "Backspace") {
+      if (document.activeElement && ["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) return;
+      removeSelected();
+    }
+    if (e.key === "ArrowUp" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); moveSelected(-1); }
+    if (e.key === "ArrowDown" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); moveSelected(+1); }
   });
 
-  bind(ui.btnLoadDemo, "click", (e) => {
-    e.preventDefault();
-    loadLens(demoLensSimple());
-    toast("Loaded demo lens");
+  // resize
+  window.addEventListener("resize", () => {
+    resizeCanvasToCSS();
+    resizePreviewCanvasToCSS();
+    renderAll();
+    if (preview.ready) scheduleRenderPreview();
   });
+}
 
-  bind(ui.btnAdd, "click", (e) => { e.preventDefault(); addSurface(); });
-  bind(ui.btnAddElement, "click", (e) => { e.preventDefault(); openElementModal(); });
-  bind(ui.btnDuplicate, "click", (e) => { e.preventDefault(); duplicateSelected(); });
-  bind(ui.btnMoveUp, "click", (e) => { e.preventDefault(); moveSelected(-1); });
-  bind(ui.btnMoveDown, "click", (e) => { e.preventDefault(); moveSelected(+1); });
-  bind(ui.btnRemove, "click", (e) => { e.preventDefault(); removeSelected(); });
-
-  bind(ui.btnSave, "click", (e) => { e.preventDefault(); saveLensToFile(); });
-
-  bind(ui.fileLoad, "change", async (e) => {
-    const f = e.target?.files?.[0];
-    if (!f) return;
-    await loadLensFromFile(f);
-    e.target.value = "";
-  });
-
-  // ---------- preview image picker ----------
-  bind(ui.prevImg, "change", async (e) => {
-    const f = e.target?.files?.[0];
-    if (!f) return;
-    try {
-      await loadPreviewImageFromFile(f);
-      toast("Loaded preview image");
-    } catch (_) {}
-    e.target.value = "";
-  });
-
-  // ---------- New Lens modal ----------
-  bind(ui.btnNew, "dblclick", (e) => { e.preventDefault(); openNewLensModal(); }); // quick shortcut
-  bind(ui.nlClose, "click", (e) => { e.preventDefault(); closeNewLensModal(); });
-  bind(ui.nlCreate, "click", (e) => { e.preventDefault(); createNewLensFromModal(); });
-  bind(ui.newLensModal, "mousedown", (e) => { if (e.target === ui.newLensModal) closeNewLensModal(); });
-
-  // ---------- initial table + view controls ----------
-  buildTable();
+// -------------------- boot --------------------
+function boot() {
+  wireUI();
   bindViewControls();
   bindPreviewViewControls();
 
-  // ---------- resize handling ----------
-  window.addEventListener("resize", () => {
-    resizeCanvasToCSS();
-    renderAll();
-    resizePreviewCanvasToCSS();
-    drawPreviewViewport();
-  });
+  // default sensor preset -> use current select or Mini LF
+  if (ui.sensorPreset && SENSOR_PRESETS?.[ui.sensorPreset.value]) applyPreset(ui.sensorPreset.value);
+  else applyPreset("ARRI Alexa Mini LF (LF)");
 
-  // ---------- initial render ----------
+  // initial table + draw
+  clampAllApertures(lens.surfaces);
+  buildTable();
+  applySensorToIMS();
   renderAll();
-  drawPreviewViewport();
+
+  // load default assets (non-blocking)
+  loadPreviewImageFromURL(DEFAULT_PREVIEW_URL).catch(() => {});
+  loadLensFromURL(DEFAULT_LENS_URL).catch(() => {});
 }
 
-// -------------------- boot (load defaults) --------------------
-(async function boot() {
-  try {
-    // lens first (optional)
-    if (DEFAULT_LENS_URL) await loadLensFromURL(DEFAULT_LENS_URL);
-  } catch (_) {}
-
-  try {
-    // preview chart
-    if (DEFAULT_PREVIEW_URL) await loadPreviewImageFromURL(DEFAULT_PREVIEW_URL);
-  } catch (_) {
-    // even without image: still draw viewport frame
-    drawPreviewViewport();
-  }
-
-  wireUI();
+boot();
 })();
