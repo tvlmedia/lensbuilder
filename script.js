@@ -3190,135 +3190,130 @@ function wireUI() {
     scheduleRenderPreview();
   });
 
-if (ui.btnRenderPreview) {
-  ui.btnRenderPreview.addEventListener("click", (e) => {
+  // render preview button (manual gate)
+  if (ui.btnRenderPreview) {
+    ui.btnRenderPreview.addEventListener("click", (e) => {
+      e.preventDefault();
+      requestManualPreviewRender();
+    });
+  }
+
+  // fullscreen buttons
+  if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", (e) => { e.preventDefault(); togglePreviewFullscreen(); });
+  if (ui.btnRaysFS)    ui.btnRaysFS.addEventListener("click", (e) => { e.preventDefault(); toggleRaysFullscreen(); });
+
+  // toolbar actions
+  if (ui.btnScaleToFocal) ui.btnScaleToFocal.addEventListener("click", (e) => { e.preventDefault(); scaleToTargetFocal(); });
+  if (ui.btnSetTStop)     ui.btnSetTStop.addEventListener("click", (e) => { e.preventDefault(); setTargetTStop(); });
+
+  if (ui.btnNew) ui.btnNew.addEventListener("click", (e) => { e.preventDefault(); newClearLens(); });
+
+  if (ui.btnLoadOmit) ui.btnLoadOmit.addEventListener("click", (e) => {
     e.preventDefault();
-    requestManualPreviewRender();
+    loadLens(omit50ConceptV1());
+    toast("Loaded OMIT concept");
   });
-}
-   
+
+  if (ui.btnLoadDemo) ui.btnLoadDemo.addEventListener("click", (e) => {
+    e.preventDefault();
+    loadLens(demoLensSimple());
+    toast("Loaded demo lens");
+  });
+
+  if (ui.btnAdd) ui.btnAdd.addEventListener("click", (e) => { e.preventDefault(); addSurface(); });
+  if (ui.btnDuplicate) ui.btnDuplicate.addEventListener("click", (e) => { e.preventDefault(); duplicateSelected(); });
+  if (ui.btnMoveUp) ui.btnMoveUp.addEventListener("click", (e) => { e.preventDefault(); moveSelected(-1); });
+  if (ui.btnMoveDown) ui.btnMoveDown.addEventListener("click", (e) => { e.preventDefault(); moveSelected(+1); });
+  if (ui.btnRemove) ui.btnRemove.addEventListener("click", (e) => { e.preventDefault(); removeSelected(); });
+
+  if (ui.btnSave) ui.btnSave.addEventListener("click", (e) => { e.preventDefault(); saveLensToFile(); });
+
+  // +ELEMENT modal opener (if exists in your HTML)
+  if (ui.btnAddElement) ui.btnAddElement.addEventListener("click", (e) => {
+    e.preventDefault();
+    const ok = openElementModal();
+    if (!ok) toast("Element modal missing in HTML");
+  });
+
+  // autofocus
+  if (ui.btnAutoFocus) ui.btnAutoFocus.addEventListener("click", (e) => { e.preventDefault(); autoFocus(); });
+
+  // file load lens
+  if (ui.fileLoad) {
+    ui.fileLoad.addEventListener("change", async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      await loadLensFromFile(f).catch(() => {});
+      // reset input so same file can be re-selected
+      e.target.value = "";
+    });
+  }
+
+  // preview image load (file input)
+  if (ui.prevImg) {
+    ui.prevImg.addEventListener("change", async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      await loadPreviewImageFromFile(f).catch(() => {});
+      e.target.value = "";
+    });
+  }
+
   // live render controls
   [
     "fieldAngle","rayCount","wavePreset",
     "sensorOffset","focusMode","lensFocus",
     "renderScale","prevObjDist","prevObjH","prevRes"
- ].forEach((id) => {
-  const el = ui[id];
-  if (!el) return;
-  el.addEventListener("input", () => { renderAll(); scheduleRenderPreview(); });
-  el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
-});
-  // preview options (DOF/CA/quality)
-  ["optDOF","optCA","renderQuality"].forEach((id) => {
-    const el = document.getElementById(id);
+  ].forEach((id) => {
+    const el = ui[id];
     if (!el) return;
-    el.addEventListener("change", () => scheduleRenderPreview());
+    el.addEventListener("input", () => { renderAll(); scheduleRenderPreview(); });
+    el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
   });
 
-  // toolbar buttons
-  on("#btnNew", "click", newClearLens);
-  on("#btnLoadOmit", "click", () => loadLens(omit50ConceptV1()));
-  on("#btnLoadDemo", "click", () => loadLens(demoLensSimple()));
-
-  on("#btnAdd", "click", addSurface);
-  on("#btnAddElement", "click", () => {
-  if (typeof openElementModal === "function") {
-    const ok = openElementModal();
-    if (ok === false) toast("Element modal missing");
-  } else {
-    toast("Element modal missing");
-  }
-});
-
-  on("#btnDuplicate", "click", duplicateSelected);
-  on("#btnMoveUp", "click", () => moveSelected(-1));
-  on("#btnMoveDown", "click", () => moveSelected(+1));
-  on("#btnRemove", "click", removeSelected);
-
-  on("#btnScaleToFocal", "click", scaleToTargetFocal);
-  on("#btnSetTStop", "click", setTargetTStop);
-  on("#btnAutoFocus", "click", autoFocus);
-
-  on("#btnSave", "click", saveLensToFile);
-
-  // lens JSON file picker
-  if (ui.fileLoad) {
-    ui.fileLoad.addEventListener("change", async (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
-      await loadLensFromFile(f);
-      ui.fileLoad.value = "";
+  // when focus mode changes, keep things coherent
+  if (ui.focusMode) {
+    ui.focusMode.addEventListener("change", () => {
+      // make sure sensorX/lensShift is reflected right away
+      renderAll();
+      scheduleRenderPreview();
     });
   }
 
-  // preview image picker
-  if (ui.prevImg) {
-    ui.prevImg.addEventListener("change", async (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
-      try { await loadPreviewImageFromFile(f); }
-      catch (_) {}
-      ui.prevImg.value = "";
-    });
-  }
-
-  // preview buttons
-  if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => {
-  preview.allowOnce = true;
-  scheduleRenderPreview();
-});
-  if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
-  if (ui.btnRaysFS) ui.btnRaysFS.addEventListener("click", toggleRaysFullscreen);
-
-  // New Lens modal buttons (optional)
-  on("#btnNewLens", "click", () => (typeof openNewLensModal === "function") && openNewLensModal());
+  // new lens modal (optional)
   if (ui.nlClose) ui.nlClose.addEventListener("click", (e) => { e.preventDefault(); closeNewLensModal(); });
   if (ui.nlCreate) ui.nlCreate.addEventListener("click", (e) => { e.preventDefault(); createNewLensFromModal(); });
-  if (ui.newLensModal) {
-    ui.newLensModal.addEventListener("mousedown", (e) => {
-      if (e.target === ui.newLensModal) closeNewLensModal();
-    });
-  }
 
-  // selection hotkeys
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "Delete" || e.key === "Backspace") {
-      if (document.activeElement && ["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) return;
-      removeSelected();
-    }
-    if (e.key === "ArrowUp" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); moveSelected(-1); }
-    if (e.key === "ArrowDown" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); moveSelected(+1); }
-  });
+  // bind pan/zoom
+  bindViewControls();
+  bindPreviewViewControls();
 
-  // resize
+  // resize redraw
   window.addEventListener("resize", () => {
     resizeCanvasToCSS();
     resizePreviewCanvasToCSS();
     renderAll();
-    if (preview.ready) scheduleRenderPreview();
+    drawPreviewViewport();
   });
-}
 
-// -------------------- boot --------------------
-function boot() {
-  wireUI();
-  bindViewControls();
-  bindPreviewViewControls();
-
-  // default sensor preset -> use current select or Mini LF
-  if (ui.sensorPreset && SENSOR_PRESETS?.[ui.sensorPreset.value]) applyPreset(ui.sensorPreset.value);
-  else applyPreset("ARRI Alexa Mini LF (LF)");
-
-  // initial table + draw
+  // initial table + render
   clampAllApertures(lens.surfaces);
   buildTable();
   applySensorToIMS();
   renderAll();
+  drawPreviewViewport();
 
-  // load default assets (non-blocking)
-  loadPreviewImageFromURL(DEFAULT_PREVIEW_URL).catch(() => {});
-  loadLensFromURL(DEFAULT_LENS_URL).catch(() => {});
+  // load default assets (best-effort)
+  loadPreviewImageFromURL(DEFAULT_PREVIEW_URL).catch(() => {
+    if (ui.footerWarn) ui.footerWarn.textContent = "Default preview chart not found (check path).";
+  });
+
+  loadLensFromURL(DEFAULT_LENS_URL).catch(() => {
+    // not fatal; we already have OMIT loaded
+  });
 }
 
-boot();
-})();
+// kick
+wireUI();
+
+})(); // end IIFE
