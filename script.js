@@ -2696,15 +2696,90 @@ function rasterStep(){
   setPreviewProgress(py / H, `Render ${Math.round((py/H)*100)}%`);
 
   for (; py < yEnd; py++){
-    const sy = (0.5 - (py + 0.5) / H) * sensorHv;
-    for (let px = 0; px < W; px++){
-      ...
+  const sy = (0.5 - (py + 0.5) / H) * sensorHv;
+
+  for (let px = 0; px < W; px++){
+    if (abortIfNeeded()) return;
+
+    const sx = ((px + 0.5) / W - 0.5) * sensorWv;
+    const rS = Math.hypot(sx, sy);
+
+    const o = (py * W + px) * 4;
+
+    // outside overscan sensor -> black
+    if (!Number.isFinite(rS) || rS > rMaxSensor) {
+      outD[o] = 0; outD[o+1] = 0; outD[o+2] = 0; outD[o+3] = 255;
+      continue;
     }
+
+    const absR = Math.abs(rS);
+
+    // weights for 5-tap blur (center heavier)
+    const w0 = 0.46;
+    const w1 = (1 - w0) / 4;
+
+    // For CA we map per-channel with its own LUT (c,d,g)
+    // For no-CA all 3 channels are same wave anyway (so same result)
+    let Rlin = 0, Glin = 0, Blin = 0;
+
+    for (let ch = 0; ch < 3; ch++){
+      const L = lookup(ch, absR);
+
+      // If transmission is basically zero -> this channel black
+      const trans = Math.max(0, L.trans);
+      if (trans <= 1e-6) continue;
+
+      const nat = Math.max(0, Math.min(1, L.nat)); // cos^4-ish
+      const scale = trans * nat;
+
+      // object coordinate from radial mapping
+      const { ox, oy } = objXY(L, sx, sy, rS);
+
+      // blur radius in OBJECT mm space (sigma from pupil sampling)
+      const sig = Math.max(0, L.sigma);
+
+      // sample center + 4 taps (in object-mm space)
+      function sampleCh(xmm, ymm, w){
+        const uv = objectMmToUV(xmm, ymm);
+        const c = sample(uv.u, uv.v); // [r,g,b,a] in 0..255
+        // convert just the channel we want to linear
+        const v = (ch === 0) ? c[0] : (ch === 1) ? c[1] : c[2];
+        return srgbToLin(v) * w;
+      }
+
+      let acc = 0;
+
+      // center
+      acc += sampleCh(ox, oy, w0);
+
+      // 4 taps
+      if (sig > 1e-9){
+        acc += sampleCh(ox + taps[1][0]*sig, oy + taps[1][1]*sig, w1);
+        acc += sampleCh(ox + taps[2][0]*sig, oy + taps[2][1]*sig, w1);
+        acc += sampleCh(ox + taps[3][0]*sig, oy + taps[3][1]*sig, w1);
+        acc += sampleCh(ox + taps[4][0]*sig, oy + taps[4][1]*sig, w1);
+      } else {
+        // if sigma ~ 0, just re-use center weight distribution
+        // (doesn't matter much, but keeps energy consistent)
+        acc += sampleCh(ox, oy, 1 - w0);
+      }
+
+      acc *= scale;
+
+      if (ch === 0) Rlin = acc;
+      else if (ch === 1) Glin = acc;
+      else Blin = acc;
+    }
+
+    outD[o]   = linToSrgb(Rlin);
+    outD[o+1] = linToSrgb(Glin);
+    outD[o+2] = linToSrgb(Blin);
+    outD[o+3] = 255;
   }
-
+}
   // partial present (optioneel elke chunk)
-  wctx.putImageData(out, 0, 0);
-
+if ((py % (rowsPerChunk * 3)) === 0) wctx.putImageData(out, 0, 0);
+   
    if (py < H) {
     if (abortIfNeeded()) return;
     requestAnimationFrame(rasterStep);
