@@ -1728,7 +1728,6 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
 
   // -------------------- render scheduler (RAF throttle) --------------------
   let _rafAll = 0;
-     let _previewJobId = 0; // <— PREVIEW cancel/abort token
   function scheduleRenderAll() {
     if (_rafAll) return;
     _rafAll = requestAnimationFrame(() => {
@@ -1737,20 +1736,15 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     });
   }
 
-   let _rafPrev = 0;
+  let _rafPrev = 0;
   function scheduleRenderPreview() {
-    // elke call cancelt alle lopende preview-steps
-    const jobId = ++_previewJobId;
-
-    // als er al een RAF "queued" staat, laat die gewoon lopen,
-    // maar hij zal dan meteen aborten als jobId mismatcht.
     if (_rafPrev) return;
-
     _rafPrev = requestAnimationFrame(() => {
       _rafPrev = 0;
-      if (preview.ready) renderPreview(jobId);
+      if (preview.ready) renderPreview();
     });
   }
+
   // ===========================
   // RENDER ALL (rays pane)
   // ===========================
@@ -2453,20 +2447,9 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     return Math.round(v*255);
   }
 
-  function renderPreview(jobId) {
+ function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
-
-  // fallback als iemand renderPreview() ooit direct zonder arg aanroept
-  if (jobId == null) jobId = _previewJobId;
-
-  const abortIfNeeded = () => {
-    if (jobId !== _previewJobId) {
-      hidePreviewProgress(); // voorkomt “hangende” progress UI
-      return true;
-    }
-    return false;
-  };
 
   const doDOF = !!document.getElementById("optDOF")?.checked;
   const doCA  = !!document.getElementById("optCA")?.checked;
@@ -2595,13 +2578,9 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     let k = 0;
     const kPerFrame = (q === "hq") ? 18 : (q === "draft" ? 40 : 26);
 
-       function buildStep() {
-      if (abortIfNeeded()) return;
-
+    function buildStep() {
       const end = Math.min(LUT_N, k + kPerFrame);
       setPreviewProgress(k / LUT_N, `LUT ${Math.round((k / LUT_N) * 100)}%`);
-
-       
 
       for (; k < end; k++) {
         const a = k / (LUT_N - 1);
@@ -2665,8 +2644,7 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
         }
       }
 
-           if (k < LUT_N) {
-        if (abortIfNeeded()) return;
+      if (k < LUT_N) {
         requestAnimationFrame(buildStep);
         return;
       }
@@ -2686,127 +2664,203 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
         return { ox: sx * s, oy: sy * s };
       }
 
-     let py = 0;
-const rowsPerChunk = (q === "hq") ? 24 : (q === "draft" ? 64 : 40);
+      for (let py = 0; py < H; py++) {
+        const sy = (0.5 - (py + 0.5) / H) * sensorHv;
 
-function rasterStep(){
-  if (abortIfNeeded()) return;
+        for (let px = 0; px < W; px++) {
+          const sx = ((px + 0.5) / W - 0.5) * sensorWv;
+          const rS = Math.hypot(sx, sy);
+          const idx = (py * W + px) * 4;
 
-  const yEnd = Math.min(H, py + rowsPerChunk);
-  setPreviewProgress(py / H, `Render ${Math.round((py/H)*100)}%`);
+          if (!doCA) {
+            const L = lookup(1, rS); // green basis
+            const gain = clamp(L.trans * L.nat, 0, 1);
 
-  for (; py < yEnd; py++){
-  const sy = (0.5 - (py + 0.5) / H) * sensorHv;
+            if (gain < 1e-4) {
+              outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+              continue;
+            }
 
-  for (let px = 0; px < W; px++){
-    if (abortIfNeeded()) return;
+            const p = objXY(L, sx, sy, rS);
+            const uv0 = objectMmToUV(p.ox, p.oy);
 
-    const sx = ((px + 0.5) / W - 0.5) * sensorWv;
-    const rS = Math.hypot(sx, sy);
+            const su = (L.sigma * 0.85) / (2 * halfObjW);
+            const sv = (L.sigma * 0.85) / (2 * halfObjH);
 
-    const o = (py * W + px) * 4;
+            if (su < 1e-4 && sv < 1e-4) {
+              const c = sample(uv0.u, uv0.v);
+              outD[idx]     = clamp(c[0] * gain, 0, 255);
+              outD[idx + 1] = clamp(c[1] * gain, 0, 255);
+              outD[idx + 2] = clamp(c[2] * gain, 0, 255);
+              outD[idx + 3] = 255;
+            } else {
+              let r = 0, g = 0, b = 0;
+              for (let t = 0; t < taps.length; t++) {
+                const o = taps[t];
+                const c = sample(uv0.u + o[0] * su, uv0.v + o[1] * sv);
+                r += c[0]; g += c[1]; b += c[2];
+              }
+              const inv = 1 / taps.length;
+              outD[idx]     = clamp(r * inv * gain, 0, 255);
+              outD[idx + 1] = clamp(g * inv * gain, 0, 255);
+              outD[idx + 2] = clamp(b * inv * gain, 0, 255);
+              outD[idx + 3] = 255;
+            }
+            continue;
+          }
 
-    // outside overscan sensor -> black
-    if (!Number.isFinite(rS) || rS > rMaxSensor) {
-      outD[o] = 0; outD[o+1] = 0; outD[o+2] = 0; outD[o+3] = 255;
-      continue;
-    }
+          // CA path (with sigma blur per channel)
+          const Lr = lookup(0, rS);
+          const Lg = lookup(1, rS);
+          const Lb = lookup(2, rS);
 
-    const absR = Math.abs(rS);
+          const gr = clamp(Lr.trans * Lr.nat, 0, 1);
+          const gg = clamp(Lg.trans * Lg.nat, 0, 1);
+          const gb = clamp(Lb.trans * Lb.nat, 0, 1);
 
-    // weights for 5-tap blur (center heavier)
-    const w0 = 0.46;
-    const w1 = (1 - w0) / 4;
+          if (gr < 1e-4 && gg < 1e-4 && gb < 1e-4) {
+            outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+            continue;
+          }
 
-    // For CA we map per-channel with its own LUT (c,d,g)
-    // For no-CA all 3 channels are same wave anyway (so same result)
-    let Rlin = 0, Glin = 0, Blin = 0;
+          function chanSample(L, sx, sy, rS, chGain, chIndex){
+            const p = objXY(L, sx, sy, rS);
+            const uv0 = objectMmToUV(p.ox, p.oy);
 
-    for (let ch = 0; ch < 3; ch++){
-      const L = lookup(ch, absR);
+            const su = (L.sigma * 0.85) / (2 * halfObjW);
+            const sv = (L.sigma * 0.85) / (2 * halfObjH);
 
-      // If transmission is basically zero -> this channel black
-      const trans = Math.max(0, L.trans);
-      if (trans <= 1e-6) continue;
+            if (su < 1e-4 && sv < 1e-4) {
+              const c = sample(uv0.u, uv0.v);
+              return clamp(c[chIndex] * chGain, 0, 255);
+            }
 
-      const nat = Math.max(0, Math.min(1, L.nat)); // cos^4-ish
-      const scale = trans * nat;
+            let acc = 0;
+            for (let t = 0; t < taps.length; t++){
+              const o = taps[t];
+              const c = sample(uv0.u + o[0]*su, uv0.v + o[1]*sv);
+              acc += c[chIndex];
+            }
+            return clamp((acc / taps.length) * chGain, 0, 255);
+          }
 
-      // object coordinate from radial mapping
-      const { ox, oy } = objXY(L, sx, sy, rS);
-
-      // blur radius in OBJECT mm space (sigma from pupil sampling)
-      const sig = Math.max(0, L.sigma);
-
-      // sample center + 4 taps (in object-mm space)
-      function sampleCh(xmm, ymm, w){
-        const uv = objectMmToUV(xmm, ymm);
-        const c = sample(uv.u, uv.v); // [r,g,b,a] in 0..255
-        // convert just the channel we want to linear
-        const v = (ch === 0) ? c[0] : (ch === 1) ? c[1] : c[2];
-        return srgbToLin(v) * w;
+          outD[idx]     = chanSample(Lr, sx, sy, rS, gr, 0);
+          outD[idx + 1] = chanSample(Lg, sx, sy, rS, gg, 1);
+          outD[idx + 2] = chanSample(Lb, sx, sy, rS, gb, 2);
+          outD[idx + 3] = 255;
+        }
       }
 
-      let acc = 0;
-
-      // center
-      acc += sampleCh(ox, oy, w0);
-
-      // 4 taps
-      if (sig > 1e-9){
-        acc += sampleCh(ox + taps[1][0]*sig, oy + taps[1][1]*sig, w1);
-        acc += sampleCh(ox + taps[2][0]*sig, oy + taps[2][1]*sig, w1);
-        acc += sampleCh(ox + taps[3][0]*sig, oy + taps[3][1]*sig, w1);
-        acc += sampleCh(ox + taps[4][0]*sig, oy + taps[4][1]*sig, w1);
-      } else {
-        // if sigma ~ 0, just re-use center weight distribution
-        // (doesn't matter much, but keeps energy consistent)
-        acc += sampleCh(ox, oy, 1 - w0);
-      }
-
-      acc *= scale;
-
-      if (ch === 0) Rlin = acc;
-      else if (ch === 1) Glin = acc;
-      else Blin = acc;
+      wctx.putImageData(out, 0, 0);
+      preview.worldReady = true;
+      hidePreviewProgress();
+      drawPreviewViewport();
     }
 
-    outD[o]   = linToSrgb(Rlin);
-    outD[o+1] = linToSrgb(Glin);
-    outD[o+2] = linToSrgb(Blin);
-    outD[o+3] = 255;
+    requestAnimationFrame(buildStep);
   }
-}
-  // partial present (optioneel elke chunk)
-if ((py % (rowsPerChunk * 3)) === 0) wctx.putImageData(out, 0, 0);
-   
-  if (py < H) {
-  if (abortIfNeeded()) return;
-  requestAnimationFrame(rasterStep);
-} else {
-  if (abortIfNeeded()) return;
 
-  // ✅ FINAL present: dit is "wctx.putImageData(out,0,0);"
-  wctx.putImageData(out, 0, 0);
+  function renderDOFPath() {
+    // allocate render target
+    preview.worldCanvas.width  = W;
+    preview.worldCanvas.height = H;
+    const wctx = preview.worldCanvas.getContext("2d", { willReadFrequently: true });
+    preview.worldCtx = wctx;
 
-  preview.worldReady = true;
-  hidePreviewProgress();
-  drawPreviewViewport();
-}
-}
-if (!abortIfNeeded()) requestAnimationFrame(rasterStep);
+    const out  = wctx.createImageData(W, H);
+    const outD = out.data;
 
+    const epsX   = 0.05;
+    const startX = sensorX + epsX;
+
+    const WAVES = doCA ? ["c","d","g"] : [wavePreset, wavePreset, wavePreset];
+
+    let row = 0;
+    const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 24 : 16);
+
+    function step() {
+      const yEnd = Math.min(H, row + rowsPerChunk);
+      setPreviewProgress(row / H, `DOF ${Math.round((row / H) * 100)}%`);
+
+      for (; row < yEnd; row++) {
+        const sy = (0.5 - (row + 0.5) / H) * sensorHv;
+
+        for (let col = 0; col < W; col++) {
+          const sx = ((col + 0.5) / W - 0.5) * sensorWv;
+          const rS = Math.hypot(sx, sy);
+
+          const nat = naturalCos4(rS);
+
+          let accR = 0, accG = 0, accB = 0;
+          let wSum = 0;
+
+          for (let s = 0; s < spp; s++) {
+            const jx = (Math.random() - 0.5) * (sensorWv / W) * 0.6;
+            const jy = (Math.random() - 0.5) * (sensorHv / H) * 0.6;
+
+            const pS = { x: startX, y: sx + jx, z: sy + jy };
+
+            const pp = samplePupilDisk(Math.random(), Math.random());
+            const target = { x: xStop, y: pp.y, z: pp.z };
+            const dir0 = normalize3({ x: target.x - pS.x, y: target.y - pS.y, z: target.z - pS.z });
+
+            let colLin = [0, 0, 0];
+            let okAny = false;
+
+            for (let ch = 0; ch < 3; ch++) {
+              const wave = WAVES[ch];
+              const tr = traceRayReverse3D({ p: pS, d: dir0 }, lens.surfaces, wave);
+              if (tr.vignetted || tr.tir) continue;
+
+              const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+              if (!hitObj) continue;
+
+              const uv = objectMmToUV(hitObj.y, hitObj.z);
+              const c  = sample(uv.u, uv.v);
+
+              colLin[ch] = srgbToLin(c[ch]);
+              okAny = true;
+            }
+
+            if (!okAny) continue;
+
+            const w = nat;
+            accR += colLin[0] * w;
+            accG += colLin[1] * w;
+            accB += colLin[2] * w;
+            wSum += w;
+          }
+
+          const idx = (row * W + col) * 4;
+          if (wSum <= 1e-9) {
+            outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
+          } else {
+            outD[idx]     = linToSrgb(accR / wSum);
+            outD[idx + 1] = linToSrgb(accG / wSum);
+            outD[idx + 2] = linToSrgb(accB / wSum);
+            outD[idx + 3] = 255;
+          }
+        }
+      }
+
+      wctx.putImageData(out, 0, 0);
+      preview.worldReady = true;
+      drawPreviewViewport();
+
+      if (row < H) requestAnimationFrame(step);
+      else hidePreviewProgress();
+    }
+
+    requestAnimationFrame(step);
   }
 
   // --- run ---
   preview.worldReady = false;
 
-    if (!doDOF) {
-    if (abortIfNeeded()) return;
+  if (!doDOF) {
     renderFastLUT();
   } else {
-    if (abortIfNeeded()) return;
-    renderDOFPath(); // en: binnen renderDOFPath óók in elke RAF step abortIfNeeded() doen
+    renderDOFPath();
   }
 }
 
