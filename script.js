@@ -196,25 +196,95 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
 
   // -------------------- glass db --------------------
   const GLASS_DB = {
-    AIR: { nd: 1.0, Vd: 999.0 },
-    BK7: { nd: 1.5168, Vd: 64.17 },
-    F2: { nd: 1.62, Vd: 36.37 },
-    SF10: { nd: 1.7283, Vd: 28.41 },
-    LASF35: { nd: 1.8061, Vd: 25.4 },
-    LASFN31: { nd: 1.8052, Vd: 25.3 },
-    LF5: { nd: 1.58, Vd: 40.0 },
-    "N-SF5": { nd: 1.67271, Vd: 32.25 },
-    "S-LAM3": { nd: 1.717004, Vd: 47.927969 },
-    "S-BAH11": { nd: 1.666718, Vd: 48.325247 },
+  // --- baseline ---
+  AIR: { nd: 1.0, Vd: 999.0 },
 
-    CZJ_1: { nd: 1.5182, Vd: 63.8 },
-    CZJ_2: { nd: 1.6465, Vd: 47.5 },
-    CZJ_3: { nd: 1.6055, Vd: 60.4 },
-    CZJ_4: { nd: 1.7343, Vd: 28.1 },
-    CZJ_5: { nd: 1.681, Vd: 54.7 },
-    CZJ_6: { nd: 1.6229, Vd: 60.0 },
-  };
+  // --- SCHOTT (heel gangbaar in foto/cine) ---
+  "N-BK7HT":   { nd: 1.5168,  Vd: 64.17 },
+  "N-BK10":    { nd: 1.49782, Vd: 66.95 },
 
+  "N-K5":      { nd: 1.52249, Vd: 59.48 },
+  "N-KF9":     { nd: 1.52346, Vd: 51.54 },
+  "N-PK52A":   { nd: 1.49700, Vd: 81.61 },
+  "N-ZK7A":    { nd: 1.508054, Vd: 61.04 },
+
+  // Borosilicate / barium crowns
+  "N-BAK1":    { nd: 1.5725,  Vd: 57.55 },
+  "N-BAK2":    { nd: 1.53996, Vd: 59.71 },
+  "N-BAK4":    { nd: 1.56883, Vd: 55.98 },
+
+  // Barium / “BALF”
+  "N-BALF4":   { nd: 1.57956, Vd: 53.87 },
+  "N-BALF5":   { nd: 1.54739, Vd: 53.63 },
+
+  // Barium flints / special flints
+  "N-BAF4":    { nd: 1.60568, Vd: 43.72 },
+  "N-BAF10":   { nd: 1.67003, Vd: 47.11 },
+  "N-BAF51":   { nd: 1.65224, Vd: 44.96 },
+  "N-BAF52":   { nd: 1.60863, Vd: 46.6 },
+  "N-BASF2":   { nd: 1.66446, Vd: 36.0 },
+
+  // Dense crowns / short flints / “SK”
+  "N-SK2":     { nd: 1.60738, Vd: 56.65 },
+  "N-SK4":     { nd: 1.61272, Vd: 58.63 },
+  "N-SK5":     { nd: 1.58913, Vd: 61.27 },
+  "N-SK11":    { nd: 1.56384, Vd: 60.8 },
+  "N-SK14":    { nd: 1.60311, Vd: 60.6 },
+  "N-SK16":    { nd: 1.62041, Vd: 60.32 },
+
+  // “SSK” (veel gebruikt als partner in correctiegroepen)
+  "N-SSK2":    { nd: 1.62229, Vd: 53.27 },
+  "N-SSK5":    { nd: 1.65844, Vd: 50.88 },
+  "N-SSK8":    { nd: 1.61773, Vd: 49.83 },
+
+  // “PSK”
+  "N-PSK3":    { nd: 1.55232, Vd: 63.46 },
+  "N-PSK53A":  { nd: 1.61800, Vd: 63.39 },
+
+  // “KZFS” (correctie / high performance partners)
+  "N-KZFS2":   { nd: 1.55836, Vd: 54.01 },
+  "N-KZFS4":   { nd: 1.61336, Vd: 44.49 },
+  "N-KZFS5":   { nd: 1.65412, Vd: 39.7 },
+  "N-KZFS8":   { nd: 1.72047, Vd: 34.7 },
+
+  // “LAK” (lanthanum crowns — super cinema-typisch)
+  "N-LAK9":    { nd: 1.69100, Vd: 54.71 },
+  "N-LAK10":   { nd: 1.72003, Vd: 50.62 },
+  "N-LAK22":   { nd: 1.65113, Vd: 55.89 },
+  "N-LAK28":   { nd: 1.74429, Vd: 50.77 },
+  "N-LAK34":   { nd: 1.72916, Vd: 54.5 },
+
+  // “LAF” (lanthanum flints)
+  "N-LAF2":    { nd: 1.74397, Vd: 44.85 },
+  "N-LAF7":    { nd: 1.7495,  Vd: 34.82 },
+  "N-LAF21":   { nd: 1.7880,  Vd: 47.49 },
+  "N-LAF34":   { nd: 1.7725,  Vd: 49.62 },
+
+  // “LASF” (high-index lanthanum flints — heel veel cinema correctie)
+  "N-LASF9":   { nd: 1.85025, Vd: 32.17 },
+  "N-LASF40":  { nd: 1.83404, Vd: 37.3 },
+  "N-LASF41":  { nd: 1.83501, Vd: 43.13 },
+  "N-LASF43":  { nd: 1.8061,  Vd: 40.61 },
+  "N-LASF44":  { nd: 1.8042,  Vd: 46.5 },
+  "N-LASF45":  { nd: 1.80107, Vd: 34.97 },
+
+  // Classic “F” / “SF” families (flints) — ook super common
+  "N-F2":      { nd: 1.62005, Vd: 36.43 },
+  "N-FK5":     { nd: 1.48749, Vd: 70.41 },
+  "N-FK58":    { nd: 1.45600, Vd: 90.9 },
+
+  "N-SF1":     { nd: 1.71736, Vd: 29.62 },
+  "N-SF2":     { nd: 1.64769, Vd: 33.82 },
+  "N-SF4":     { nd: 1.75513, Vd: 27.38 },
+  "N-SF5":     { nd: 1.67271, Vd: 32.25 },
+  "N-SF6":     { nd: 1.80518, Vd: 25.36 },
+  "N-SF8":     { nd: 1.68894, Vd: 31.31 },
+  "N-SF10":    { nd: 1.72828, Vd: 28.53 },
+  "N-SF11":    { nd: 1.78472, Vd: 25.68 },
+  "N-SF15":    { nd: 1.69892, Vd: 30.2 },
+  "N-SF57":    { nd: 1.84666, Vd: 23.78 },
+  "N-SF66":    { nd: 1.92286, Vd: 20.88 }
+};
   // Wavelengths (Fraunhofer + Hg g) nm
   const WL = {
     C: 656.2725,
