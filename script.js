@@ -1740,26 +1740,34 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     });
   }
 
-    let _rafPrev = 0;
-  function scheduleRenderPreview() {
-    // In manual-only mode: mark dirty, but DO NOT render unless allowOnce=true
-    if (preview.manualOnly && !preview.allowOnce) {
-      preview.needsRender = true;
-      return;
-    }
+ let _rafPrev = 0;
 
-    if (_rafPrev) return;
-    _rafPrev = requestAnimationFrame(() => {
-      _rafPrev = 0;
-      if (!preview.ready) return;
+function scheduleRenderPreview(force = false) {
+  if (!preview.ready) return;
 
-      // consume the "allow once" token
-      if (preview.manualOnly) preview.allowOnce = false;
-      preview.needsRender = false;
-
-      renderPreview();
-    });
+  // Manual-only: alleen render als force=true of allowOnce=true
+  if (preview.manualOnly && !force && !preview.allowOnce) {
+    preview.needsRender = true;
+    return;
   }
+
+  // consume token (als we render)
+  if (preview.manualOnly) preview.allowOnce = false;
+  preview.needsRender = false;
+
+  if (_rafPrev) return;
+  _rafPrev = requestAnimationFrame(() => {
+    _rafPrev = 0;
+    if (!preview.ready) return;
+    renderPreview();
+  });
+}
+
+// Helper voor je button: 1x render toestaan
+function requestManualPreviewRender() {
+  preview.allowOnce = true;
+  scheduleRenderPreview(true);
+}
 
   // ===========================
   // RENDER ALL (rays pane)
@@ -3077,8 +3085,9 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
         preview.ready = true;
 
         if (ui.footerWarn) ui.footerWarn.textContent = `Preview image loaded: ${preview.imgCanvas.width}×${preview.imgCanvas.height}`;
-        scheduleRenderPreview();
-        resolve(true);
+        preview.allowOnce = true;
+        scheduleRenderPreview(true);
+         resolve(true);
       };
       img.onerror = (e) => {
         if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${url}`;
@@ -3181,18 +3190,24 @@ function wireUI() {
     scheduleRenderPreview();
   });
 
+if (ui.btnRenderPreview) {
+  ui.btnRenderPreview.addEventListener("click", (e) => {
+    e.preventDefault();
+    requestManualPreviewRender();
+  });
+}
+   
   // live render controls
   [
     "fieldAngle","rayCount","wavePreset",
     "sensorOffset","focusMode","lensFocus",
     "renderScale","prevObjDist","prevObjH","prevRes"
-  ].forEach((id) => {
-    const el = ui[id];
-    if (!el) return;
-    el.addEventListener("input", () => { scheduleRenderAll(); scheduleRenderPreview(); });
-    el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
-  });
-
+ ].forEach((id) => {
+  const el = ui[id];
+  if (!el) return;
+  el.addEventListener("input", () => { renderAll(); scheduleRenderPreview(); });
+  el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
+});
   // preview options (DOF/CA/quality)
   ["optDOF","optCA","renderQuality"].forEach((id) => {
     const el = document.getElementById(id);
