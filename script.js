@@ -374,17 +374,19 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     return WL.d;
   }
 
-  function glassN(glassName, lambda = 0.00055) {
+ function glassN(glassName, wavePresetOrNm = "d") {
+  // accepteer zowel "d"/"c"/"F"/"g" ALS lambdaNm als number
+  const lambdaNm =
+    (typeof wavePresetOrNm === "number" && Number.isFinite(wavePresetOrNm))
+      ? wavePresetOrNm
+      : wavePresetToLambdaNm(wavePresetOrNm);
+
+  // resolve aliases + waarschuwing als onbekend
   const key = resolveGlassName(glassName);
   if (key === "AIR" && glassName !== "AIR") warnMissingGlass(glassName);
 
-  const g = GLASS_DB[key] || GLASS_DB.AIR;
-  const nd = g.nd;
-  const Vd = g.Vd;
-  if (!Number.isFinite(nd) || !Number.isFinite(Vd) || Vd > 900) return nd;
-
-  const B = (nd - 1) / Vd;
-  return nd + B * (0.00055 - lambda) / 0.00015;
+  // echte dispersie (Sellmeier indien aanwezig, anders Cauchy-fit)
+  return glassN_lambda(key, lambdaNm);
 }
 
    // -------------------- GLASS ALIASES (keep existing preset names working) --------------------
