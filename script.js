@@ -2368,10 +2368,8 @@ if (isIMS || isMECH) {
 
     if (elUI.g1 && elUI.g2 && !elUI.g1.dataset._filled) {
       const keys = Object.keys(GLASS_DB);
-      elUI.g1.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
-      elUI.g2.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
-      elUI.g1.value = "BK7";
-      elUI.g2.value = "F2";
+     elUI.g1.value = "N-BK7HT";
+elUI.g2.value = "N-F2";
       elUI.g1.dataset._filled = "1";
     }
 
@@ -2654,6 +2652,22 @@ if (isIMS || isMECH) {
   const imgH = preview.imgCanvas.height;
   const imgData = hasImg ? preview.imgData : null;
 
+
+const key = [
+  lens.name,
+  JSON.stringify(lens.surfaces), // of beter: een snelle hash
+  sensorW, sensorH, objDist, objH, doCA, doDOF, q,
+  focusMode, sensorX, lensShift,
+  wavePreset
+].join("|");
+
+if (preview.dirtyKey === key && preview.worldReady) {
+  drawPreviewViewport();
+  return;
+}
+preview.dirtyKey = key;
+preview.worldReady = false;
+    
   function sample(u, v) {
     if (!hasImg) return [255, 255, 255, 255];
     if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
