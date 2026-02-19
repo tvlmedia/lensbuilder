@@ -374,10 +374,52 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     return WL.d;
   }
 
-  function glassN(glassName, wavePreset){
-    const lambdaNm = wavePresetToLambdaNm(wavePreset);
-    return glassN_lambda(String(glassName || "AIR"), lambdaNm);
+  function glassN(glassName, lambda = 0.00055) {
+  const key = resolveGlassName(glassName);
+  if (key === "AIR" && glassName !== "AIR") warnMissingGlass(glassName);
+
+  const g = GLASS_DB[key] || GLASS_DB.AIR;
+  const nd = g.nd;
+  const Vd = g.Vd;
+  if (!Number.isFinite(nd) || !Number.isFinite(Vd) || Vd > 900) return nd;
+
+  const B = (nd - 1) / Vd;
+  return nd + B * (0.00055 - lambda) / 0.00015;
+}
+
+   // -------------------- GLASS ALIASES (keep existing preset names working) --------------------
+const GLASS_ALIASES = {
+  // element modal defaults
+  BK7: "N-BK7HT",
+  F2: "N-F2",
+
+  // your preset names
+  LASF35: "N-LASF43",     // kies de beste match in jouw DB
+  LASFN31: "N-LASF43",    // idem
+  LF5: "N-SF5",           // of N-F2 als je liever minder extreme flint wil
+
+  // SCHOTT / OHARA style names you used
+  "S-LAM3": "N-LAK9",     // lanthanum crown-ish
+  "S-BAH11": "N-BAK4"     // barium crown-ish (of N-BAF10 als je meer flint wil)
+};
+
+// helper: resolve any name to a real GLASS_DB key
+function resolveGlassName(name) {
+  if (!name) return "AIR";
+  if (GLASS_DB[name]) return name;
+  const alias = GLASS_ALIASES[name];
+  if (alias && GLASS_DB[alias]) return alias;
+  return "AIR";
+}
+
+// OPTIONAL: warn once per missing glass, so you immediately see what's broken
+const _glassWarned = new Set();
+function warnMissingGlass(name) {
+  if (!_glassWarned.has(name)) {
+    _glassWarned.add(name);
+    console.warn(`[GLASS_DB] Unknown glass "${name}" (resolved to AIR). Add alias or DB entry.`);
   }
+}
 
   // -------------------- built-in lenses --------------------
   function demoLensSimple() {
