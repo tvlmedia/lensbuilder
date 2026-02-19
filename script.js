@@ -849,17 +849,24 @@ function warnMissingGlass(name) {
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
       const isIMS  = type === "IMS";
-      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+      const isMECH =   type === "MECH" || type === "BAFFLE" || type === "HOUSING" || type === "OBE";
 
       const hitInfo = intersectSurface3D(ray, s);
       if (!hitInfo){ vignetted = true; break; }
 
-      if (!isIMS && hitInfo.vignetted){ vignetted = true; break; }
+     if (hitInfo.vignetted) {
+  if (isMECH) {
+    vignetted = true;
+    ray = { p: hitInfo.hit, d: ray.d };
+    continue;
+  }
+  if (!isIMS) { vignetted = true; break; }
+}
 
-      if (isIMS || isMECH){
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
+if (isIMS || isMECH){
+  ray = { p: hitInfo.hit, d: ray.d };
+  continue;
+}
 
       const nRight = glassN(String(s.glass || "AIR"), wavePreset);
       const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
@@ -959,22 +966,29 @@ function warnMissingGlass(name) {
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
       const isIMS = type === "IMS";
-      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+      const isMECH =   type === "MECH" || type === "BAFFLE" || type === "HOUSING" || type === "OBE";
 
       if (skipIMS && isIMS) continue;
 
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
 
-      pts.push(hitInfo.hit);
+     pts.push(hitInfo.hit);
 
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+// MECH/OBE mag rays NIET stoppen; wel “markeren” als blocked
+if (hitInfo.vignetted) {
+  if (isMECH) {
+    vignetted = true;
+    ray = { p: hitInfo.hit, d: ray.d };
+    continue;
+  }
+  if (!isIMS) { vignetted = true; break; }
+}
 
-      if (isIMS || isMECH) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
-
+if (isIMS || isMECH) {
+  ray = { p: hitInfo.hit, d: ray.d };
+  continue;
+}
       const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
 
       if (Math.abs(nAfter - nBefore) < 1e-9) {
@@ -1002,19 +1016,27 @@ function warnMissingGlass(name) {
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
       const isIMS = type === "IMS";
-      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+      const isMECH =   type === "MECH" || type === "BAFFLE" || type === "HOUSING" || type === "OBE";
 
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
 
-      pts.push(hitInfo.hit);
+    pts.push(hitInfo.hit);
 
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+// MECH/OBE mag rays NIET stoppen; wel “markeren” als blocked
+if (hitInfo.vignetted) {
+  if (isMECH) {
+    vignetted = true;
+    ray = { p: hitInfo.hit, d: ray.d };
+    continue;
+  }
+  if (!isIMS) { vignetted = true; break; }
+}
 
-      if (isIMS || isMECH) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
+if (isIMS || isMECH) {
+  ray = { p: hitInfo.hit, d: ray.d };
+  continue;
+}
 
       const nRight = glassN(String(s.glass || "AIR"), wavePreset);
       const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
