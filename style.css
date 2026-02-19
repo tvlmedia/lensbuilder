@@ -583,3 +583,7 @@ canvas{
   .topbar{ height:auto; flex:0 0 auto; }
   .toolbar{ gap:8px; }
 }
+input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
