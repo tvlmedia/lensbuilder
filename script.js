@@ -571,6 +571,11 @@ function warnMissingGlass(name) {
         buildTable();
       });
 
+function isOBEType(s) {
+  const t = String(s?.type || "").toUpperCase();
+  return t === "OBE" || t === "MECH" || t === "BAFFLE" || t === "HOUSING";
+}
+       
       tr.innerHTML = `
         <td style="width:34px; font-family:var(--mono)">${idx}</td>
         <td style="width:72px"><input class="cellInput" data-k="type" data-i="${idx}" value="${s.type}"></td>
@@ -616,6 +621,10 @@ function warnMissingGlass(name) {
     const s = lens.surfaces[i];
     if (!s) return;
 
+const t0 = String(s.type || "").toUpperCase();
+const isOBE = (t0 === "OBE" || t0 === "MECH" || t0 === "BAFFLE" || t0 === "HOUSING");
+if (isOBE && k === "t") return; // thickness locked
+     
     if (k === "type") s.type = el.value;
     else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
     else s[k] = num(el.value, s[k] ?? 0);
@@ -638,6 +647,11 @@ function warnMissingGlass(name) {
     if (k === "stop") {
       const want = !!el.checked;
 
+
+const t0 = String(s.type || "").toUpperCase();
+const isOBE = (t0 === "OBE" || t0 === "MECH" || t0 === "BAFFLE" || t0 === "HOUSING");
+if (isOBE && k === "t") return; // thickness locked
+       
       const t0 = String(s.type || "").toUpperCase();
       if (t0 === "OBJ" || t0 === "IMS") {
         el.checked = false;
