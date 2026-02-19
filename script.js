@@ -553,6 +553,11 @@ function warnMissingGlass(name) {
     _focusMemo = null;
   }
 
+function isOBEType(s) {
+  const t = String(s?.type || "").toUpperCase();
+  return t === "OBE" || t === "MECH" || t === "BAFFLE" || t === "HOUSING";
+}
+   
   // -------------------- table build + events --------------------
   function buildTable() {
     clampSelected();
@@ -571,10 +576,7 @@ function warnMissingGlass(name) {
         buildTable();
       });
 
-function isOBEType(s) {
-  const t = String(s?.type || "").toUpperCase();
-  return t === "OBE" || t === "MECH" || t === "BAFFLE" || t === "HOUSING";
-}
+
        
       tr.innerHTML = `
         <td style="width:34px; font-family:var(--mono)">${idx}</td>
@@ -634,50 +636,58 @@ if (isOBE && k === "t") return; // thickness locked
     scheduleRenderPreview();
   }
 
-  function onCellCommit(e) {
-    const el = e.target;
-    const i = Number(el.dataset.i);
-    const k = el.dataset.k;
-    if (!Number.isFinite(i) || !k) return;
+function onCellCommit(e) {
+  const el = e.target;
+  const i = Number(el.dataset.i);
+  const k = el.dataset.k;
+  if (!Number.isFinite(i) || !k) return;
 
-    selectedIndex = i;
-    const s = lens.surfaces[i];
-    if (!s) return;
+  selectedIndex = i;
+  const s = lens.surfaces[i];
+  if (!s) return;
 
-    if (k === "stop") {
-      const want = !!el.checked;
-
-
-const t0 = String(s.type || "").toUpperCase();
-const isOBE = (t0 === "OBE" || t0 === "MECH" || t0 === "BAFFLE" || t0 === "HOUSING");
-if (isOBE && k === "t") return; // thickness locked
-       
-      const t0 = String(s.type || "").toUpperCase();
-      if (t0 === "OBJ" || t0 === "IMS") {
-        el.checked = false;
-        if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
-        return;
-      }
-
-      lens.surfaces.forEach((ss, j) => {
-        ss.stop = false;
-        if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
-      });
-
-      s.stop = want;
-      if (want) s.type = "STOP";
-      if (want) s.R = 0.0;
-    } else if (k === "glass") s.glass = el.value;
-    else if (k === "type") s.type = el.value;
-    else s[k] = num(el.value, s[k] ?? 0);
-
-    applySensorToIMS();
-    clampAllApertures(lens.surfaces);
-    buildTable();
-    renderAll();
-    scheduleRenderPreview();
+  // lock thickness commits for OBE/MECH/etc
+  if (k === "t" && isOBEType(s)) {
+    // zet UI terug naar echte waarde (voor de zekerheid)
+    el.value = Number(s.t || 0).toFixed(2);
+    return;
   }
 
+  if (k === "stop") {
+    const want = !!el.checked;
+
+    const t0 = String(s.type || "").toUpperCase();
+    if (t0 === "OBJ" || t0 === "IMS") {
+      el.checked = false;
+      if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
+      return;
+    }
+
+    lens.surfaces.forEach((ss, j) => {
+      ss.stop = false;
+      if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
+    });
+
+    s.stop = want;
+    if (want) s.type = "STOP";
+    if (want) s.R = 0.0;
+
+  } else if (k === "glass") {
+    s.glass = el.value;
+
+  } else if (k === "type") {
+    s.type = el.value;
+
+  } else {
+    s[k] = num(el.value, s[k] ?? 0);
+  }
+
+  applySensorToIMS();
+  clampAllApertures(lens.surfaces);
+  buildTable();
+  renderAll();
+  scheduleRenderPreview();
+}
   // -------------------- math helpers --------------------
   function normalize(v) {
     const m = Math.hypot(v.x, v.y);
