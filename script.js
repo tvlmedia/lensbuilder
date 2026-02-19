@@ -553,11 +553,6 @@ function warnMissingGlass(name) {
     _focusMemo = null;
   }
 
-function isOBEType(s) {
-  const t = String(s?.type || "").toUpperCase();
-  return t === "OBE" || t === "MECH" || t === "BAFFLE" || t === "HOUSING";
-}
-   
   // -------------------- table build + events --------------------
   function buildTable() {
     clampSelected();
@@ -576,8 +571,6 @@ function isOBEType(s) {
         buildTable();
       });
 
-
-       
       tr.innerHTML = `
         <td style="width:34px; font-family:var(--mono)">${idx}</td>
         <td style="width:72px"><input class="cellInput" data-k="type" data-i="${idx}" value="${s.type}"></td>
@@ -623,10 +616,6 @@ function isOBEType(s) {
     const s = lens.surfaces[i];
     if (!s) return;
 
-const t0 = String(s.type || "").toUpperCase();
-const isOBE = (t0 === "OBE" || t0 === "MECH" || t0 === "BAFFLE" || t0 === "HOUSING");
-if (isOBE && k === "t") return; // thickness locked
-     
     if (k === "type") s.type = el.value;
     else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
     else s[k] = num(el.value, s[k] ?? 0);
@@ -636,58 +625,45 @@ if (isOBE && k === "t") return; // thickness locked
     scheduleRenderPreview();
   }
 
-function onCellCommit(e) {
-  const el = e.target;
-  const i = Number(el.dataset.i);
-  const k = el.dataset.k;
-  if (!Number.isFinite(i) || !k) return;
+  function onCellCommit(e) {
+    const el = e.target;
+    const i = Number(el.dataset.i);
+    const k = el.dataset.k;
+    if (!Number.isFinite(i) || !k) return;
 
-  selectedIndex = i;
-  const s = lens.surfaces[i];
-  if (!s) return;
+    selectedIndex = i;
+    const s = lens.surfaces[i];
+    if (!s) return;
 
-  // lock thickness commits for OBE/MECH/etc
-  if (k === "t" && isOBEType(s)) {
-    // zet UI terug naar echte waarde (voor de zekerheid)
-    el.value = Number(s.t || 0).toFixed(2);
-    return;
+    if (k === "stop") {
+      const want = !!el.checked;
+
+      const t0 = String(s.type || "").toUpperCase();
+      if (t0 === "OBJ" || t0 === "IMS") {
+        el.checked = false;
+        if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
+        return;
+      }
+
+      lens.surfaces.forEach((ss, j) => {
+        ss.stop = false;
+        if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
+      });
+
+      s.stop = want;
+      if (want) s.type = "STOP";
+      if (want) s.R = 0.0;
+    } else if (k === "glass") s.glass = el.value;
+    else if (k === "type") s.type = el.value;
+    else s[k] = num(el.value, s[k] ?? 0);
+
+    applySensorToIMS();
+    clampAllApertures(lens.surfaces);
+    buildTable();
+    renderAll();
+    scheduleRenderPreview();
   }
 
-  if (k === "stop") {
-    const want = !!el.checked;
-
-    const t0 = String(s.type || "").toUpperCase();
-    if (t0 === "OBJ" || t0 === "IMS") {
-      el.checked = false;
-      if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
-      return;
-    }
-
-    lens.surfaces.forEach((ss, j) => {
-      ss.stop = false;
-      if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
-    });
-
-    s.stop = want;
-    if (want) s.type = "STOP";
-    if (want) s.R = 0.0;
-
-  } else if (k === "glass") {
-    s.glass = el.value;
-
-  } else if (k === "type") {
-    s.type = el.value;
-
-  } else {
-    s[k] = num(el.value, s[k] ?? 0);
-  }
-
-  applySensorToIMS();
-  clampAllApertures(lens.surfaces);
-  buildTable();
-  renderAll();
-  scheduleRenderPreview();
-}
   // -------------------- math helpers --------------------
   function normalize(v) {
     const m = Math.hypot(v.x, v.y);
@@ -873,24 +849,17 @@ function onCellCommit(e) {
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
       const isIMS  = type === "IMS";
-      const isMECH =   type === "MECH" || type === "BAFFLE" || type === "HOUSING" || type === "OBE";
+      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
       const hitInfo = intersectSurface3D(ray, s);
       if (!hitInfo){ vignetted = true; break; }
 
-     if (hitInfo.vignetted) {
-  if (isMECH) {
-    vignetted = true;
-    ray = { p: hitInfo.hit, d: ray.d };
-    continue;
-  }
-  if (!isIMS) { vignetted = true; break; }
-}
+      if (!isIMS && hitInfo.vignetted){ vignetted = true; break; }
 
-if (isIMS || isMECH){
-  ray = { p: hitInfo.hit, d: ray.d };
-  continue;
-}
+      if (isIMS || isMECH){
+        ray = { p: hitInfo.hit, d: ray.d };
+        continue;
+      }
 
       const nRight = glassN(String(s.glass || "AIR"), wavePreset);
       const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
@@ -990,29 +959,22 @@ if (isIMS || isMECH){
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
       const isIMS = type === "IMS";
-      const isMECH =   type === "MECH" || type === "BAFFLE" || type === "HOUSING" || type === "OBE";
+      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
       if (skipIMS && isIMS) continue;
 
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
 
-     pts.push(hitInfo.hit);
+      pts.push(hitInfo.hit);
 
-// MECH/OBE mag rays NIET stoppen; wel “markeren” als blocked
-if (hitInfo.vignetted) {
-  if (isMECH) {
-    vignetted = true;
-    ray = { p: hitInfo.hit, d: ray.d };
-    continue;
-  }
-  if (!isIMS) { vignetted = true; break; }
-}
+      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-if (isIMS || isMECH) {
-  ray = { p: hitInfo.hit, d: ray.d };
-  continue;
-}
+      if (isIMS || isMECH) {
+        ray = { p: hitInfo.hit, d: ray.d };
+        continue;
+      }
+
       const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
 
       if (Math.abs(nAfter - nBefore) < 1e-9) {
@@ -1040,27 +1002,19 @@ if (isIMS || isMECH) {
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
       const isIMS = type === "IMS";
-      const isMECH =   type === "MECH" || type === "BAFFLE" || type === "HOUSING" || type === "OBE";
+      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
 
-    pts.push(hitInfo.hit);
+      pts.push(hitInfo.hit);
 
-// MECH/OBE mag rays NIET stoppen; wel “markeren” als blocked
-if (hitInfo.vignetted) {
-  if (isMECH) {
-    vignetted = true;
-    ray = { p: hitInfo.hit, d: ray.d };
-    continue;
-  }
-  if (!isIMS) { vignetted = true; break; }
-}
+      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-if (isIMS || isMECH) {
-  ray = { p: hitInfo.hit, d: ray.d };
-  continue;
-}
+      if (isIMS || isMECH) {
+        ray = { p: hitInfo.hit, d: ray.d };
+        continue;
+      }
 
       const nRight = glassN(String(s.glass || "AIR"), wavePreset);
       const nLeft  = (i === 0) ? 1.0 : glassN(String(surfaces[i - 1].glass || "AIR"), wavePreset);
@@ -2368,8 +2322,10 @@ if (isIMS || isMECH) {
 
     if (elUI.g1 && elUI.g2 && !elUI.g1.dataset._filled) {
       const keys = Object.keys(GLASS_DB);
-     elUI.g1.value = "N-BK7HT";
-elUI.g2.value = "N-F2";
+      elUI.g1.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
+      elUI.g2.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
+      elUI.g1.value = "BK7";
+      elUI.g2.value = "F2";
       elUI.g1.dataset._filled = "1";
     }
 
@@ -2652,22 +2608,6 @@ elUI.g2.value = "N-F2";
   const imgH = preview.imgCanvas.height;
   const imgData = hasImg ? preview.imgData : null;
 
-
-const key = [
-  lens.name,
-  JSON.stringify(lens.surfaces), // of beter: een snelle hash
-  sensorW, sensorH, objDist, objH, doCA, doDOF, q,
-  focusMode, sensorX, lensShift,
-  wavePreset
-].join("|");
-
-if (preview.dirtyKey === key && preview.worldReady) {
-  drawPreviewViewport();
-  return;
-}
-preview.dirtyKey = key;
-preview.worldReady = false;
-    
   function sample(u, v) {
     if (!hasImg) return [255, 255, 255, 255];
     if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
