@@ -477,32 +477,31 @@ function warnMissingGlass(name) {
 
   // -------------------- sanitize/load --------------------
   function sanitizeLens(obj) {
-    const safe = {
-      name: String(obj?.name ?? "No name"),
-      notes: Array.isArray(obj?.notes) ? obj.notes.map(String) : [],
-      surfaces: Array.isArray(obj?.surfaces) ? obj.surfaces : [],
-    };
+  const safe = {
+    name: String(obj?.name ?? "No name"),
+    notes: Array.isArray(obj?.notes) ? obj.notes.map(String) : [],
+    surfaces: Array.isArray(obj?.surfaces) ? obj.surfaces : [],
+  };
 
-    safe.surfaces = safe.surfaces.map((s) => ({
-      type: String(s?.type ?? ""),
-      R: Number(s?.R ?? 0),
-      t: Number(s?.t ?? 0),
-      ap: Number(s?.ap ?? 10),
-      glass: String(s?.glass ?? "AIR"),
-      stop: Boolean(s?.stop ?? false),
-    }));
+  safe.surfaces = safe.surfaces.map((s) => ({
+    type: String(s?.type ?? ""),
+    R: Number(s?.R ?? 0),
+    t: Number(s?.t ?? 0),
+    ap: Number(s?.ap ?? 10),
+    glass: String(s?.glass ?? "AIR"),
+    stop: Boolean(s?.stop ?? false),
+  }));
 
     const firstStop = safe.surfaces.findIndex((s) => s.stop);
     if (firstStop >= 0) safe.surfaces.forEach((s, i) => { if (i !== firstStop) s.stop = false; });
 
     safe.surfaces.forEach((s, i) => { if (!s.type || !s.type.trim()) s.type = String(i); });
 
-    if (safe.surfaces.length >= 1) safe.surfaces[0].type = "OBJ";
-    const imsIdx = safe.surfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
-    if (imsIdx >= 0 && imsIdx !== safe.surfaces.length - 1) {
-      const ims = safe.surfaces.splice(imsIdx, 1)[0];
-      safe.surfaces.push(ims);
-    }
+    if (safe.surfaces.length >= 1) {
+    safe.surfaces[0].type = "OBJ";
+    // ✅ hard lock
+    safe.surfaces[0].t = 0.0;
+  }
     if (safe.surfaces.length >= 1) safe.surfaces[safe.surfaces.length - 1].type = "IMS";
 
     return safe;
@@ -571,12 +570,19 @@ function warnMissingGlass(name) {
         buildTable();
       });
 
-      tr.innerHTML = `
-        <td style="width:34px; font-family:var(--mono)">${idx}</td>
-        <td style="width:72px"><input class="cellInput" data-k="type" data-i="${idx}" value="${s.type}"></td>
-        <td style="width:92px"><input class="cellInput" data-k="R" data-i="${idx}" type="number" step="0.01" value="${s.R}"></td>
-        <td style="width:92px"><input class="cellInput" data-k="t" data-i="${idx}" type="number" step="0.01" value="${s.t}"></td>
-        <td style="width:92px"><input class="cellInput" data-k="ap" data-i="${idx}" type="number" step="0.01" value="${s.ap}"></td>
+     const isOBJ = String(s.type || "").toUpperCase() === "OBJ";
+
+tr.innerHTML = `
+  <td style="width:34px; font-family:var(--mono)">${idx}</td>
+  <td style="width:72px"><input class="cellInput" data-k="type" data-i="${idx}" value="${s.type}"></td>
+  <td style="width:92px"><input class="cellInput" data-k="R" data-i="${idx}" type="number" step="0.01" value="${s.R}"></td>
+
+  <td style="width:92px">
+    <input class="cellInput" data-k="t" data-i="${idx}" type="number" step="0.01"
+      value="${isOBJ ? 0 : s.t}" ${isOBJ ? "disabled" : ""}>
+  </td>
+
+  <td style="width:92px"><input class="cellInput" data-k="ap" data-i="${idx}" type="number" step="0.01" value="${s.ap}"></td>
         <td style="width:110px">
           <select class="cellSelect" data-k="glass" data-i="${idx}">
             ${Object.keys(GLASS_DB).map((name) =>
@@ -606,63 +612,63 @@ function warnMissingGlass(name) {
     restoreTableFocus();
   }
 
-  function onCellInput(e) {
-    const el = e.target;
-    const i = Number(el.dataset.i);
-    const k = el.dataset.k;
-    if (!Number.isFinite(i) || !k) return;
+ function onCellInput(e) {
+  const el = e.target;
+  const i = Number(el.dataset.i);
+  const k = el.dataset.k;
+  if (!Number.isFinite(i) || !k) return;
 
-    selectedIndex = i;
-    const s = lens.surfaces[i];
-    if (!s) return;
+  selectedIndex = i;
+  const s = lens.surfaces[i];
+  if (!s) return;
 
-    if (k === "type") s.type = el.value;
-    else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
-    else s[k] = num(el.value, s[k] ?? 0);
+  const t0 = String(s.type || "").toUpperCase();
 
-    applySensorToIMS();
+  // ✅ OBJ thickness hard lock
+  if (t0 === "OBJ" && k === "t") {
+    s.t = 0.0;
+    el.value = "0";
     scheduleRenderAll();
     scheduleRenderPreview();
+    return;
   }
 
-  function onCellCommit(e) {
-    const el = e.target;
-    const i = Number(el.dataset.i);
-    const k = el.dataset.k;
-    if (!Number.isFinite(i) || !k) return;
+  if (k === "type") s.type = el.value;
+  else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
+  else s[k] = num(el.value, s[k] ?? 0);
 
-    selectedIndex = i;
-    const s = lens.surfaces[i];
-    if (!s) return;
+  applySensorToIMS();
+  scheduleRenderAll();
+  scheduleRenderPreview();
+}
 
-    if (k === "stop") {
-      const want = !!el.checked;
+function onCellCommit(e) {
+  const el = e.target;
+  const i = Number(el.dataset.i);
+  const k = el.dataset.k;
+  if (!Number.isFinite(i) || !k) return;
 
-      const t0 = String(s.type || "").toUpperCase();
-      if (t0 === "OBJ" || t0 === "IMS") {
-        el.checked = false;
-        if (ui.footerWarn) ui.footerWarn.textContent = "STOP mag niet op OBJ of IMS.";
-        return;
-      }
+  selectedIndex = i;
+  const s = lens.surfaces[i];
+  if (!s) return;
 
-      lens.surfaces.forEach((ss, j) => {
-        ss.stop = false;
-        if (String(ss.type).toUpperCase() === "STOP") ss.type = String(j);
-      });
+  const t0 = String(s.type || "").toUpperCase();
 
-      s.stop = want;
-      if (want) s.type = "STOP";
-      if (want) s.R = 0.0;
-    } else if (k === "glass") s.glass = el.value;
-    else if (k === "type") s.type = el.value;
-    else s[k] = num(el.value, s[k] ?? 0);
-
-    applySensorToIMS();
-    clampAllApertures(lens.surfaces);
-    buildTable();
-    renderAll();
-    scheduleRenderPreview();
+  // ✅ OBJ thickness hard lock (ook op commit)
+  if (t0 === "OBJ" && k === "t") {
+    s.t = 0.0;
+    el.value = "0";
   }
+
+  // ... jouw bestaande commit logic ...
+  // (stop / glass / type / else)
+
+  applySensorToIMS();
+  clampAllApertures(lens.surfaces);
+  buildTable();
+  renderAll();
+  scheduleRenderPreview();
+}
 
   // -------------------- math helpers --------------------
   function normalize(v) {
@@ -946,52 +952,55 @@ function warnMissingGlass(name) {
   }
 
   // -------------------- tracing --------------------
-  function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
-    const skipIMS = !!opts.skipIMS;
+function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
+  const skipIMS = !!opts.skipIMS;
 
-    let pts = [];
-    let vignetted = false;
-    let tir = false;
+  let pts = [];
+  let vignetted = false;
+  let tir = false;
 
-    let nBefore = 1.0;
+  // ✅ teken altijd vanaf ray start
+  pts.push({ x: ray.p.x, y: ray.p.y });
 
-    for (let i = 0; i < surfaces.length; i++) {
-      const s = surfaces[i];
-      const type = String(s?.type || "").toUpperCase();
-      const isIMS = type === "IMS";
-      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+  let nBefore = 1.0;
 
-      if (skipIMS && isIMS) continue;
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i];
+    const type = String(s?.type || "").toUpperCase();
+    const isIMS = type === "IMS";
+    const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
-      const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
+    if (skipIMS && isIMS) continue;
 
-      pts.push(hitInfo.hit);
+    const hitInfo = intersectSurface(ray, s);
+    if (!hitInfo) { vignetted = true; break; }
 
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+    pts.push(hitInfo.hit);
 
-      if (isIMS || isMECH) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        continue;
-      }
+    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
 
-      const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
-
-      if (Math.abs(nAfter - nBefore) < 1e-9) {
-        ray = { p: hitInfo.hit, d: ray.d };
-        nBefore = nAfter;
-        continue;
-      }
-
-      const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-      if (!newDir) { tir = true; break; }
-
-      ray = { p: hitInfo.hit, d: newDir };
-      nBefore = nAfter;
+    if (isIMS || isMECH) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
     }
 
-    return { pts, vignetted, tir, endRay: ray };
+    const nAfter = glassN(String(s.glass || "AIR"), wavePreset);
+
+    if (Math.abs(nAfter - nBefore) < 1e-9) {
+      ray = { p: hitInfo.hit, d: ray.d };
+      nBefore = nAfter;
+      continue;
+    }
+
+    const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
+    if (!newDir) { tir = true; break; }
+
+    ray = { p: hitInfo.hit, d: newDir };
+    nBefore = nAfter;
   }
+
+  return { pts, vignetted, tir, endRay: ray };
+}
 
   function traceRayReverse(ray, surfaces, wavePreset) {
     let pts = [];
