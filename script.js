@@ -80,6 +80,7 @@
     vig: $("#badgeVig"),
     fov: $("#badgeFov"),
     cov: $("#badgeCov"),
+    ic: $("#badgeIC"),
 
     footerWarn: $("#footerWarn"),
     metaInfo: $("#metaInfo"),
@@ -89,6 +90,7 @@
     tstopTop: $("#badgeTTop"),
     fovTop: $("#badgeFovTop"),
     covTop: $("#badgeCovTop"),
+    icTop: $("#badgeICTop"),
 
     sensorPreset: $("#sensorPreset"),
     sensorW: $("#sensorW"),
@@ -179,6 +181,20 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
 
   const OV = 1.6; // overscan factor for preview
   const USABLE_CIRCLE_THRESHOLD_REL = 0.35; // 35% of center illumination
+
+  function updateUsableCircleBadges() {
+    const uc = preview.usableCircle;
+    if (!uc?.valid) {
+      if (ui.ic) ui.ic.textContent = "Image Circle: —";
+      if (ui.icTop) ui.icTop.textContent = "IC: —";
+      return;
+    }
+    const thrPct = Math.round((uc.thresholdRel ?? USABLE_CIRCLE_THRESHOLD_REL) * 100);
+    const leftTxt = `Image Circle (${thrPct}%): Ø${uc.diameterMm.toFixed(1)}mm`;
+    const topTxt = `IC ${thrPct}%: Ø${uc.diameterMm.toFixed(1)}mm`;
+    if (ui.ic) ui.ic.textContent = leftTxt;
+    if (ui.icTop) ui.icTop.textContent = topTxt;
+  }
 
   // -------------------- default preview chart (GitHub) --------------------
   const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
@@ -2814,6 +2830,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       relAtCutoff: 0,
       source,
     };
+    updateUsableCircleBadges();
   }
 
   function setUsableCircleFromRadialCurve(radialMm, gainCurve, source = "curve") {
@@ -2890,6 +2907,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       relAtCutoff: relAtCut,
       source,
     };
+    updateUsableCircleBadges();
   }
 
   function setUsableCircleFromLUT(transCurve, naturalCurve, rMaxSensorMm) {
@@ -2947,6 +2965,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
  function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
+  setNoUsableCircle("pending");
 
   const doDOF = !!document.getElementById("optDOF")?.checked;
   const doCA  = !!document.getElementById("optCA")?.checked;
