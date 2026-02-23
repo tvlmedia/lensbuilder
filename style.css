@@ -298,6 +298,16 @@ body{
   background:rgba(255,255,255,.03);
 }
 .badgeWide{ flex:1; min-width:260px; }
+.badge.isOk{
+  color:var(--ok);
+  border-color:rgba(66,209,143,.45);
+  background:rgba(66,209,143,.08);
+}
+.badge.isBad{
+  color:var(--danger);
+  border-color:rgba(217,91,91,.45);
+  background:rgba(217,91,91,.08);
+}
 
 .footerRow{
   display:flex;
@@ -350,6 +360,16 @@ body{
   border:1px solid var(--stroke2);
   background:rgba(0,0,0,.20);
   font-size:12px;
+}
+.pill.isOk{
+  color:var(--ok);
+  border-color:rgba(66,209,143,.45);
+  background:rgba(66,209,143,.10);
+}
+.pill.isBad{
+  color:var(--danger);
+  border-color:rgba(217,91,91,.45);
+  background:rgba(217,91,91,.10);
 }
 
 .canvasFrame{

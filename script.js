@@ -189,9 +189,8 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
       if (ui.icTop) ui.icTop.textContent = "IC: —";
       return;
     }
-    const thrPct = Math.round((uc.thresholdRel ?? USABLE_CIRCLE_THRESHOLD_REL) * 100);
-    const leftTxt = `Image Circle (${thrPct}%): Ø${uc.diameterMm.toFixed(1)}mm`;
-    const topTxt = `IC ${thrPct}%: Ø${uc.diameterMm.toFixed(1)}mm`;
+    const leftTxt = `Image Circle: Ø${uc.diameterMm.toFixed(1)}mm`;
+    const topTxt = `IC: Ø${uc.diameterMm.toFixed(1)}mm`;
     if (ui.ic) ui.ic.textContent = leftTxt;
     if (ui.icTop) ui.icTop.textContent = topTxt;
   }
@@ -1937,11 +1936,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
     const covMode = "v";
-    const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
-
-    const covTxt = !fov
-      ? "COV(V): —"
-      : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
+    const { ok: covers } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+    const covTxt = !fov ? "COV: —" : (covers ? "COV: ✅" : "COV: ❌");
 
     const rearVx = lastPhysicalVertexX(lens.surfaces);
     const intrusion = rearVx - plX;
@@ -1961,13 +1957,21 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     if (ui.tstop) ui.tstop.textContent = `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
     if (ui.vig) ui.vig.textContent = `Vignette: ${vigPct}%`;
     if (ui.fov) ui.fov.textContent = fovTxt;
-    if (ui.cov) ui.cov.textContent = covers ? "COV: YES" : "COV: NO";
+    if (ui.cov) ui.cov.textContent = covTxt;
+    if (ui.cov) {
+      ui.cov.classList.toggle("isOk", !!fov && covers);
+      ui.cov.classList.toggle("isBad", !!fov && !covers);
+    }
 
     if (ui.eflTop) ui.eflTop.textContent = ui.efl?.textContent || `EFL: ${efl == null ? "—" : efl.toFixed(2)}mm`;
     if (ui.bflTop) ui.bflTop.textContent = ui.bfl?.textContent || `BFL: ${bfl == null ? "—" : bfl.toFixed(2)}mm`;
     if (ui.tstopTop) ui.tstopTop.textContent = ui.tstop?.textContent || `T≈ ${T == null ? "—" : "T" + T.toFixed(2)}`;
     if (ui.fovTop) ui.fovTop.textContent = fovTxt;
-    if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
+    if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || covTxt;
+    if (ui.covTop) {
+      ui.covTop.classList.toggle("isOk", !!fov && covers);
+      ui.covTop.classList.toggle("isBad", !!fov && !covers);
+    }
 
     if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
 
@@ -2308,7 +2312,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     if (preview.usableCircle?.valid) {
-      const cutMm = clamp(preview.usableCircle.radiusMm, 0, maxMm);
+      const cutMm = Math.max(0, preview.usableCircle.radiusMm);
       const tCut = cutMm * pxPerMm;
       const pPos = P(tCut);
       const pNeg = P(-tCut);
@@ -2334,7 +2338,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       pctx.stroke();
       pctx.setLineDash([]);
 
-      const txt = `usable Ø${preview.usableCircle.diameterMm.toFixed(1)}mm @${Math.round(preview.usableCircle.thresholdRel * 100)}%`;
+      const txt = `Image Circle Ø${preview.usableCircle.diameterMm.toFixed(1)}mm`;
       const off = barHalfW + tick10mm + 22;
       const tx = pPos.x + nx * off;
       const ty = pPos.y + ny * off;
@@ -2919,47 +2923,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     for (let i = 0; i < n; i++) {
       const a = n > 1 ? (i / (n - 1)) : 0;
       const rSensorMm = a * rMaxSensorMm;
-      // world render spans OV*sensor dimensions; ruler mm is in sensor-mm space
-      rMm[i] = rSensorMm / OV;
+      // keep true sensor-plane mm so IC stays consistent across sensor presets
+      rMm[i] = rSensorMm;
       gain[i] = Math.max(0, Number(transCurve[i]) * Number(naturalCurve[i]));
     }
     setUsableCircleFromRadialCurve(rMm, gain, "LUT");
-  }
-
-  function setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH) {
-    if (!outD || !(W > 0) || !(H > 0) || !(sensorW > 0) || !(sensorH > 0)) {
-      setNoUsableCircle("pixels");
-      return;
-    }
-
-    const halfDiagMm = Math.hypot(sensorW, sensorH) * 0.5;
-    if (!(halfDiagMm > 0)) { setNoUsableCircle("pixels"); return; }
-
-    const bins = Math.max(96, Math.min(420, Math.round(halfDiagMm * 14)));
-    const sum = new Float64Array(bins);
-    const cnt = new Uint32Array(bins);
-
-    for (let py = 0; py < H; py++) {
-      const yMm = (0.5 - (py + 0.5) / H) * sensorH;
-      for (let px = 0; px < W; px++) {
-        const xMm = ((px + 0.5) / W - 0.5) * sensorW;
-        const rMm = Math.hypot(xMm, yMm);
-        const b = Math.min(bins - 1, Math.max(0, Math.floor((rMm / halfDiagMm) * (bins - 1))));
-        const o = (py * W + px) * 4;
-        const lum = (0.2126 * outD[o] + 0.7152 * outD[o + 1] + 0.0722 * outD[o + 2]) / 255;
-        sum[b] += lum;
-        cnt[b]++;
-      }
-    }
-
-    const rCurve = [];
-    const gCurve = [];
-    for (let b = 0; b < bins; b++) {
-      if (cnt[b] < 8) continue;
-      rCurve.push(((b + 0.5) / bins) * halfDiagMm);
-      gCurve.push(sum[b] / cnt[b]);
-    }
-    setUsableCircleFromRadialCurve(rCurve, gCurve, "pixels");
   }
 
  function renderPreview() {
@@ -3269,10 +3237,6 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         }
       }
 
-      if (!preview.usableCircle.valid) {
-        setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
-      }
-
       wctx.putImageData(out, 0, 0);
       preview.worldReady = true;
       hidePreviewProgress();
@@ -3291,6 +3255,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const out  = wctx.createImageData(W, H);
     const outD = out.data;
+
+    // Optical radial throughput profile (independent of chart colors/content)
+    const dofBins = Math.max(96, Math.min(420, Math.round(rMaxSensor * 14)));
+    const dofSum = new Float64Array(dofBins);
+    const dofCnt = new Uint32Array(dofBins);
 
     const epsX   = 0.05;
     const startX = sensorX + epsX;
@@ -3353,6 +3322,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
             wSum += w;
           }
 
+          {
+            const b = Math.min(dofBins - 1, Math.max(0, Math.floor((rS / Math.max(1e-9, rMaxSensor)) * (dofBins - 1))));
+            dofSum[b] += (wSum / Math.max(1, spp)); // ~= transmission * natural falloff
+            dofCnt[b]++;
+          }
+
           const idx = (row * W + col) * 4;
           if (wSum <= 1e-9) {
             outD[idx] = 0; outD[idx + 1] = 0; outD[idx + 2] = 0; outD[idx + 3] = 255;
@@ -3371,7 +3346,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
       if (row < H) requestAnimationFrame(step);
       else {
-        setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
+        const rCurve = [];
+        const gCurve = [];
+        for (let b = 0; b < dofBins; b++) {
+          if (dofCnt[b] < 4) continue;
+          rCurve.push(((b + 0.5) / dofBins) * rMaxSensor);
+          gCurve.push(dofSum[b] / dofCnt[b]);
+        }
+        setUsableCircleFromRadialCurve(rCurve, gCurve, "DOF");
         hidePreviewProgress();
         drawPreviewViewport();
       }
