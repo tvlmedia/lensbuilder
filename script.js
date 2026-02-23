@@ -2929,6 +2929,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH) {
+    const baseCircle = (preview.usableCircle && preview.usableCircle.valid)
+      ? { ...preview.usableCircle }
+      : null;
+
     if (!outD || !(W > 0) || !(H > 0) || !(sensorW > 0) || !(sensorH > 0)) {
       setNoUsableCircle("pixels");
       return;
@@ -2948,8 +2952,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         const rMm = Math.hypot(xMm, yMm);
         const b = Math.min(bins - 1, Math.max(0, Math.floor((rMm / halfDiagMm) * (bins - 1))));
         const o = (py * W + px) * 4;
-        const lum = (0.2126 * outD[o] + 0.7152 * outD[o + 1] + 0.0722 * outD[o + 2]) / 255;
-        sum[b] += lum;
+        const rr = outD[o] / 255;
+        const gg = outD[o + 1] / 255;
+        const bb = outD[o + 2] / 255;
+        const lum = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+        const sat = Math.max(rr, gg, bb) - Math.min(rr, gg, bb);
+        const neutral = 1 - sat; // blue/cyan fringe -> lower weight
+        const usableScore = lum * (0.35 + 0.65 * neutral);
+        sum[b] += usableScore;
         cnt[b]++;
       }
     }
@@ -2962,6 +2972,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       gCurve.push(sum[b] / cnt[b]);
     }
     setUsableCircleFromRadialCurve(rCurve, gCurve, "pixels");
+
+    if (baseCircle && baseCircle.valid) {
+      if (!preview.usableCircle.valid) {
+        preview.usableCircle = baseCircle;
+        updateUsableCircleBadges();
+      } else if (preview.usableCircle.radiusMm > baseCircle.radiusMm) {
+        preview.usableCircle = baseCircle;
+        updateUsableCircleBadges();
+      }
+    }
   }
 
  function renderPreview() {
@@ -3271,9 +3291,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         }
       }
 
-      if (!preview.usableCircle.valid) {
-        setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
-      }
+      setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
 
       wctx.putImageData(out, 0, 0);
       preview.worldReady = true;
