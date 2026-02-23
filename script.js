@@ -52,8 +52,6 @@
     dirtyKey: "",
 
     view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
-
-    // overlay
     rulerOn: false,
   };
   preview.imgCtx = preview.imgCanvas.getContext("2d");
@@ -98,7 +96,7 @@
     prevRes: $("#prevRes"),
     btnRenderPreview: $("#btnRenderPreview"),
     btnPreviewFS: $("#btnPreviewFS"),
-    btnPreviewRuler: $("#btnPreviewRuler"),
+    btnPreviewRuler: $(\"#btnPreviewRuler\"),
     previewPane: $("#previewPane"),
 
     raysPane: $("#raysPane"),
@@ -2082,6 +2080,215 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       return;
     }
 
+
+function drawPreviewDiagonalRuler(sr0){
+    // Draw in the SAME transformed space as the preview image:
+    // image corners are (-sr0.w/2, -sr0.h/2) to (+sr0.w/2, +sr0.h/2).
+    // This makes the ruler "stick" to the chart while panning/zooming.
+    if (!pctx || !sr0) return;
+
+    const { w: sensorW, h: sensorH } = getSensorWH();
+    const diagMm = Math.hypot(sensorW, sensorH);
+    if (!(diagMm > 0)) return;
+
+    const w = sr0.w, h = sr0.h;
+
+    // local (image) corners
+    const xTL = -w * 0.5, yTL = -h * 0.5;
+    const xBR =  w * 0.5, yBR =  h * 0.5;
+
+    const dx = xBR - xTL;
+    const dy = yBR - yTL;
+    const diagPx = Math.hypot(dx, dy);
+    if (diagPx < 10) return;
+
+    // unit along diagonal + normal
+    const ux = dx / diagPx;
+    const uy = dy / diagPx;
+    const nx = -uy;
+    const ny = ux;
+
+    // center is local origin (0,0)
+    const cx = 0, cy = 0;
+
+    const halfDiagMm = diagMm * 0.5;
+    const halfDiagPx = diagPx * 0.5;
+    const pxPerMm = halfDiagPx / halfDiagMm;
+
+    // tick policy:
+    // - every 1mm tick
+    // - every 5mm slightly longer
+    // - every 10mm (1cm) longest + label (dual scale)
+    const stepMm = 1;
+    const majorMm = 10; // 1cm
+    const midMm   = 5;  // 5mm
+
+    // visuals
+    const barHalfW = 7.0;
+    const tick1mm  = 4;
+    const tick5mm  = 7;
+    const tick10mm = 11;
+
+    // IMPORTANT: per-mm number labeling only when there's enough space,
+    // otherwise it becomes unreadable.
+    // If you REALLY want numbers always, set this to 0.
+    const MIN_PX_PER_MM_FOR_NUMBERS = 6; // adaptive readability
+    const showEveryMmNumber = pxPerMm >= MIN_PX_PER_MM_FOR_NUMBERS;
+
+    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+    const font = 11;
+    const fontSmall = 9;
+
+    function niceCm(mm){
+      const cm = mm / 10;
+      if (Math.abs(cm - Math.round(cm)) < 1e-6) return `${Math.round(cm)}cm`;
+      return `${cm.toFixed(1)}cm`;
+    }
+    function labelText(mm){
+      const rmm = Math.round(mm);
+      const dmm = Math.round(mm * 2);
+      return `${rmm}mm (${niceCm(mm)})  |  Ø${dmm}mm (${niceCm(mm*2)})`;
+    }
+
+    const P = (tPx) => ({ x: cx + ux * tPx, y: cy + uy * tPx });
+
+    pctx.save();
+
+    // clip to the image rect so it never floats outside the chart
+    pctx.beginPath();
+    pctx.rect(xTL, yTL, w, h);
+    pctx.clip();
+
+    pctx.lineCap = "round";
+    pctx.lineJoin = "round";
+
+    // ruler bar
+    pctx.strokeStyle = "rgba(0,0,0,.55)";
+    pctx.lineWidth = barHalfW * 2;
+    pctx.beginPath();
+    pctx.moveTo(xTL, yTL);
+    pctx.lineTo(xBR, yBR);
+    pctx.stroke();
+
+    // subtle edge
+    pctx.strokeStyle = "rgba(255,255,255,.18)";
+    pctx.lineWidth = 2;
+    pctx.beginPath();
+    pctx.moveTo(xTL, yTL);
+    pctx.lineTo(xBR, yBR);
+    pctx.stroke();
+
+    // ticks
+    pctx.strokeStyle = "rgba(255,255,255,.85)";
+    pctx.lineWidth = 1.25;
+
+    // center zero tick (bigger)
+    {
+      const p0 = P(0);
+      pctx.beginPath();
+      pctx.moveTo(p0.x - nx * 14, p0.y - ny * 14);
+      pctx.lineTo(p0.x + nx * 14, p0.y + ny * 14);
+      pctx.stroke();
+    }
+
+    // labels setup
+    pctx.textAlign = "left";
+    pctx.textBaseline = "middle";
+
+    const maxMm = Math.floor(halfDiagMm + 1e-6);
+
+    for (let mm = 0; mm <= maxMm; mm += stepMm){
+      const isMajor = (mm % majorMm) === 0;
+      const isMid = !isMajor && (mm % midMm) === 0;
+      const len = isMajor ? tick10mm : (isMid ? tick5mm : tick1mm);
+      const t = mm * pxPerMm;
+
+      // ---- positive side ----
+      {
+        const p = P(t);
+
+        // tick
+        pctx.beginPath();
+        pctx.moveTo(p.x - nx * len, p.y - ny * len);
+        pctx.lineTo(p.x + nx * len, p.y + ny * len);
+        pctx.stroke();
+
+        // number every mm (only when readable)
+        if (showEveryMmNumber && mm > 0){
+          const txt = `${mm}`;
+          const off = barHalfW + len + 6;
+          const tx = p.x + nx * off;
+          const ty = p.y + ny * off;
+
+          pctx.save();
+          pctx.font = `${fontSmall}px ${mono}`;
+          pctx.fillStyle = "rgba(0,0,0,.55)";
+          const tw = pctx.measureText(txt).width;
+          pctx.fillRect(tx - 3, ty - (fontSmall/2) - 2, tw + 6, fontSmall + 4);
+          pctx.fillStyle = "rgba(255,255,255,.92)";
+          pctx.fillText(txt, tx, ty);
+          pctx.restore();
+        }
+
+        // big label at every cm (dual-scale)
+        if (isMajor && mm > 0){
+          const txt = labelText(mm);
+          const off = barHalfW + tick10mm + 10;
+          const tx = p.x + nx * off;
+          const ty = p.y + ny * off;
+
+          const padX = 7, padY = 4;
+          pctx.save();
+          pctx.font = `${font}px ${mono}`;
+          const bw = pctx.measureText(txt).width + padX * 2;
+          const bh = font + padY * 2;
+
+          pctx.fillStyle = "rgba(0,0,0,.70)";
+          pctx.strokeStyle = "rgba(255,255,255,.12)";
+          pctx.lineWidth = 1;
+          pctx.beginPath();
+          if (typeof pctx.roundRect === "function") pctx.roundRect(tx, ty - bh/2, bw, bh, 8);
+          else pctx.rect(tx, ty - bh/2, bw, bh);
+          pctx.fill();
+          pctx.stroke();
+
+          pctx.fillStyle = "rgba(255,255,255,.92)";
+          pctx.fillText(txt, tx + padX, ty);
+          pctx.restore();
+        }
+      }
+
+      // ---- negative side ----
+      if (mm === 0) continue;
+      {
+        const p = P(-t);
+
+        pctx.beginPath();
+        pctx.moveTo(p.x - nx * len, p.y - ny * len);
+        pctx.lineTo(p.x + nx * len, p.y + ny * len);
+        pctx.stroke();
+
+        if (showEveryMmNumber){
+          const txt = `${mm}`;
+          const off = barHalfW + len + 6;
+          const tx = p.x + nx * off;
+          const ty = p.y + ny * off;
+
+          pctx.save();
+          pctx.font = `${fontSmall}px ${mono}`;
+          pctx.fillStyle = "rgba(0,0,0,.55)";
+          const tw = pctx.measureText(txt).width;
+          pctx.fillRect(tx - 3, ty - (fontSmall/2) - 2, tw + 6, fontSmall + 4);
+          pctx.fillStyle = "rgba(255,255,255,.92)";
+          pctx.fillText(txt, tx, ty);
+          pctx.restore();
+        }
+      }
+    }
+
+    pctx.restore();
+  }
+
     const sr0 = getSensorRectBaseInPane();
 
     const cx = sr0.x + sr0.w * 0.5;
@@ -2104,6 +2311,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       sr0.w, sr0.h
     );
 
+    // --- diagonal ruler (sticks to image because it's drawn in the same transformed space) ---
+    if (preview.rulerOn) drawPreviewDiagonalRuler(sr0);
+
     pctx.restore();
 
     pctx.save();
@@ -2114,164 +2324,6 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const sr = applyViewToSensorRect(sr0, preview.view);
     pctx.strokeStyle = "rgba(42,110,242,.55)";
     pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
-
-    // --- diagonal ruler (toggle) ---
-    if (preview.rulerOn) drawPreviewDiagonalRuler(sr0);
-    pctx.restore();
-  }
-
-  // ==========================
-  // PREVIEW DIAGONAL RULER (clean, like a physical ruler)
-  // - Diagonal from corner to corner through center.
-  // - 0 at center. Labels show radius (r) and diameter (Ø=2r).
-  // - Scales with sensor W/H.
-  // ==========================
-  function drawPreviewDiagonalRuler(sr0){
-    if (!pctx || !sr0) return;
-
-    const { w: sensorW, h: sensorH } = getSensorWH();
-    const diagMm = Math.hypot(sensorW, sensorH);
-    if (!(diagMm > 0)) return;
-
-    const xTL = sr0.x, yTL = sr0.y;
-    const xBR = sr0.x + sr0.w, yBR = sr0.y + sr0.h;
-
-    const dx = xBR - xTL;
-    const dy = yBR - yTL;
-    const diagPx = Math.hypot(dx, dy);
-    if (diagPx < 10) return;
-
-    const ux = dx / diagPx;
-    const uy = dy / diagPx;
-    const nx = -uy;
-    const ny = ux;
-
-    const cx = xTL + dx * 0.5;
-    const cy = yTL + dy * 0.5;
-
-    const halfDiagMm = diagMm * 0.5;
-    const halfDiagPx = diagPx * 0.5;
-    const pxPerMm = halfDiagPx / halfDiagMm;
-
-    // tick policy (physical ruler style)
-    // - every 1mm: small tick
-    // - every 5mm: medium tick
-    // - every 10mm (1cm): big tick + label
-    const stepMm = 1;
-    const majorMm = 10;  // 1cm
-    const midMm   = 5;   // 5mm
-    const labelEveryMm = 10; // label each cm
-
-    const barHalfW = 7.0;
-    const tick1mm = 4;
-    const tick5mm = 7;
-    const tick10mm = 11;
-
-    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-    const font = 11;
-
-    function niceCm(mm){
-      const cm = mm / 10;
-      if (Math.abs(cm - Math.round(cm)) < 1e-6) return `${Math.round(cm)}cm`;
-      return `${cm.toFixed(1)}cm`;
-    }
-    // Compact dual-scale label: radius + diameter
-    function labelText(mm){
-      const rmm = Math.round(mm);
-      const dmm = Math.round(mm * 2);
-      return `${rmm}mm (${niceCm(mm)})  |  Ø${dmm}mm (${niceCm(mm*2)})`;
-    }
-
-    const P = (tPx) => ({ x: cx + ux * tPx, y: cy + uy * tPx });
-
-    pctx.save();
-    pctx.lineCap = "round";
-    pctx.lineJoin = "round";
-
-    // main dark bar (like a ruler)
-    pctx.strokeStyle = "rgba(0,0,0,.55)";
-    pctx.lineWidth = barHalfW * 2;
-    pctx.beginPath();
-    pctx.moveTo(xTL, yTL);
-    pctx.lineTo(xBR, yBR);
-    pctx.stroke();
-
-    // subtle bright edge
-    pctx.strokeStyle = "rgba(255,255,255,.18)";
-    pctx.lineWidth = 2;
-    pctx.beginPath();
-    pctx.moveTo(xTL, yTL);
-    pctx.lineTo(xBR, yBR);
-    pctx.stroke();
-
-    // ticks + labels
-    pctx.font = `${font}px ${mono}`;
-    pctx.fillStyle = "rgba(255,255,255,.92)";
-    pctx.strokeStyle = "rgba(255,255,255,.85)";
-    pctx.lineWidth = 1.5;
-    pctx.textAlign = "left";
-    pctx.textBaseline = "middle";
-
-    // center zero tick
-    {
-      const p0 = P(0);
-      pctx.beginPath();
-      pctx.moveTo(p0.x - nx * 14, p0.y - ny * 14);
-      pctx.lineTo(p0.x + nx * 14, p0.y + ny * 14);
-      pctx.stroke();
-    }
-
-    const maxMm = Math.floor(halfDiagMm + 1e-6);
-    for (let mm = 0; mm <= maxMm; mm += stepMm){
-      const isMajor = (mm % majorMm) === 0;
-      const isMid = !isMajor && (mm % midMm) === 0;
-      const len = isMajor ? tick10mm : (isMid ? tick5mm : tick1mm);
-      const t = mm * pxPerMm;
-
-      // positive side
-      {
-        const p = P(t);
-        pctx.beginPath();
-        pctx.moveTo(p.x - nx * len, p.y - ny * len);
-        pctx.lineTo(p.x + nx * len, p.y + ny * len);
-        pctx.stroke();
-
-        if (isMajor && (mm % labelEveryMm) === 0 && mm > 0){
-          const txt = labelText(mm);
-          const off = barHalfW + len + 10;
-          const tx = p.x + nx * off;
-          const ty = p.y + ny * off;
-
-          const padX = 7, padY = 4;
-          const w = pctx.measureText(txt).width + padX * 2;
-          const h = font + padY * 2;
-
-          pctx.save();
-          pctx.fillStyle = "rgba(0,0,0,.70)";
-          pctx.strokeStyle = "rgba(255,255,255,.12)";
-          pctx.lineWidth = 1;
-          pctx.beginPath();
-          if (typeof pctx.roundRect === "function") pctx.roundRect(tx, ty - h/2, w, h, 8);
-          else pctx.rect(tx, ty - h/2, w, h);
-          pctx.fill();
-          pctx.stroke();
-          pctx.fillStyle = "rgba(255,255,255,.92)";
-          pctx.fillText(txt, tx + padX, ty);
-          pctx.restore();
-        }
-      }
-
-      // negative side (mirror ticks, no duplicate labels)
-      if (mm === 0) continue;
-      {
-        const p = P(-t);
-        pctx.beginPath();
-        pctx.moveTo(p.x - nx * len, p.y - ny * len);
-        pctx.lineTo(p.x + nx * len, p.y + ny * len);
-        pctx.stroke();
-      }
-    }
-
     pctx.restore();
   }
 
@@ -3404,6 +3456,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   });
 }
 
+
+function togglePreviewRuler(){
+  preview.rulerOn = !preview.rulerOn;
+  if (ui.btnPreviewRuler) ui.btnPreviewRuler.classList.toggle("on", preview.rulerOn);
+  drawPreviewViewport();
+}
+
+
+
   // -------------------- save lens JSON --------------------
   function saveLensToFile() {
     try {
@@ -3519,11 +3580,7 @@ function wireUI() {
   // preview buttons
   if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => scheduleRenderPreview());
   if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
-  if (ui.btnPreviewRuler) ui.btnPreviewRuler.addEventListener("click", () => {
-    preview.rulerOn = !preview.rulerOn;
-    ui.btnPreviewRuler.classList.toggle("isOn", preview.rulerOn);
-    drawPreviewViewport();
-  });
+  if (ui.btnPreviewRuler) ui.btnPreviewRuler.addEventListener(\"click\", togglePreviewRuler);
   if (ui.btnRaysFS) ui.btnRaysFS.addEventListener("click", toggleRaysFullscreen);
 
   // New Lens modal buttons (optional)
