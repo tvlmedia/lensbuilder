@@ -189,9 +189,8 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
       if (ui.icTop) ui.icTop.textContent = "IC: —";
       return;
     }
-    const thrPct = Math.round((uc.thresholdRel ?? USABLE_CIRCLE_THRESHOLD_REL) * 100);
-    const leftTxt = `Image Circle (${thrPct}%): Ø${uc.diameterMm.toFixed(1)}mm`;
-    const topTxt = `IC ${thrPct}%: Ø${uc.diameterMm.toFixed(1)}mm`;
+    const leftTxt = `Image Circle: Ø${uc.diameterMm.toFixed(1)}mm`;
+    const topTxt = `IC: Ø${uc.diameterMm.toFixed(1)}mm`;
     if (ui.ic) ui.ic.textContent = leftTxt;
     if (ui.icTop) ui.icTop.textContent = topTxt;
   }
@@ -1937,7 +1936,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const maxField = coverageTestMaxFieldDeg(lens.surfaces, wavePreset, sensorX, halfH);
     const covMode = "v";
-    const { ok: covers, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+    const { ok: coversGeom, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
+    const sensorDiagMm = Math.hypot(sensorW, sensorH);
+    const coversByIC = !!(preview.usableCircle?.valid && preview.usableCircle.diameterMm >= sensorDiagMm);
+    const covers = coversGeom && coversByIC;
 
     const covTxt = !fov
       ? "COV(V): —"
@@ -2334,7 +2336,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       pctx.stroke();
       pctx.setLineDash([]);
 
-      const txt = `usable Ø${preview.usableCircle.diameterMm.toFixed(1)}mm @${Math.round(preview.usableCircle.thresholdRel * 100)}%`;
+      const txt = `usable Ø${preview.usableCircle.diameterMm.toFixed(1)}mm`;
       const off = barHalfW + tick10mm + 22;
       const tx = pPos.x + nx * off;
       const ty = pPos.y + ny * off;
