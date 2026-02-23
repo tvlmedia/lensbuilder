@@ -55,6 +55,16 @@
 
     // overlay
     rulerOn: false,
+
+    // auto-detected usable image circle (based on vignette falloff)
+    usableCircle: {
+      valid: false,
+      radiusMm: 0,
+      diameterMm: 0,
+      thresholdRel: 0.35,
+      relAtCutoff: 0,
+      source: "",
+    },
   };
   preview.imgCtx = preview.imgCanvas.getContext("2d");
   preview.worldCtx = preview.worldCanvas.getContext("2d");
@@ -168,6 +178,7 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
   }
 
   const OV = 1.6; // overscan factor for preview
+  const USABLE_CIRCLE_THRESHOLD_REL = 0.35; // 35% of center illumination
 
   // -------------------- default preview chart (GitHub) --------------------
   const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
@@ -2116,7 +2127,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
 
     // --- diagonal ruler (toggle) ---
-    if (preview.rulerOn) drawPreviewDiagonalRuler(sr0);
+    if (preview.rulerOn) drawPreviewDiagonalRuler(sr);
     pctx.restore();
   }
 
@@ -2126,15 +2137,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   // - 0 at center. Labels show radius (r) and diameter (Ø=2r).
   // - Scales with sensor W/H.
   // ==========================
-  function drawPreviewDiagonalRuler(sr0){
-    if (!pctx || !sr0) return;
+  function drawPreviewDiagonalRuler(sr){
+    if (!pctx || !sr) return;
 
     const { w: sensorW, h: sensorH } = getSensorWH();
     const diagMm = Math.hypot(sensorW, sensorH);
     if (!(diagMm > 0)) return;
 
-    const xTL = sr0.x, yTL = sr0.y;
-    const xBR = sr0.x + sr0.w, yBR = sr0.y + sr0.h;
+    const xTL = sr.x, yTL = sr.y;
+    const xBR = sr.x + sr.w, yBR = sr.y + sr.h;
 
     const dx = xBR - xTL;
     const dy = yBR - yTL;
@@ -2278,6 +2289,60 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         pctx.lineTo(p.x + nx * len, p.y + ny * len);
         pctx.stroke();
       }
+    }
+
+    if (preview.usableCircle?.valid) {
+      const cutMm = clamp(preview.usableCircle.radiusMm, 0, maxMm);
+      const tCut = cutMm * pxPerMm;
+      const pPos = P(tCut);
+      const pNeg = P(-tCut);
+
+      pctx.save();
+      pctx.strokeStyle = "rgba(255,194,46,.98)";
+      pctx.fillStyle = "rgba(255,194,46,.98)";
+      pctx.lineWidth = 2.8;
+
+      [pPos, pNeg].forEach((p) => {
+        pctx.beginPath();
+        pctx.moveTo(p.x - nx * 16, p.y - ny * 16);
+        pctx.lineTo(p.x + nx * 16, p.y + ny * 16);
+        pctx.stroke();
+      });
+
+      // visual circle for quick readout of the usable image circle edge
+      pctx.setLineDash([8, 6]);
+      pctx.lineWidth = 1.8;
+      pctx.strokeStyle = "rgba(255,194,46,.85)";
+      pctx.beginPath();
+      pctx.arc(cx, cy, Math.max(0, tCut), 0, Math.PI * 2);
+      pctx.stroke();
+      pctx.setLineDash([]);
+
+      const txt = `usable Ø${preview.usableCircle.diameterMm.toFixed(1)}mm @${Math.round(preview.usableCircle.thresholdRel * 100)}%`;
+      const off = barHalfW + tick10mm + 22;
+      const tx = pPos.x + nx * off;
+      const ty = pPos.y + ny * off;
+
+      pctx.font = `700 11px ${mono}`;
+      const padX = 8, padY = 5;
+      const tw = pctx.measureText(txt).width;
+      const bw = tw + padX * 2;
+      const bh = 11 + padY * 2;
+
+      pctx.fillStyle = "rgba(17,17,17,.82)";
+      pctx.strokeStyle = "rgba(255,194,46,.35)";
+      pctx.lineWidth = 1;
+      pctx.beginPath();
+      if (typeof pctx.roundRect === "function") pctx.roundRect(tx, ty - bh * 0.5, bw, bh, 8);
+      else pctx.rect(tx, ty - bh * 0.5, bw, bh);
+      pctx.fill();
+      pctx.stroke();
+
+      pctx.fillStyle = "rgba(255,220,120,.98)";
+      pctx.textAlign = "left";
+      pctx.textBaseline = "middle";
+      pctx.fillText(txt, tx + padX, ty);
+      pctx.restore();
     }
 
     pctx.restore();
@@ -2740,6 +2805,145 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return Math.round(v*255);
   }
 
+  function setNoUsableCircle(source = "") {
+    preview.usableCircle = {
+      valid: false,
+      radiusMm: 0,
+      diameterMm: 0,
+      thresholdRel: USABLE_CIRCLE_THRESHOLD_REL,
+      relAtCutoff: 0,
+      source,
+    };
+  }
+
+  function setUsableCircleFromRadialCurve(radialMm, gainCurve, source = "curve") {
+    const n = Math.min(radialMm?.length || 0, gainCurve?.length || 0);
+    if (n < 8) { setNoUsableCircle(source); return; }
+
+    const r = [];
+    const g = [];
+    for (let i = 0; i < n; i++) {
+      const ri = Number(radialMm[i]);
+      const gi = Number(gainCurve[i]);
+      if (!Number.isFinite(ri) || !Number.isFinite(gi)) continue;
+      if (ri < 0) continue;
+      r.push(ri);
+      g.push(Math.max(0, gi));
+    }
+    if (r.length < 8) { setNoUsableCircle(source); return; }
+
+    const m = r.length;
+    const smoothed = new Float64Array(m);
+    const halfWin = 3;
+    for (let i = 0; i < m; i++) {
+      let sum = 0;
+      let cnt = 0;
+      for (let k = -halfWin; k <= halfWin; k++) {
+        const j = i + k;
+        if (j < 0 || j >= m) continue;
+        sum += g[j];
+        cnt++;
+      }
+      smoothed[i] = cnt ? (sum / cnt) : g[i];
+    }
+
+    const refN = Math.max(6, Math.min(m, Math.floor(m * 0.06)));
+    let ref = 0;
+    for (let i = 0; i < refN; i++) ref += smoothed[i];
+    ref /= refN;
+    if (!(ref > 1e-9)) { setNoUsableCircle(source); return; }
+
+    const rel = new Float64Array(m);
+    rel[0] = smoothed[0] / ref;
+    for (let i = 1; i < m; i++) {
+      const v = smoothed[i] / ref;
+      // enforce non-increasing falloff to avoid tiny ring/noise rebounds
+      rel[i] = Math.min(v, rel[i - 1]);
+    }
+
+    const thr = USABLE_CIRCLE_THRESHOLD_REL;
+    let cutR = r[m - 1];
+    let relAtCut = rel[m - 1];
+
+    if (rel[0] <= thr) {
+      cutR = 0;
+      relAtCut = rel[0];
+    } else {
+      for (let i = 1; i < m; i++) {
+        if (rel[i] > thr) continue;
+        const g0 = rel[i - 1], g1 = rel[i];
+        const r0 = r[i - 1], r1 = r[i];
+        const denom = (g1 - g0);
+        const t = Math.abs(denom) > 1e-9 ? clamp((thr - g0) / denom, 0, 1) : 0;
+        cutR = r0 + (r1 - r0) * t;
+        relAtCut = g0 + (g1 - g0) * t;
+        break;
+      }
+    }
+
+    if (!(cutR > 0.1)) { setNoUsableCircle(source); return; }
+    preview.usableCircle = {
+      valid: true,
+      radiusMm: cutR,
+      diameterMm: cutR * 2,
+      thresholdRel: thr,
+      relAtCutoff: relAtCut,
+      source,
+    };
+  }
+
+  function setUsableCircleFromLUT(transCurve, naturalCurve, rMaxSensorMm) {
+    const n = Math.min(transCurve?.length || 0, naturalCurve?.length || 0);
+    if (n < 8 || !(rMaxSensorMm > 0)) { setNoUsableCircle("LUT"); return; }
+
+    const rMm = new Float64Array(n);
+    const gain = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = n > 1 ? (i / (n - 1)) : 0;
+      const rSensorMm = a * rMaxSensorMm;
+      // world render spans OV*sensor dimensions; ruler mm is in sensor-mm space
+      rMm[i] = rSensorMm / OV;
+      gain[i] = Math.max(0, Number(transCurve[i]) * Number(naturalCurve[i]));
+    }
+    setUsableCircleFromRadialCurve(rMm, gain, "LUT");
+  }
+
+  function setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH) {
+    if (!outD || !(W > 0) || !(H > 0) || !(sensorW > 0) || !(sensorH > 0)) {
+      setNoUsableCircle("pixels");
+      return;
+    }
+
+    const halfDiagMm = Math.hypot(sensorW, sensorH) * 0.5;
+    if (!(halfDiagMm > 0)) { setNoUsableCircle("pixels"); return; }
+
+    const bins = Math.max(96, Math.min(420, Math.round(halfDiagMm * 14)));
+    const sum = new Float64Array(bins);
+    const cnt = new Uint32Array(bins);
+
+    for (let py = 0; py < H; py++) {
+      const yMm = (0.5 - (py + 0.5) / H) * sensorH;
+      for (let px = 0; px < W; px++) {
+        const xMm = ((px + 0.5) / W - 0.5) * sensorW;
+        const rMm = Math.hypot(xMm, yMm);
+        const b = Math.min(bins - 1, Math.max(0, Math.floor((rMm / halfDiagMm) * (bins - 1))));
+        const o = (py * W + px) * 4;
+        const lum = (0.2126 * outD[o] + 0.7152 * outD[o + 1] + 0.0722 * outD[o + 2]) / 255;
+        sum[b] += lum;
+        cnt[b]++;
+      }
+    }
+
+    const rCurve = [];
+    const gCurve = [];
+    for (let b = 0; b < bins; b++) {
+      if (cnt[b] < 8) continue;
+      rCurve.push(((b + 0.5) / bins) * halfDiagMm);
+      gCurve.push(sum[b] / cnt[b]);
+    }
+    setUsableCircleFromRadialCurve(rCurve, gCurve, "pixels");
+  }
+
  function renderPreview() {
   if (!pctx || !previewCanvasEl) return;
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
@@ -2942,6 +3146,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         return;
       }
 
+      setUsableCircleFromLUT(transLUT[1], naturalLUT, rMaxSensor);
+
       // Allocate world canvas AFTER LUT is ready
       preview.worldCanvas.width = W;
       preview.worldCanvas.height = H;
@@ -3044,6 +3250,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         }
       }
 
+      if (!preview.usableCircle.valid) {
+        setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
+      }
+
       wctx.putImageData(out, 0, 0);
       preview.worldReady = true;
       hidePreviewProgress();
@@ -3141,7 +3351,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       drawPreviewViewport();
 
       if (row < H) requestAnimationFrame(step);
-      else hidePreviewProgress();
+      else {
+        setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
+        hidePreviewProgress();
+        drawPreviewViewport();
+      }
     }
 
     requestAnimationFrame(step);
