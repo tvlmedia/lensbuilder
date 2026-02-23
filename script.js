@@ -2153,28 +2153,33 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const halfDiagPx = diagPx * 0.5;
     const pxPerMm = halfDiagPx / halfDiagMm;
 
-    // tick policy (keeps it readable)
+    // tick policy (physical ruler style)
+    // - every 1mm: small tick
+    // - every 5mm: medium tick
+    // - every 10mm (1cm): big tick + label
+    const stepMm = 1;
     const majorMm = 10;  // 1cm
-    const minorMm = 5;   // 5mm
-    const labelEveryMm = 20; // 2cm labels (less clutter)
+    const midMm   = 5;   // 5mm
+    const labelEveryMm = 10; // label each cm
 
-    const barHalfW = 7.5;
-    const tickMinor = 6;
-    const tickMajor = 10;
+    const barHalfW = 7.0;
+    const tick1mm = 4;
+    const tick5mm = 7;
+    const tick10mm = 11;
 
     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
     const font = 11;
 
     function niceCm(mm){
       const cm = mm / 10;
-      // show 0, 1, 2 ... without decimals
       if (Math.abs(cm - Math.round(cm)) < 1e-6) return `${Math.round(cm)}cm`;
       return `${cm.toFixed(1)}cm`;
     }
+    // Compact dual-scale label: radius + diameter
     function labelText(mm){
       const rmm = Math.round(mm);
       const dmm = Math.round(mm * 2);
-      return `r ${rmm}mm (${niceCm(mm)})  Ø${dmm}mm (${niceCm(mm*2)})`;
+      return `${rmm}mm (${niceCm(mm)})  |  Ø${dmm}mm (${niceCm(mm*2)})`;
     }
 
     const P = (tPx) => ({ x: cx + ux * tPx, y: cy + uy * tPx });
@@ -2217,9 +2222,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     const maxMm = Math.floor(halfDiagMm + 1e-6);
-    for (let mm = 0; mm <= maxMm; mm += minorMm){
+    for (let mm = 0; mm <= maxMm; mm += stepMm){
       const isMajor = (mm % majorMm) === 0;
-      const len = isMajor ? tickMajor : tickMinor;
+      const isMid = !isMajor && (mm % midMm) === 0;
+      const len = isMajor ? tick10mm : (isMid ? tick5mm : tick1mm);
       const t = mm * pxPerMm;
 
       // positive side
