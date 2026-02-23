@@ -402,6 +402,13 @@ body{
 }
 .fsBtn:hover{ background:rgba(0,0,0,.48); }
 
+/* Preview ruler toggle (sits next to fullscreen button) */
+.rulerBtn{ right:132px; }
+.rulerBtn.isOn{
+  border-color: rgba(42,110,242,.55);
+  background: rgba(42,110,242,.18);
+}
+
 /* canvas always fills pane */
 canvas{
   width:100%;

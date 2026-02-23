@@ -52,6 +52,9 @@
     dirtyKey: "",
 
     view: { panX: 0, panY: 0, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 },
+
+    // overlay
+    rulerOn: false,
   };
   preview.imgCtx = preview.imgCanvas.getContext("2d");
   preview.worldCtx = preview.worldCanvas.getContext("2d");
@@ -95,6 +98,7 @@
     prevRes: $("#prevRes"),
     btnRenderPreview: $("#btnRenderPreview"),
     btnPreviewFS: $("#btnPreviewFS"),
+    btnPreviewRuler: $("#btnPreviewRuler"),
     previewPane: $("#previewPane"),
 
     raysPane: $("#raysPane"),
@@ -2110,6 +2114,158 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const sr = applyViewToSensorRect(sr0, preview.view);
     pctx.strokeStyle = "rgba(42,110,242,.55)";
     pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+
+    // --- diagonal ruler (toggle) ---
+    if (preview.rulerOn) drawPreviewDiagonalRuler(sr0);
+    pctx.restore();
+  }
+
+  // ==========================
+  // PREVIEW DIAGONAL RULER (clean, like a physical ruler)
+  // - Diagonal from corner to corner through center.
+  // - 0 at center. Labels show radius (r) and diameter (Ø=2r).
+  // - Scales with sensor W/H.
+  // ==========================
+  function drawPreviewDiagonalRuler(sr0){
+    if (!pctx || !sr0) return;
+
+    const { w: sensorW, h: sensorH } = getSensorWH();
+    const diagMm = Math.hypot(sensorW, sensorH);
+    if (!(diagMm > 0)) return;
+
+    const xTL = sr0.x, yTL = sr0.y;
+    const xBR = sr0.x + sr0.w, yBR = sr0.y + sr0.h;
+
+    const dx = xBR - xTL;
+    const dy = yBR - yTL;
+    const diagPx = Math.hypot(dx, dy);
+    if (diagPx < 10) return;
+
+    const ux = dx / diagPx;
+    const uy = dy / diagPx;
+    const nx = -uy;
+    const ny = ux;
+
+    const cx = xTL + dx * 0.5;
+    const cy = yTL + dy * 0.5;
+
+    const halfDiagMm = diagMm * 0.5;
+    const halfDiagPx = diagPx * 0.5;
+    const pxPerMm = halfDiagPx / halfDiagMm;
+
+    // tick policy (keeps it readable)
+    const majorMm = 10;  // 1cm
+    const minorMm = 5;   // 5mm
+    const labelEveryMm = 20; // 2cm labels (less clutter)
+
+    const barHalfW = 7.5;
+    const tickMinor = 6;
+    const tickMajor = 10;
+
+    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+    const font = 11;
+
+    function niceCm(mm){
+      const cm = mm / 10;
+      // show 0, 1, 2 ... without decimals
+      if (Math.abs(cm - Math.round(cm)) < 1e-6) return `${Math.round(cm)}cm`;
+      return `${cm.toFixed(1)}cm`;
+    }
+    function labelText(mm){
+      const rmm = Math.round(mm);
+      const dmm = Math.round(mm * 2);
+      return `r ${rmm}mm (${niceCm(mm)})  Ø${dmm}mm (${niceCm(mm*2)})`;
+    }
+
+    const P = (tPx) => ({ x: cx + ux * tPx, y: cy + uy * tPx });
+
+    pctx.save();
+    pctx.lineCap = "round";
+    pctx.lineJoin = "round";
+
+    // main dark bar (like a ruler)
+    pctx.strokeStyle = "rgba(0,0,0,.55)";
+    pctx.lineWidth = barHalfW * 2;
+    pctx.beginPath();
+    pctx.moveTo(xTL, yTL);
+    pctx.lineTo(xBR, yBR);
+    pctx.stroke();
+
+    // subtle bright edge
+    pctx.strokeStyle = "rgba(255,255,255,.18)";
+    pctx.lineWidth = 2;
+    pctx.beginPath();
+    pctx.moveTo(xTL, yTL);
+    pctx.lineTo(xBR, yBR);
+    pctx.stroke();
+
+    // ticks + labels
+    pctx.font = `${font}px ${mono}`;
+    pctx.fillStyle = "rgba(255,255,255,.92)";
+    pctx.strokeStyle = "rgba(255,255,255,.85)";
+    pctx.lineWidth = 1.5;
+    pctx.textAlign = "left";
+    pctx.textBaseline = "middle";
+
+    // center zero tick
+    {
+      const p0 = P(0);
+      pctx.beginPath();
+      pctx.moveTo(p0.x - nx * 14, p0.y - ny * 14);
+      pctx.lineTo(p0.x + nx * 14, p0.y + ny * 14);
+      pctx.stroke();
+    }
+
+    const maxMm = Math.floor(halfDiagMm + 1e-6);
+    for (let mm = 0; mm <= maxMm; mm += minorMm){
+      const isMajor = (mm % majorMm) === 0;
+      const len = isMajor ? tickMajor : tickMinor;
+      const t = mm * pxPerMm;
+
+      // positive side
+      {
+        const p = P(t);
+        pctx.beginPath();
+        pctx.moveTo(p.x - nx * len, p.y - ny * len);
+        pctx.lineTo(p.x + nx * len, p.y + ny * len);
+        pctx.stroke();
+
+        if (isMajor && (mm % labelEveryMm) === 0 && mm > 0){
+          const txt = labelText(mm);
+          const off = barHalfW + len + 10;
+          const tx = p.x + nx * off;
+          const ty = p.y + ny * off;
+
+          const padX = 7, padY = 4;
+          const w = pctx.measureText(txt).width + padX * 2;
+          const h = font + padY * 2;
+
+          pctx.save();
+          pctx.fillStyle = "rgba(0,0,0,.70)";
+          pctx.strokeStyle = "rgba(255,255,255,.12)";
+          pctx.lineWidth = 1;
+          pctx.beginPath();
+          if (typeof pctx.roundRect === "function") pctx.roundRect(tx, ty - h/2, w, h, 8);
+          else pctx.rect(tx, ty - h/2, w, h);
+          pctx.fill();
+          pctx.stroke();
+          pctx.fillStyle = "rgba(255,255,255,.92)";
+          pctx.fillText(txt, tx + padX, ty);
+          pctx.restore();
+        }
+      }
+
+      // negative side (mirror ticks, no duplicate labels)
+      if (mm === 0) continue;
+      {
+        const p = P(-t);
+        pctx.beginPath();
+        pctx.moveTo(p.x - nx * len, p.y - ny * len);
+        pctx.lineTo(p.x + nx * len, p.y + ny * len);
+        pctx.stroke();
+      }
+    }
+
     pctx.restore();
   }
 
@@ -3357,6 +3513,11 @@ function wireUI() {
   // preview buttons
   if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => scheduleRenderPreview());
   if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
+  if (ui.btnPreviewRuler) ui.btnPreviewRuler.addEventListener("click", () => {
+    preview.rulerOn = !preview.rulerOn;
+    ui.btnPreviewRuler.classList.toggle("isOn", preview.rulerOn);
+    drawPreviewViewport();
+  });
   if (ui.btnRaysFS) ui.btnRaysFS.addEventListener("click", toggleRaysFullscreen);
 
   // New Lens modal buttons (optional)
