@@ -2110,6 +2110,148 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const sr = applyViewToSensorRect(sr0, preview.view);
     pctx.strokeStyle = "rgba(42,110,242,.55)";
     pctx.strokeRect(sr.x, sr.y, sr.w, sr.h);
+
+    // --- diagonal ruler (sensor corner-to-corner) ---
+    drawPreviewDiagonalRuler(sr0);
+    pctx.restore();
+  }
+
+  // ==========================
+  // PREVIEW DIAGONAL RULER
+  // - Draws a corner-to-corner diagonal inside the sensor frame.
+  // - Tick marks in mm/cm.
+  // - Also shows ×2 values (diameter) because circle diameter = 2×radius-from-center.
+  // ==========================
+  function drawPreviewDiagonalRuler(sr0){
+    if (!pctx || !sr0) return;
+
+    const { w: sensorW, h: sensorH } = getSensorWH();
+    const diagMm = Math.hypot(sensorW, sensorH);
+    const diagPx = Math.hypot(sr0.w, sr0.h);
+    if (!(diagMm > 0 && diagPx > 0)) return;
+
+    // line from TL -> BR
+    const x0 = sr0.x;
+    const y0 = sr0.y;
+    const x1 = sr0.x + sr0.w;
+    const y1 = sr0.y + sr0.h;
+
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const L  = Math.hypot(dx, dy);
+    if (L < 2) return;
+
+    const ux = dx / L;
+    const uy = dy / L;
+    const nx = -uy;
+    const ny = ux;
+
+    const pxPerMm = diagPx / diagMm;
+
+    // choose tick step based on size (so it doesn't get too busy)
+    let minorMm = 5;
+    if (diagMm > 70) minorMm = 10;
+    if (diagMm > 120) minorMm = 20;
+    const majorMm = minorMm * 2;
+
+    const tickMinor = 6;
+    const tickMajor = 10;
+    const tickCenter = 12;
+
+    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+    const font = 11;
+
+    // draw diagonal
+    pctx.save();
+    pctx.lineWidth = 1.25;
+    pctx.strokeStyle = "rgba(255,255,255,.32)";
+    pctx.beginPath();
+    pctx.moveTo(x0, y0);
+    pctx.lineTo(x1, y1);
+    pctx.stroke();
+
+    // center mark
+    const cx = (x0 + x1) * 0.5;
+    const cy = (y0 + y1) * 0.5;
+    pctx.lineWidth = 1.5;
+    pctx.strokeStyle = "rgba(42,110,242,.75)";
+    pctx.beginPath();
+    pctx.moveTo(cx - nx * tickCenter, cy - ny * tickCenter);
+    pctx.lineTo(cx + nx * tickCenter, cy + ny * tickCenter);
+    pctx.stroke();
+
+    // ticks along full diagonal (0..diagMm)
+    pctx.lineWidth = 1;
+    pctx.strokeStyle = "rgba(255,255,255,.28)";
+    pctx.fillStyle = "rgba(255,255,255,.92)";
+    pctx.font = `${font}px ${mono}`;
+    pctx.textAlign = "left";
+    pctx.textBaseline = "middle";
+
+    function fmtLabel(mm){
+      const cm = mm / 10;
+      const mm2 = mm * 2;
+      const cm2 = cm * 2;
+      const cmTxt  = (Math.round(cm*10)/10).toFixed(cm % 1 === 0 ? 0 : 1);
+      const cm2Txt = (Math.round(cm2*10)/10).toFixed(cm2 % 1 === 0 ? 0 : 1);
+      return `${Math.round(mm)}mm/${cmTxt}cm  Ø${Math.round(mm2)}mm/${cm2Txt}cm`;
+    }
+
+    const maxLabels = 16;
+    const labelEvery = Math.max(majorMm, Math.ceil(diagMm / maxLabels / minorMm) * minorMm);
+
+    for (let mm = 0; mm <= diagMm + 1e-6; mm += minorMm){
+      const tPx = mm * pxPerMm;
+      const px = x0 + ux * tPx;
+      const py = y0 + uy * tPx;
+
+      const isMajor = (Math.round(mm) % majorMm) === 0;
+      const len = isMajor ? tickMajor : tickMinor;
+
+      pctx.beginPath();
+      pctx.moveTo(px - nx * len, py - ny * len);
+      pctx.lineTo(px + nx * len, py + ny * len);
+      pctx.stroke();
+
+      const shouldLabel = (Math.round(mm) % labelEvery) === 0;
+      if (!shouldLabel) continue;
+
+      const txt = fmtLabel(mm);
+      const off = len + 10;
+      const tx = px + nx * off;
+      const ty = py + ny * off;
+
+      const padX = 6, padY = 3;
+      const w = pctx.measureText(txt).width + padX * 2;
+      const h = font + padY * 2;
+
+      pctx.save();
+      pctx.fillStyle = "rgba(0,0,0,.70)";
+      pctx.fillRect(tx, ty - h/2, w, h);
+      pctx.fillStyle = "rgba(255,255,255,.92)";
+      pctx.shadowColor = "rgba(0,0,0,.75)";
+      pctx.shadowBlur = 6;
+      pctx.fillText(txt, tx + padX, ty);
+      pctx.restore();
+    }
+
+    // legend near center
+    {
+      const legend = "Diagonal ruler: corner→corner (mm/cm) + Ø(×2)";
+      const padX = 8, padY = 5;
+      pctx.save();
+      pctx.font = `${font}px ${mono}`;
+      const w = pctx.measureText(legend).width + padX*2;
+      const h = font + padY*2;
+      const lx = cx + nx * 18;
+      const ly = cy + ny * 18;
+      pctx.fillStyle = "rgba(0,0,0,.65)";
+      pctx.fillRect(lx, ly - h/2, w, h);
+      pctx.fillStyle = "rgba(255,255,255,.85)";
+      pctx.fillText(legend, lx + padX, ly);
+      pctx.restore();
+    }
+
     pctx.restore();
   }
 
