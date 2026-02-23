@@ -2154,32 +2154,29 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const pxPerMm = halfDiagPx / halfDiagMm;
 
     // tick policy (physical ruler style)
-    // - every 1mm: small tick
+    // - every 1mm: small tick + label
     // - every 5mm: medium tick
-    // - every 10mm (1cm): big tick + label
+    // - every 10mm (1cm): big tick + bigger label
     const stepMm = 1;
     const majorMm = 10;  // 1cm
     const midMm   = 5;   // 5mm
-    const labelEveryMm = 10; // label each cm
+    const labelEveryMm = 1; // label each mm
 
     const barHalfW = 7.0;
     const tick1mm = 4;
-    const tick5mm = 7;
-    const tick10mm = 11;
+    const tick5mm = 8;
+    const tick10mm = 14;
 
     const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
-    const font = 11;
+    const minorFont = 9;
+    const majorFont = 13;
+    const labelAngle = Math.atan2(uy, ux) + Math.PI * 0.5;
 
-    function niceCm(mm){
-      const cm = mm / 10;
-      if (Math.abs(cm - Math.round(cm)) < 1e-6) return `${Math.round(cm)}cm`;
-      return `${cm.toFixed(1)}cm`;
-    }
-    // Compact dual-scale label: radius + diameter
+    // Compact dual-scale label: radius(mm)|diameter(mm)
     function labelText(mm){
       const rmm = Math.round(mm);
       const dmm = Math.round(mm * 2);
-      return `${rmm}mm (${niceCm(mm)})  |  Ø${dmm}mm (${niceCm(mm*2)})`;
+      return `${rmm}|${dmm}`;
     }
 
     const P = (tPx) => ({ x: cx + ux * tPx, y: cy + uy * tPx });
@@ -2205,7 +2202,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     pctx.stroke();
 
     // ticks + labels
-    pctx.font = `${font}px ${mono}`;
+    pctx.font = `${minorFont}px ${mono}`;
     pctx.fillStyle = "rgba(255,255,255,.92)";
     pctx.strokeStyle = "rgba(255,255,255,.85)";
     pctx.lineWidth = 1.5;
@@ -2219,6 +2216,21 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       pctx.moveTo(p0.x - nx * 14, p0.y - ny * 14);
       pctx.lineTo(p0.x + nx * 14, p0.y + ny * 14);
       pctx.stroke();
+
+      // legend: radius|diameter (both in mm)
+      const off = barHalfW + tick10mm + 14;
+      pctx.save();
+      pctx.translate(p0.x + nx * off, p0.y + ny * off);
+      pctx.rotate(labelAngle);
+      pctx.textAlign = "center";
+      pctx.textBaseline = "middle";
+      pctx.font = `700 9px ${mono}`;
+      pctx.lineWidth = 2.5;
+      pctx.strokeStyle = "rgba(0,0,0,.70)";
+      pctx.strokeText("r|Ømm", 0, 0);
+      pctx.fillStyle = "rgba(255,255,255,.95)";
+      pctx.fillText("r|Ømm", 0, 0);
+      pctx.restore();
     }
 
     const maxMm = Math.floor(halfDiagMm + 1e-6);
@@ -2236,27 +2248,23 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         pctx.lineTo(p.x + nx * len, p.y + ny * len);
         pctx.stroke();
 
-        if (isMajor && (mm % labelEveryMm) === 0 && mm > 0){
+        if ((mm % labelEveryMm) === 0 && mm > 0){
           const txt = labelText(mm);
-          const off = barHalfW + len + 10;
+          const off = barHalfW + len + (isMajor ? 14 : 9);
           const tx = p.x + nx * off;
           const ty = p.y + ny * off;
 
-          const padX = 7, padY = 4;
-          const w = pctx.measureText(txt).width + padX * 2;
-          const h = font + padY * 2;
-
           pctx.save();
-          pctx.fillStyle = "rgba(0,0,0,.70)";
-          pctx.strokeStyle = "rgba(255,255,255,.12)";
-          pctx.lineWidth = 1;
-          pctx.beginPath();
-          if (typeof pctx.roundRect === "function") pctx.roundRect(tx, ty - h/2, w, h, 8);
-          else pctx.rect(tx, ty - h/2, w, h);
-          pctx.fill();
-          pctx.stroke();
+          pctx.translate(tx, ty);
+          pctx.rotate(labelAngle);
+          pctx.textAlign = "center";
+          pctx.textBaseline = "middle";
+          pctx.font = `${isMajor ? "700 " : ""}${isMajor ? majorFont : minorFont}px ${mono}`;
+          pctx.lineWidth = isMajor ? 3.5 : 2.5;
+          pctx.strokeStyle = "rgba(0,0,0,.72)";
+          pctx.strokeText(txt, 0, 0);
           pctx.fillStyle = "rgba(255,255,255,.92)";
-          pctx.fillText(txt, tx + padX, ty);
+          pctx.fillText(txt, 0, 0);
           pctx.restore();
         }
       }
