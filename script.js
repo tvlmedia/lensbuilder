@@ -2866,38 +2866,40 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       smoothed[i] = cnt ? (sum / cnt) : g[i];
     }
 
-    const refN = Math.max(6, Math.min(m, Math.floor(m * 0.06)));
-    let ref = 0;
-    for (let i = 0; i < refN; i++) ref += smoothed[i];
-    ref /= refN;
+    // Find a stable reference peak near the center region, then search outward.
+    // This avoids tiny false IC when the exact chart center is dark.
+    const peakSearchEnd = Math.max(3, Math.min(m - 1, Math.floor(m * 0.40)));
+    let refIdx = 0;
+    let ref = smoothed[0];
+    for (let i = 1; i <= peakSearchEnd; i++) {
+      if (smoothed[i] > ref) {
+        ref = smoothed[i];
+        refIdx = i;
+      }
+    }
     if (!(ref > 1e-9)) { setNoUsableCircle(source); return; }
 
     const rel = new Float64Array(m);
-    rel[0] = smoothed[0] / ref;
-    for (let i = 1; i < m; i++) {
-      const v = smoothed[i] / ref;
-      // enforce non-increasing falloff to avoid tiny ring/noise rebounds
-      rel[i] = Math.min(v, rel[i - 1]);
+    for (let i = 0; i < m; i++) rel[i] = smoothed[i] / ref;
+    rel[refIdx] = 1;
+    for (let i = refIdx + 1; i < m; i++) {
+      // enforce non-increasing falloff away from the reference peak
+      rel[i] = Math.min(rel[i], rel[i - 1]);
     }
 
     const thr = USABLE_CIRCLE_THRESHOLD_REL;
     let cutR = r[m - 1];
     let relAtCut = rel[m - 1];
 
-    if (rel[0] <= thr) {
-      cutR = 0;
-      relAtCut = rel[0];
-    } else {
-      for (let i = 1; i < m; i++) {
-        if (rel[i] > thr) continue;
-        const g0 = rel[i - 1], g1 = rel[i];
-        const r0 = r[i - 1], r1 = r[i];
-        const denom = (g1 - g0);
-        const t = Math.abs(denom) > 1e-9 ? clamp((thr - g0) / denom, 0, 1) : 0;
-        cutR = r0 + (r1 - r0) * t;
-        relAtCut = g0 + (g1 - g0) * t;
-        break;
-      }
+    for (let i = Math.max(refIdx + 1, 1); i < m; i++) {
+      if (rel[i] > thr) continue;
+      const g0 = rel[i - 1], g1 = rel[i];
+      const r0 = r[i - 1], r1 = r[i];
+      const denom = (g1 - g0);
+      const t = Math.abs(denom) > 1e-9 ? clamp((thr - g0) / denom, 0, 1) : 0;
+      cutR = r0 + (r1 - r0) * t;
+      relAtCut = g0 + (g1 - g0) * t;
+      break;
     }
 
     if (!(cutR > 0.1)) { setNoUsableCircle(source); return; }
@@ -2956,9 +2958,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         const gg = outD[o + 1] / 255;
         const bb = outD[o + 2] / 255;
         const lum = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
-        const sat = Math.max(rr, gg, bb) - Math.min(rr, gg, bb);
-        const neutral = 1 - sat; // blue/cyan fringe -> lower weight
-        const usableScore = lum * (0.35 + 0.65 * neutral);
+        // Penalize clearly blue-dominant fringe, but keep neutral chart detail stable.
+        const blueDom = Math.max(0, bb - Math.max(rr, gg));
+        const usableScore = lum * (1 - 0.65 * blueDom);
         sum[b] += usableScore;
         cnt[b]++;
       }
