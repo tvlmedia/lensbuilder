@@ -159,12 +159,18 @@
   let selectedIndex = 0;
 
   // -------------------- sensor presets --------------------
-  const SENSOR_PRESETS = {
-    "ARRI Alexa Mini (S35)": { w: 28.25, h: 18.17 },
-    "ARRI Alexa Mini LF (LF)": { w: 36.7, h: 25.54 },
-    "Sony VENICE (FF)": { w: 36.0, h: 24.0 },
-    "Fuji GFX (MF)": { w: 43.8, h: 32.9 },
-  };
+ // -------------------- sensor presets --------------------
+const SENSOR_PRESETS = {
+  "ARRI Alexa Mini (S35)": { w: 28.25, h: 18.17 },
+  "ARRI Alexa Mini LF (LF)": { w: 36.7, h: 25.54 },
+  "Sony VENICE (FF)": { w: 36.0, h: 24.0 },
+  "Fuji GFX (MF)": { w: 43.8, h: 32.9 },
+
+  // ✅ NEW
+  "IMAX 15/70 (70mm)": { w: 70.41, h: 56.62 },
+  "65mm Analoog (5-perf)": { w: 52.15, h: 23.07 },
+  "ARRI ALEXA 265": { w: 54.12, h: 25.58 },
+};
 
   function populateSensorPresetsSelect() {
     if (!ui.sensorPreset) return;
