@@ -230,8 +230,8 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     applySensorToIMS();
   }
 
- // -------------------- glass db --------------------
-const GLASS_DB = {
+  // -------------------- glass db --------------------
+  const GLASS_DB = {
   // --- baseline ---
   AIR: { nd: 1.0, Vd: 999.0 },
 
@@ -255,7 +255,6 @@ const GLASS_DB = {
 
   // Barium flints / special flints
   "N-BAF4":    { nd: 1.60568, Vd: 43.72 },
-  "N-BAF9":    { nd: 1.64328, Vd: 47.9 },
   "N-BAF10":   { nd: 1.67003, Vd: 47.11 },
   "N-BAF51":   { nd: 1.65224, Vd: 44.96 },
   "N-BAF52":   { nd: 1.60863, Vd: 46.6 },
@@ -268,7 +267,6 @@ const GLASS_DB = {
   "N-SK11":    { nd: 1.56384, Vd: 60.8 },
   "N-SK14":    { nd: 1.60311, Vd: 60.6 },
   "N-SK16":    { nd: 1.62041, Vd: 60.32 },
-  "N-SK22":    { nd: 1.6779,  Vd: 55.5 },
 
   // “SSK” (veel gebruikt als partner in correctiegroepen)
   "N-SSK2":    { nd: 1.62229, Vd: 53.27 },
