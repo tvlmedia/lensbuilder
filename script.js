@@ -441,11 +441,33 @@ const GLASS_ALIASES = {
   "S-BAH11": "N-BAK4"     // barium crown-ish (of N-BAF10 als je meer flint wil)
 };
 
+function normalizeGlassInput(name) {
+  const raw = String(name ?? "").trim();
+  if (!raw) return "AIR";
+  if (GLASS_DB[raw] || GLASS_ALIASES[raw]) return raw;
+  const up = raw.toUpperCase();
+  if (GLASS_DB[up] || GLASS_ALIASES[up]) return up;
+  return raw;
+}
+
+function getGlassOptionNames(surfaces = []) {
+  const names = new Set(["AIR"]);
+  Object.keys(GLASS_ALIASES).forEach((k) => names.add(k));
+  Object.keys(GLASS_DB).forEach((k) => names.add(k));
+  (surfaces || []).forEach((s) => names.add(normalizeGlassInput(s?.glass)));
+
+  return Array.from(names).sort((a, b) => {
+    if (a === "AIR") return -1;
+    if (b === "AIR") return 1;
+    return a.localeCompare(b);
+  });
+}
+
 // helper: resolve any name to a real GLASS_DB key
 function resolveGlassName(name) {
-  if (!name) return "AIR";
-  if (GLASS_DB[name]) return name;
-  const alias = GLASS_ALIASES[name];
+  const key = normalizeGlassInput(name);
+  if (GLASS_DB[key]) return key;
+  const alias = GLASS_ALIASES[key];
   if (alias && GLASS_DB[alias]) return alias;
   return "AIR";
 }
@@ -524,7 +546,7 @@ function warnMissingGlass(name) {
     R: Number(s?.R ?? 0),
     t: Number(s?.t ?? 0),
     ap: Number(s?.ap ?? 10),
-    glass: String(s?.glass ?? "AIR"),
+    glass: normalizeGlassInput(s?.glass),
     stop: Boolean(s?.stop ?? false),
   }));
 
@@ -592,6 +614,7 @@ function warnMissingGlass(name) {
   function buildTable() {
     clampSelected();
     if (!ui.tbody) return;
+    const glassOptionNames = getGlassOptionNames(lens.surfaces);
 
     rememberTableFocus();
     ui.tbody.innerHTML = "";
@@ -607,6 +630,7 @@ function warnMissingGlass(name) {
       });
 
      const isOBJ = String(s.type || "").toUpperCase() === "OBJ";
+     const glassValue = normalizeGlassInput(s.glass);
 
 tr.innerHTML = `
   <td style="width:34px; font-family:var(--mono)">${idx}</td>
@@ -621,8 +645,8 @@ tr.innerHTML = `
   <td style="width:92px"><input class="cellInput" data-k="ap" data-i="${idx}" type="number" step="0.01" value="${s.ap}"></td>
         <td style="width:110px">
           <select class="cellSelect" data-k="glass" data-i="${idx}">
-            ${Object.keys(GLASS_DB).map((name) =>
-              `<option value="${name}" ${name === s.glass ? "selected" : ""}>${name}</option>`
+            ${glassOptionNames.map((name) =>
+              `<option value="${name}" ${name === glassValue ? "selected" : ""}>${name}</option>`
             ).join("")}
           </select>
         </td>
@@ -696,8 +720,32 @@ function onCellCommit(e) {
     el.value = "0";
   }
 
-  // ... jouw bestaande commit logic ...
-  // (stop / glass / type / else)
+  if (k === "stop") {
+    s.stop = !!el.checked;
+    enforceSingleStop(i);
+  } else if (k === "glass") {
+    s.glass = normalizeGlassInput(el.value);
+  } else if (k === "type") {
+    s.type = String(el.value ?? "");
+    if (String(s.type).toUpperCase() === "STOP") {
+      s.stop = true;
+      enforceSingleStop(i);
+    }
+  } else if (k === "R" || k === "t" || k === "ap") {
+    s[k] = num(el.value, s[k] ?? 0);
+  } else {
+    s[k] = String(el.value ?? "");
+  }
+
+  if (i === 0) {
+    s.type = "OBJ";
+    s.t = 0.0;
+    s.stop = false;
+  }
+  if (i === lens.surfaces.length - 1) {
+    s.type = "IMS";
+    s.stop = false;
+  }
 
   applySensorToIMS();
   clampAllApertures(lens.surfaces);
