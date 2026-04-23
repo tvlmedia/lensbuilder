@@ -1264,6 +1264,19 @@ function onCellCommit(e) {
     return Math.max(AP_MIN, ap);
   }
 
+  function hasExplicitMechanicalAperture(s) {
+    if (!s) return false;
+    if (!(s.ap_mech != null && String(s.ap_mech).trim() !== "")) return false;
+    const m = Number(s.ap_mech);
+    return Number.isFinite(m) && m > 0;
+  }
+
+  function isStopLikeSurface(s) {
+    if (!s) return false;
+    if (Boolean(s.stop)) return true;
+    return String(s.type || "").toUpperCase() === "STOP";
+  }
+
   function getSurfaceDrawMode(s) {
     const dm = String(s?.draw_mode ?? "zemax_like").trim().toLowerCase();
     if (dm === "optical" || dm === "mechanical" || dm === "zemax_like") return dm;
@@ -2179,6 +2192,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const b = getSurfaceDrawMode(sB);
     if (a !== "zemax_like") return a;
     if (b !== "zemax_like") return b;
+    // No explicit mechanical aperture data: default to simple optical interval drawing.
+    if (!hasExplicitMechanicalAperture(sA) && !hasExplicitMechanicalAperture(sB)) return "optical";
     return "zemax_like";
   }
 
@@ -2265,8 +2280,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   function buildMechanicalSegmentShape(sA, sB) {
     const drawMode = resolvePairDrawMode(sA, sB);
-    const apA = drawMode === "optical" ? getSurfaceOpticalAp(sA) : getSurfaceMechanicalAp(sA);
-    const apB = drawMode === "optical" ? getSurfaceOpticalAp(sB) : getSurfaceMechanicalAp(sB);
+    const opticalMode = drawMode === "optical";
+    const apAraw = opticalMode ? getSurfaceOpticalAp(sA) : getSurfaceMechanicalAp(sA);
+    const apBraw = opticalMode ? getSurfaceOpticalAp(sB) : getSurfaceMechanicalAp(sB);
+    // In optical mode, draw the actual glass interval clear aperture only.
+    const apShared = opticalMode ? Math.max(AP_MIN, Math.min(apAraw, apBraw)) : null;
+    const apA = opticalMode ? apShared : apAraw;
+    const apB = opticalMode ? apShared : apBraw;
 
     const front = buildSurfacePolyline(sA, apA, 90);
     const back = buildSurfacePolyline(sB, apB, 90);
@@ -2347,7 +2367,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     while (i < surfaces.length - 1) {
       const sA = surfaces[i];
       const sB = surfaces[i + 1];
-      if (!isPhysicalSurfaceType(sA?.type) || !isPhysicalSurfaceType(sB?.type) || isAirMediumName(sA?.glass)) {
+      if (
+        !isPhysicalSurfaceType(sA?.type) ||
+        !isPhysicalSurfaceType(sB?.type) ||
+        isAirMediumName(sA?.glass) ||
+        isStopLikeSurface(sA) ||
+        isStopLikeSurface(sB)
+      ) {
         i++;
         continue;
       }
@@ -2357,7 +2383,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       while (i < surfaces.length - 1) {
         const a = surfaces[i];
         const b = surfaces[i + 1];
-        if (!isPhysicalSurfaceType(a?.type) || !isPhysicalSurfaceType(b?.type) || isAirMediumName(a?.glass)) break;
+        if (
+          !isPhysicalSurfaceType(a?.type) ||
+          !isPhysicalSurfaceType(b?.type) ||
+          isAirMediumName(a?.glass) ||
+          isStopLikeSurface(a) ||
+          isStopLikeSurface(b)
+        ) break;
         segments.push(i);
         i++;
       }
