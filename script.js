@@ -131,6 +131,7 @@
     fileLoad: $("#fileLoad"),
     btnAutoFocus: $("#btnAutoFocus"),
     btnRenderEngine: $("#btnRenderEngine"),
+    btnDebugOverlay: $("#btnDebugOverlay"),
 
     newLensModal: $("#newLensModal"),
     nlClose: $("#nlClose"),
@@ -220,6 +221,8 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     const ims = lens?.surfaces?.[lens.surfaces.length - 1];
     if (ims && String(ims.type).toUpperCase() === "IMS") {
       ims.ap = halfH;
+      ims.ap_optical = halfH;
+      if (ims.ap_mech == null) ims.ap_mech = halfH;
       syncIMSCellApertureToUI();
     }
   }
@@ -535,21 +538,85 @@ function warnMissingGlass(name) {
   }
 
   // -------------------- sanitize/load --------------------
+  const DRAW_MODE_SET = new Set(["optical", "mechanical", "zemax_like"]);
+  const SHOULDER_MODE_SET = new Set(["none", "flat", "step", "bridge"]);
+  const EDGE_THICKNESS_MODE_SET = new Set(["auto", "explicit"]);
+
+  function finiteNumberOr(v, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function enumOr(v, allowed, fallback) {
+    const s = String(v ?? "").trim().toLowerCase();
+    return allowed.has(s) ? s : fallback;
+  }
+
+  function normalizeSurfaceApertures(src, importOptions) {
+    const fromDiam = Number(src?.DIAM);
+    const importAp = Number.isFinite(fromDiam) ? Math.abs(fromDiam) : null;
+
+    const apOptical = Math.max(0.01, finiteNumberOr(src?.ap_optical, finiteNumberOr(src?.ap, importAp ?? 10)));
+
+    const hasExplicitMech =
+      src &&
+      Object.prototype.hasOwnProperty.call(src, "ap_mech") &&
+      src.ap_mech != null &&
+      String(src.ap_mech).trim() !== "";
+    let apMech = null;
+    if (hasExplicitMech) {
+      const m = Number(src.ap_mech);
+      apMech = Number.isFinite(m) ? Math.max(0.01, m) : null;
+    } else if (importAp != null) {
+      if (importOptions?.use_same_ap_for_optics_and_mechanics === false) {
+        apMech = Math.max(0.01, importAp);
+      } else {
+        apMech = apOptical;
+      }
+    }
+
+    return {
+      ap: apOptical, // backwards-compatible alias used by existing optical code
+      ap_optical: apOptical,
+      ap_mech: apMech, // null => follow optical aperture
+    };
+  }
+
   function sanitizeLens(obj) {
+  const importOptions = {
+    use_same_ap_for_optics_and_mechanics:
+      obj?.import_options?.use_same_ap_for_optics_and_mechanics !== false,
+  };
+
   const safe = {
     name: String(obj?.name ?? "No name"),
     notes: Array.isArray(obj?.notes) ? obj.notes.map(String) : [],
     surfaces: Array.isArray(obj?.surfaces) ? obj.surfaces : [],
+    import_options: importOptions,
   };
 
-  safe.surfaces = safe.surfaces.map((s) => ({
-    type: String(s?.type ?? ""),
-    R: Number(s?.R ?? 0),
-    t: Number(s?.t ?? 0),
-    ap: Number(s?.ap ?? 10),
-    glass: normalizeGlassInput(s?.glass),
-    stop: Boolean(s?.stop ?? false),
-  }));
+  safe.surfaces = safe.surfaces.map((s) => {
+    const aps = normalizeSurfaceApertures(s, importOptions);
+    return {
+      type: String(s?.type ?? ""),
+      R: Number(s?.R ?? 0),
+      t: Number(s?.t ?? 0),
+      ap: aps.ap,
+      ap_optical: aps.ap_optical,
+      ap_mech: aps.ap_mech,
+      draw_mode: enumOr(s?.draw_mode, DRAW_MODE_SET, "zemax_like"),
+      shoulder_depth: Math.max(0, finiteNumberOr(s?.shoulder_depth, 0)),
+      shoulder_mode: enumOr(s?.shoulder_mode, SHOULDER_MODE_SET, "none"),
+      bevel: Math.max(0, finiteNumberOr(s?.bevel, 0)),
+      edge_thickness_mode: enumOr(s?.edge_thickness_mode, EDGE_THICKNESS_MODE_SET, "auto"),
+      edge_thickness: (() => {
+        const et = Number(s?.edge_thickness);
+        return Number.isFinite(et) ? Math.max(0, et) : null;
+      })(),
+      glass: normalizeGlassInput(s?.glass),
+      stop: Boolean(s?.stop ?? false),
+    };
+  });
 
     const firstStop = safe.surfaces.findIndex((s) => s.stop);
     if (firstStop >= 0) safe.surfaces.forEach((s, i) => { if (i !== firstStop) s.stop = false; });
@@ -695,7 +762,11 @@ tr.innerHTML = `
   }
 
   if (k === "type") s.type = el.value;
-  else if (k === "R" || k === "t" || k === "ap") s[k] = num(el.value, s[k] ?? 0);
+  else if (k === "ap") {
+    const ap = num(el.value, s.ap ?? 0);
+    s.ap = ap;
+    s.ap_optical = ap;
+  } else if (k === "R" || k === "t") s[k] = num(el.value, s[k] ?? 0);
   else s[k] = num(el.value, s[k] ?? 0);
 
   applySensorToIMS();
@@ -732,7 +803,11 @@ function onCellCommit(e) {
       s.stop = true;
       enforceSingleStop(i);
     }
-  } else if (k === "R" || k === "t" || k === "ap") {
+  } else if (k === "ap") {
+    const ap = num(el.value, s.ap ?? 0);
+    s.ap = ap;
+    s.ap_optical = ap;
+  } else if (k === "R" || k === "t") {
     s[k] = num(el.value, s[k] ?? 0);
   } else {
     s[k] = String(el.value ?? "");
@@ -824,7 +899,7 @@ function onCellCommit(e) {
   function intersectSurface(ray, surf) {
     const vx = surf.vx;
     const R = Number(surf.R || 0);
-    const ap = Math.max(0, Number(surf.ap || 0));
+    const ap = getSurfaceOpticalAp(surf);
 
     if (Math.abs(R) < 1e-9) {
       if (Math.abs(ray.d.x) < 1e-12) return null;
@@ -944,7 +1019,7 @@ function onCellCommit(e) {
   function intersectSurface3D(ray, surf){
     const vx = surf.vx;
     const R = Number(surf.R || 0);
-    const ap = Math.max(0, Number(surf.ap || 0));
+    const ap = getSurfaceOpticalAp(surf);
 
     const isPlane = Math.abs(R) < 1e-9;
 
@@ -1070,6 +1145,66 @@ function onCellCommit(e) {
   const AP_SAFETY = 0.90;
   const AP_MAX_PLANE = 30.0;
   const AP_MIN = 0.01;
+  const DEFAULT_SHOULDER_MIN_DIFF = 0.35;
+
+  function isAirMediumName(name) {
+    return String(name ?? "AIR").trim().toUpperCase() === "AIR";
+  }
+
+  function isPhysicalSurfaceType(typeRaw) {
+    const t = String(typeRaw || "").toUpperCase();
+    return t !== "OBJ" && t !== "IMS" && t !== "MECH" && t !== "BAFFLE" && t !== "HOUSING";
+  }
+
+  function getSurfaceOpticalAp(s) {
+    const ap = Number(s?.ap_optical ?? s?.ap ?? AP_MIN);
+    const lim = maxApForSurface(s);
+    return Math.max(AP_MIN, Math.min(ap, lim));
+  }
+
+  function getSurfaceMechanicalAp(s) {
+    const fallback = getSurfaceOpticalAp(s);
+    const hasExplicitMech = s && s.ap_mech != null && String(s.ap_mech).trim() !== "";
+    const raw = hasExplicitMech ? Number(s.ap_mech) : NaN;
+    let ap = Number.isFinite(raw) ? raw : fallback;
+
+    const R = Number(s?.R || 0);
+    if (Number.isFinite(R) && Math.abs(R) >= 1e-9) {
+      // Keep branch-aware sphere evaluation stable at the edge.
+      const lim = Math.max(AP_MIN, Math.abs(R) - 1e-5);
+      ap = Math.min(ap, lim);
+    }
+
+    return Math.max(AP_MIN, ap);
+  }
+
+  function getSurfaceDrawMode(s) {
+    const dm = String(s?.draw_mode ?? "zemax_like").trim().toLowerCase();
+    if (dm === "optical" || dm === "mechanical" || dm === "zemax_like") return dm;
+    return "zemax_like";
+  }
+
+  function getSurfaceShoulderMode(s) {
+    const sm = String(s?.shoulder_mode ?? "none").trim().toLowerCase();
+    if (sm === "none" || sm === "flat" || sm === "step" || sm === "bridge") return sm;
+    return "none";
+  }
+
+  function getSurfaceShoulderDepth(s, fallback = 0) {
+    const d = Number(s?.shoulder_depth);
+    if (Number.isFinite(d) && d > 0) return d;
+    return Math.max(0, Number(fallback) || 0);
+  }
+
+  function getSurfaceBevel(s) {
+    const b = Number(s?.bevel);
+    return Number.isFinite(b) ? Math.max(0, b) : 0;
+  }
+
+  function getSurfaceEdgeThicknessMode(s) {
+    const m = String(s?.edge_thickness_mode ?? "auto").trim().toLowerCase();
+    return m === "explicit" ? "explicit" : "auto";
+  }
 
   function maxApForSurface(s) {
     const R = Number(s?.R || 0);
@@ -1084,8 +1219,10 @@ function onCellCommit(e) {
     if (t === "IMS" || t === "OBJ") return;
 
     const lim = maxApForSurface(s);
-    const ap = Number(s.ap || 0);
-    s.ap = Math.max(AP_MIN, Math.min(ap, lim));
+    const apOpt = Number(s.ap_optical ?? s.ap ?? AP_MIN);
+    const clamped = Math.max(AP_MIN, Math.min(apOpt, lim));
+    s.ap_optical = clamped;
+    s.ap = clamped;
   }
 
   function clampAllApertures(surfaces) {
@@ -1107,7 +1244,7 @@ function onCellCommit(e) {
   }
 
   function maxNonOverlappingSemiDiameter(sFront, sBack, minCT = 0.10) {
-    const apGuess = Math.max(0.01, Math.min(Number(sFront.ap || 0), Number(sBack.ap || 0)));
+    const apGuess = Math.max(AP_MIN, Math.min(getSurfaceOpticalAp(sFront), getSurfaceOpticalAp(sBack)));
     function gapAt(y) {
       const xf = surfaceXatY(sFront, y);
       const xb = surfaceXatY(sBack, y);
@@ -1573,9 +1710,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function buildSurfacePolyline(s, ap, steps = 90) {
+    const apSafe = Math.max(AP_MIN, Number(ap || 0));
     const pts = [];
     for (let i = 0; i <= steps; i++) {
-      const y = -ap + (i / steps) * (2 * ap);
+      const y = -apSafe + (i / steps) * (2 * apSafe);
       const x = surfaceXatY(s, y);
       if (x == null) continue;
       pts.push({ x, y });
@@ -1583,86 +1721,21 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return pts;
   }
 
-  function drawElementBody(world, sFront, sBack, apRegion) {
-    if (!ctx) return;
-    const front = buildSurfacePolyline(sFront, apRegion, 90);
-    const back = buildSurfacePolyline(sBack, apRegion, 90);
-    if (front.length < 2 || back.length < 2) return;
-
-    const poly = front.concat(back.slice().reverse());
-
-    ctx.save();
-    ctx.globalAlpha = 1.0;
-    ctx.fillStyle = "rgba(120,180,255,0.10)";
-    ctx.beginPath();
-    let p0 = worldToScreen(poly[0], world);
-    ctx.moveTo(p0.x, p0.y);
-    for (let i = 1; i < poly.length; i++) {
-      const p = worldToScreen(poly[i], world);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(220,235,255,0.55)";
-    ctx.shadowColor = "rgba(70,140,255,0.35)";
-    ctx.shadowBlur = 10;
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  function drawElementsClosed(world, surfaces) {
-    let minNonOverlap = Infinity;
-
-    for (let i = 0; i < surfaces.length - 1; i++) {
-      const sA = surfaces[i];
-      const sB = surfaces[i + 1];
-
-      const typeA = String(sA.type || "").toUpperCase();
-      const typeB = String(sB.type || "").toUpperCase();
-
-      if (typeA === "OBJ" || typeB === "OBJ") continue;
-      if (typeA === "IMS" || typeB === "IMS") continue;
-
-      const medium = String(sA.glass || "AIR").toUpperCase();
-      if (medium === "AIR") continue;
-
-      const apA = Math.max(0, Number(sA.ap || 0));
-      const apB = Math.max(0, Number(sB.ap || 0));
-      const limA = maxApForSurface(sA);
-      const limB = maxApForSurface(sB);
-
-      let apRegion = Math.max(0.01, Math.min(apA, apB, limA, limB));
-
-      if (Math.abs(sA.R) > 1e-9 && Math.abs(sB.R) > 1e-9) {
-        const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
-        minNonOverlap = Math.min(minNonOverlap, nonOverlap);
-        apRegion = Math.min(apRegion, nonOverlap);
-      }
-
-      drawElementBody(world, sA, sB, apRegion);
-    }
-
-    if (Number.isFinite(minNonOverlap) && minNonOverlap < 0.5 && ui.footerWarn) {
-      ui.footerWarn.textContent =
-        "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
-    }
-  }
-
-  function drawSurface(world, s) {
+  function drawSurfaceWithAperture(world, s, ap, style = {}) {
     if (!ctx) return;
     ctx.save();
-    ctx.lineWidth = 1.25;
-    ctx.strokeStyle = "rgba(255,255,255,.22)";
+    ctx.lineWidth = style.lineWidth ?? 1.25;
+    ctx.strokeStyle = style.strokeStyle ?? "rgba(255,255,255,.22)";
+    ctx.shadowColor = style.shadowColor ?? "transparent";
+    ctx.shadowBlur = style.shadowBlur ?? 0;
+    if (Array.isArray(style.dash)) ctx.setLineDash(style.dash);
 
-    const vx = s.vx;
-    const ap = Math.min(Math.max(0, Number(s.ap || 0)), maxApForSurface(s));
+    const vx = Number(s?.vx || 0);
+    const apDraw = Math.max(AP_MIN, Number(ap || AP_MIN));
 
-    if (Math.abs(s.R) < 1e-9) {
-      const a = worldToScreen({ x: vx, y: -ap }, world);
-      const b = worldToScreen({ x: vx, y: ap }, world);
+    if (Math.abs(Number(s?.R || 0)) < 1e-9) {
+      const a = worldToScreen({ x: vx, y: -apDraw }, world);
+      const b = worldToScreen({ x: vx, y: apDraw }, world);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
@@ -1671,30 +1744,369 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       return;
     }
 
-    const R = s.R;
-    const cx = vx + R;
-    const rad = Math.abs(R);
-    const sign = Math.sign(R) || 1;
-
-    const steps = 90;
-    ctx.beginPath();
-    let moved = false;
-    for (let i = 0; i <= steps; i++) {
-      const y = -ap + (i / steps) * (2 * ap);
-      const inside = rad * rad - y * y;
-      if (inside < 0) continue;
-      const x = cx - sign * Math.sqrt(inside);
-      const sp = worldToScreen({ x, y }, world);
-      if (!moved) { ctx.moveTo(sp.x, sp.y); moved = true; }
-      else ctx.lineTo(sp.x, sp.y);
+    const curve = buildSurfacePolyline(s, apDraw, style.steps ?? 90);
+    if (curve.length >= 2) {
+      ctx.beginPath();
+      const p0 = worldToScreen(curve[0], world);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < curve.length; i++) {
+        const p = worldToScreen(curve[i], world);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
     }
+
+    ctx.restore();
+  }
+
+  function resolvePairDrawMode(sA, sB) {
+    const a = getSurfaceDrawMode(sA);
+    const b = getSurfaceDrawMode(sB);
+    if (a !== "zemax_like") return a;
+    if (b !== "zemax_like") return b;
+    return "zemax_like";
+  }
+
+  function resolvePairShoulderMode(sA, sB, drawMode) {
+    const a = getSurfaceShoulderMode(sA);
+    const b = getSurfaceShoulderMode(sB);
+    if (a !== "none") return a;
+    if (b !== "none") return b;
+    if (drawMode !== "zemax_like") return "none";
+
+    const rA = Math.abs(Number(sA?.R || 0));
+    const rB = Math.abs(Number(sB?.R || 0));
+    if (rA < 1e-9 || rB < 1e-9) return "flat";
+
+    const apA = getSurfaceMechanicalAp(sA);
+    const apB = getSurfaceMechanicalAp(sB);
+    if (Math.abs(apA - apB) >= DEFAULT_SHOULDER_MIN_DIFF) return "step";
+    return "flat";
+  }
+
+  function resolvePairShoulderDepth(sA, sB, shoulderMode) {
+    const explicit = Math.max(getSurfaceShoulderDepth(sA, 0), getSurfaceShoulderDepth(sB, 0));
+    const edgeA = Number(sA?.edge_thickness);
+    const edgeB = Number(sB?.edge_thickness);
+    const explicitEdge =
+      Math.max(
+        Number.isFinite(edgeA) ? Math.max(0, edgeA) : 0,
+        Number.isFinite(edgeB) ? Math.max(0, edgeB) : 0
+      );
+    const edgeModeA = getSurfaceEdgeThicknessMode(sA);
+    const edgeModeB = getSurfaceEdgeThicknessMode(sB);
+    if (edgeModeA === "explicit" || edgeModeB === "explicit") {
+      if (explicitEdge > 0) return explicitEdge;
+      if (explicit > 0) return explicit;
+    }
+    if (explicit > 0) return explicit;
+
+    const gap = Math.abs(Number(sB?.vx || 0) - Number(sA?.vx || 0));
+    if (shoulderMode === "bridge") return Math.max(0.1, gap * 0.35);
+    if (shoulderMode === "step") return Math.max(0.1, gap * 0.5);
+    if (shoulderMode === "flat") return Math.max(0.05, gap * 0.15);
+    return 0;
+  }
+
+  function buildShoulderConnector(fromPt, toPt, mode, shoulderDepth, side, bevelFrom = 0, bevelTo = 0) {
+    if (!fromPt || !toPt) return null;
+    const pts = [{ x: fromPt.x, y: fromPt.y }];
+    const dir = toPt.x >= fromPt.x ? 1 : -1;
+    const spanX = Math.abs(toPt.x - fromPt.x);
+    const spanY = Math.abs(toPt.y - fromPt.y);
+
+    const bFrom = Math.max(0, Number(bevelFrom || 0));
+    const bTo = Math.max(0, Number(bevelTo || 0));
+    const bf = Math.min(bFrom, Math.max(0, spanX * 0.45));
+    const bt = Math.min(bTo, Math.max(0, spanX * 0.45));
+    if (bf > 1e-6) pts.push({ x: fromPt.x + dir * bf, y: fromPt.y - side * Math.min(bf, spanY * 0.5) });
+
+    if (mode === "bridge") {
+      const d = Math.max(0, Number(shoulderDepth || 0));
+      const xBridge = fromPt.x + dir * d;
+      pts.push({ x: xBridge, y: fromPt.y });
+      pts.push({ x: xBridge, y: toPt.y });
+      pts.push({ x: toPt.x, y: toPt.y });
+    } else if (mode === "step") {
+      const xStep = fromPt.x + dir * Math.max(Number(shoulderDepth || 0), spanX * 0.5);
+      const xClamped = dir > 0 ? Math.min(xStep, toPt.x) : Math.max(xStep, toPt.x);
+      pts.push({ x: xClamped, y: fromPt.y });
+      pts.push({ x: xClamped, y: toPt.y });
+      pts.push({ x: toPt.x, y: toPt.y });
+    } else if (mode === "flat") {
+      pts.push({ x: fromPt.x, y: toPt.y });
+      pts.push({ x: toPt.x, y: toPt.y });
+    } else {
+      pts.push({ x: toPt.x, y: toPt.y });
+    }
+
+    if (bt > 1e-6) {
+      const xStart = toPt.x - dir * bt;
+      pts.push({ x: xStart, y: toPt.y - side * Math.min(bt, spanY * 0.5) });
+    }
+    pts.push({ x: toPt.x, y: toPt.y });
+    return pts;
+  }
+
+  function buildMechanicalSegmentShape(sA, sB) {
+    const drawMode = resolvePairDrawMode(sA, sB);
+    const apA = drawMode === "optical" ? getSurfaceOpticalAp(sA) : getSurfaceMechanicalAp(sA);
+    const apB = drawMode === "optical" ? getSurfaceOpticalAp(sB) : getSurfaceMechanicalAp(sB);
+
+    const front = buildSurfacePolyline(sA, apA, 90);
+    const back = buildSurfacePolyline(sB, apB, 90);
+    if (front.length < 2 || back.length < 2) return null;
+
+    const shoulderMode = drawMode === "optical" ? "none" : resolvePairShoulderMode(sA, sB, drawMode);
+    const shoulderDepth = resolvePairShoulderDepth(sA, sB, shoulderMode);
+
+    const topFrom = front[front.length - 1];
+    const topTo = back[back.length - 1];
+    const bottomFrom = back[0];
+    const bottomTo = front[0];
+
+    const topConn = buildShoulderConnector(
+      topFrom,
+      topTo,
+      shoulderMode,
+      shoulderDepth,
+      +1,
+      getSurfaceBevel(sA),
+      getSurfaceBevel(sB)
+    );
+    const bottomConn = buildShoulderConnector(
+      bottomFrom,
+      bottomTo,
+      shoulderMode,
+      shoulderDepth,
+      -1,
+      getSurfaceBevel(sB),
+      getSurfaceBevel(sA)
+    );
+    if (!topConn || !bottomConn) return null;
+
+    const poly = front
+      .concat(topConn.slice(1))
+      .concat(back.slice().reverse())
+      .concat(bottomConn.slice(1));
+
+    return {
+      drawMode,
+      shoulderMode,
+      shoulderDepth,
+      front,
+      back,
+      topConn,
+      bottomConn,
+      poly,
+      edgePoints: [front[0], front[front.length - 1], back[0], back[back.length - 1]],
+    };
+  }
+
+  function drawFilledPolygon(world, poly, fillStyle, strokeStyle) {
+    if (!ctx || !Array.isArray(poly) || poly.length < 3) return;
+    ctx.save();
+    ctx.globalAlpha = 1.0;
+    ctx.fillStyle = fillStyle;
+    ctx.beginPath();
+    const p0 = worldToScreen(poly[0], world);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < poly.length; i++) {
+      const p = worldToScreen(poly[i], world);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.lineWidth = 1.7;
+    ctx.strokeStyle = strokeStyle;
+    ctx.shadowColor = "rgba(70,140,255,0.25)";
+    ctx.shadowBlur = 8;
     ctx.stroke();
     ctx.restore();
   }
 
+  function collectGlassElements(surfaces) {
+    const out = [];
+    let i = 0;
+    while (i < surfaces.length - 1) {
+      const sA = surfaces[i];
+      const sB = surfaces[i + 1];
+      if (!isPhysicalSurfaceType(sA?.type) || !isPhysicalSurfaceType(sB?.type) || isAirMediumName(sA?.glass)) {
+        i++;
+        continue;
+      }
+
+      const start = i;
+      const segments = [];
+      while (i < surfaces.length - 1) {
+        const a = surfaces[i];
+        const b = surfaces[i + 1];
+        if (!isPhysicalSurfaceType(a?.type) || !isPhysicalSurfaceType(b?.type) || isAirMediumName(a?.glass)) break;
+        segments.push(i);
+        i++;
+      }
+      if (!segments.length) continue;
+      out.push({
+        start,
+        end: segments[segments.length - 1] + 1,
+        segments,
+      });
+    }
+    return out;
+  }
+
+  function drawMechanicalElements(world, surfaces, debugStore = null) {
+    if (!ctx) return [];
+
+    const ELEMENT_FILL = [
+      "rgba(120,180,255,0.10)",
+      "rgba(120,220,190,0.10)",
+      "rgba(230,180,120,0.10)",
+      "rgba(220,140,170,0.10)",
+      "rgba(180,160,255,0.10)",
+    ];
+    const ELEMENT_STROKE = [
+      "rgba(220,235,255,0.55)",
+      "rgba(190,240,225,0.55)",
+      "rgba(240,220,190,0.55)",
+      "rgba(245,200,220,0.55)",
+      "rgba(220,210,255,0.55)",
+    ];
+
+    let minNonOverlap = Infinity;
+    const elements = collectGlassElements(surfaces);
+
+    elements.forEach((el, elIdx) => {
+      const fill = ELEMENT_FILL[elIdx % ELEMENT_FILL.length];
+      const stroke = ELEMENT_STROKE[elIdx % ELEMENT_STROKE.length];
+
+      if (debugStore) {
+        debugStore.elements.push({
+          index: elIdx,
+          start: el.start,
+          end: el.end,
+          color: stroke,
+        });
+      }
+
+      for (const segIdx of el.segments) {
+        const sA = surfaces[segIdx];
+        const sB = surfaces[segIdx + 1];
+        const shape = buildMechanicalSegmentShape(sA, sB);
+        if (!shape) continue;
+
+        if (Math.abs(Number(sA?.R || 0)) > 1e-9 && Math.abs(Number(sB?.R || 0)) > 1e-9) {
+          const nonOverlap = maxNonOverlappingSemiDiameter(sA, sB, 0.10);
+          minNonOverlap = Math.min(minNonOverlap, nonOverlap);
+        }
+
+        drawFilledPolygon(world, shape.poly, fill, stroke);
+
+        if (debugStore) {
+          debugStore.segments.push({
+            segIdx,
+            elementIndex: elIdx,
+            drawMode: shape.drawMode,
+            shoulderMode: shape.shoulderMode,
+            shoulderDepth: shape.shoulderDepth,
+            edgePoints: shape.edgePoints,
+            topConn: shape.topConn,
+            bottomConn: shape.bottomConn,
+          });
+        }
+      }
+
+      for (let i = el.start + 1; i < el.end; i++) {
+        drawSurfaceWithAperture(world, surfaces[i], getSurfaceMechanicalAp(surfaces[i]), {
+          lineWidth: 1,
+          strokeStyle: "rgba(220,235,255,0.20)",
+        });
+      }
+    });
+
+    if (Number.isFinite(minNonOverlap) && minNonOverlap < 0.5 && ui.footerWarn) {
+      ui.footerWarn.textContent =
+        "WARNING: element surfaces overlap / too thin somewhere — increase t or reduce curvature/aperture.";
+    }
+
+    return elements;
+  }
+
+  function drawSurface(world, s) {
+    if (!ctx) return;
+    drawSurfaceWithAperture(world, s, getSurfaceOpticalAp(s), {
+      lineWidth: 1.25,
+      strokeStyle: "rgba(255,255,255,.22)",
+    });
+  }
+
+  function drawOutlineDebugOverlay(world, surfaces, elements, debugStore) {
+    if (!ctx || !debugOutlineOverlayEnabled) return;
+
+    for (const s of surfaces) {
+      if (!isPhysicalSurfaceType(s?.type)) continue;
+      drawSurfaceWithAperture(world, s, getSurfaceOpticalAp(s), {
+        lineWidth: 1,
+        strokeStyle: "rgba(100,255,140,0.75)",
+        dash: [4, 3],
+      });
+      drawSurfaceWithAperture(world, s, getSurfaceMechanicalAp(s), {
+        lineWidth: 1,
+        strokeStyle: "rgba(255,190,90,0.75)",
+        dash: [2, 3],
+      });
+    }
+
+    ctx.save();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = "rgba(255,90,180,0.85)";
+    for (const seg of debugStore?.segments || []) {
+      const conns = [seg.topConn, seg.bottomConn];
+      for (const pts of conns) {
+        if (!Array.isArray(pts) || pts.length < 2) continue;
+        ctx.beginPath();
+        const p0 = worldToScreen(pts[0], world);
+        ctx.moveTo(p0.x, p0.y);
+        for (let i = 1; i < pts.length; i++) {
+          const p = worldToScreen(pts[i], world);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    for (const seg of debugStore?.segments || []) {
+      for (const ep of seg.edgePoints || []) {
+        const p = worldToScreen(ep, world);
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(255,230,120,0.95)";
+        ctx.arc(p.x, p.y, 2.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    ctx.font = "11px var(--mono)";
+    const elementDbg = debugStore?.elements || [];
+    (elements || []).forEach((el, idx) => {
+      const s0 = surfaces[el.start];
+      const s1 = surfaces[el.end];
+      if (!s0 || !s1) return;
+      const xMid = (Number(s0.vx || 0) + Number(s1.vx || 0)) * 0.5;
+      const yTop = Math.max(getSurfaceMechanicalAp(s0), getSurfaceMechanicalAp(s1)) + 2.5;
+      const p = worldToScreen({ x: xMid, y: yTop }, world);
+      ctx.fillStyle = elementDbg[idx]?.color || "rgba(255,255,255,.8)";
+      ctx.fillText(`E${idx + 1}`, p.x - 8, p.y);
+    });
+
+    ctx.restore();
+  }
+
   function drawLens(world, surfaces) {
-    drawElementsClosed(world, surfaces);
+    const debugStore = debugOutlineOverlayEnabled ? { elements: [], segments: [] } : null;
+    const elements = drawMechanicalElements(world, surfaces, debugStore);
     for (const s of surfaces) drawSurface(world, s);
+    if (debugOutlineOverlayEnabled) drawOutlineDebugOverlay(world, surfaces, elements, debugStore);
   }
 
   function drawRays(world, rayTraces, sensorX) {
@@ -1736,7 +2148,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const idx = findStopSurfaceIndex(surfaces);
     if (idx < 0) return;
     const s = surfaces[idx];
-    const ap = Math.max(0, s.ap);
+    const ap = getSurfaceOpticalAp(s);
     ctx.save();
     ctx.lineWidth = 2;
     ctx.strokeStyle = "#b23b3b";
@@ -2068,15 +2480,29 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   let _rafPrev = 0;
   let renderEngineEnabled = true;
   let _previewRenderJobId = 0;
+  let debugOutlineOverlayEnabled = false;
 
   function updateRenderEngineButton() {
     if (!ui.btnRenderEngine) return;
-    ui.btnRenderEngine.textContent = renderEngineEnabled ? "Render: ON" : "Render: OFF";
+    ui.btnRenderEngine.textContent = renderEngineEnabled ? "Preview: ON" : "Preview: OFF";
     ui.btnRenderEngine.classList.toggle("btnPrimary", renderEngineEnabled);
     ui.btnRenderEngine.classList.toggle("btnDanger", !renderEngineEnabled);
     ui.btnRenderEngine.setAttribute("aria-pressed", renderEngineEnabled ? "true" : "false");
-    ui.btnRenderEngine.title = renderEngineEnabled ? "Disable render engine" : "Enable render engine";
+    ui.btnRenderEngine.title = renderEngineEnabled ? "Disable preview renderer" : "Enable preview renderer";
     if (ui.btnRenderPreview) ui.btnRenderPreview.disabled = !renderEngineEnabled;
+  }
+
+  function updateDebugOverlayButton() {
+    if (!ui.btnDebugOverlay) return;
+    ui.btnDebugOverlay.textContent = debugOutlineOverlayEnabled ? "Outline Debug: ON" : "Outline Debug: OFF";
+    ui.btnDebugOverlay.classList.toggle("btnPrimary", debugOutlineOverlayEnabled);
+    ui.btnDebugOverlay.setAttribute("aria-pressed", debugOutlineOverlayEnabled ? "true" : "false");
+  }
+
+  function toggleDebugOverlay() {
+    debugOutlineOverlayEnabled = !debugOutlineOverlayEnabled;
+    updateDebugOverlayButton();
+    scheduleRenderAll();
   }
 
   function setRenderEngineEnabled(enabled) {
@@ -2086,10 +2512,6 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     _previewRenderJobId++;
 
-    if (_rafAll) {
-      cancelAnimationFrame(_rafAll);
-      _rafAll = 0;
-    }
     if (_rafPrev) {
       cancelAnimationFrame(_rafPrev);
       _rafPrev = 0;
@@ -2097,11 +2519,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     if (!renderEngineEnabled) {
       hidePreviewProgress();
-      toast("Render engine: OFF", 1200);
+      toast("Preview renderer: OFF", 1200);
     } else {
-      renderAll();
       if (preview.ready) scheduleRenderPreview();
-      toast("Render engine: ON", 1200);
+      toast("Preview renderer: ON", 1200);
     }
 
     updateRenderEngineButton();
@@ -2112,7 +2533,6 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function scheduleRenderAll() {
-    if (!renderEngineEnabled) return;
     if (_rafAll) return;
     _rafAll = requestAnimationFrame(() => {
       _rafAll = 0;
@@ -2133,7 +2553,6 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   // RENDER ALL (rays pane)
   // ===========================
   function renderAll() {
-    if (!renderEngineEnabled) return;
     if (!canvas || !ctx) return;
     if (ui.footerWarn) ui.footerWarn.textContent = "";
 
@@ -3706,7 +4125,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     if (!Number.isFinite(targetT) || targetT <= 0) return;
 
     const newAp = efl / (2 * targetT);
-    lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
+    const stopAp = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
+    lens.surfaces[stopIdx].ap = stopAp;
+    lens.surfaces[stopIdx].ap_optical = stopAp;
 
     clampAllApertures(lens.surfaces);
     buildTable();
@@ -3795,7 +4216,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const stopIdx = findStopSurfaceIndex(lens.surfaces);
       if (stopIdx >= 0 && Number.isFinite(efl) && efl > 0 && Number.isFinite(targetT) && targetT > 0) {
         const newAp = efl / (2 * targetT);
-        lens.surfaces[stopIdx].ap = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
+        const stopAp = Math.max(AP_MIN, Math.min(newAp, maxApForSurface(lens.surfaces[stopIdx])));
+        lens.surfaces[stopIdx].ap = stopAp;
+        lens.surfaces[stopIdx].ap_optical = stopAp;
       }
     }
 
@@ -4001,6 +4424,7 @@ function wireUI() {
   on("#btnSetTStop", "click", setTargetTStop);
   on("#btnAutoFocus", "click", autoFocus);
   on("#btnRenderEngine", "click", toggleRenderEngine);
+  on("#btnDebugOverlay", "click", toggleDebugOverlay);
 
   on("#btnSave", "click", saveLensToFile);
 
@@ -4068,6 +4492,7 @@ function wireUI() {
 function boot() {
   wireUI();
   updateRenderEngineButton();
+  updateDebugOverlayButton();
   bindViewControls();
   bindPreviewViewControls();
 

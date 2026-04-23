@@ -40,14 +40,15 @@
       <button id="btnScaleToFocal" class="btn" type="button">Scale → FL</button>
       <button id="btnSetTStop" class="btn" type="button">Set T</button>
       <button id="btnAutoFocus" class="btn" type="button">Auto focus</button>
-      <button id="btnRenderEngine" class="btn btnPrimary" type="button" aria-pressed="true">Render: ON</button>
+      <button id="btnRenderEngine" class="btn btnPrimary" type="button" aria-pressed="true">Preview: ON</button>
+      <button id="btnDebugOverlay" class="btn" type="button" aria-pressed="false">Outline Debug: OFF</button>
 
       <div class="sep" aria-hidden="true"></div>
 
       <button id="btnSave" class="btn" type="button">Save JSON</button>
       <label class="fileBtn btn" role="button" tabindex="0">
-        Load JSON
-        <input id="fileLoad" type="file" accept="application/json" />
+        Load Lens
+        <input id="fileLoad" type="file" accept=".json,.zmx,.seq,.txt,application/json,text/plain" />
       </label>
     </div>
   </header>
