@@ -4301,16 +4301,170 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   // -------------------- load lens JSON --------------------
+  function parseZemaxFirstNumber(s) {
+    const m = String(s ?? "").replace(/,/g, ".").match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/);
+    return m ? Number(m[0]) : NaN;
+  }
+
+  function unitTokenToMmScale(token) {
+    const u = String(token ?? "").trim().toUpperCase();
+    if (u === "MM" || u === "MILLIMETER" || u === "MILLIMETERS") return 1;
+    if (u === "CM" || u === "CENTIMETER" || u === "CENTIMETERS") return 10;
+    if (u === "M" || u === "METER" || u === "METERS") return 1000;
+    if (u === "IN" || u === "INCH" || u === "INCHES") return 25.4;
+    return 1;
+  }
+
+  function isLikelyZemaxSequentialText(txt) {
+    if (!txt) return false;
+    return /(^|\n)\s*SURF\s+\d+/im.test(txt) && /(^|\n)\s*CURV\s+/im.test(txt);
+  }
+
+  function parseZemaxSequentialText(txt, sourceName = "Zemax file") {
+    const lines = String(txt || "").replace(/\r/g, "").split("\n");
+    if (!lines.length) throw new Error("Empty file");
+
+    let unitScaleToMm = 1;
+    const parsed = [];
+    let cur = null;
+
+    const pushCur = () => {
+      if (!cur) return;
+      parsed.push(cur);
+      cur = null;
+    };
+
+    for (const raw of lines) {
+      const line = String(raw || "").trim();
+      if (!line) continue;
+      if (line.startsWith("!") || line.startsWith("#") || line.startsWith("//")) continue;
+
+      const up = line.toUpperCase();
+
+      if (up.startsWith("UNIT")) {
+        const parts = up.split(/\s+/);
+        unitScaleToMm = unitTokenToMmScale(parts[1] || "MM");
+        continue;
+      }
+
+      const mSurf = up.match(/^SURF\s+(-?\d+)/);
+      if (mSurf) {
+        pushCur();
+        cur = {
+          idx: Number(mSurf[1]),
+          CURV: 0,
+          DISZ: 0,
+          DIAM: NaN,
+          GLAS: "AIR",
+          STOP: false,
+        };
+        continue;
+      }
+
+      if (!cur) continue;
+
+      if (up.startsWith("CURV")) {
+        const v = parseZemaxFirstNumber(line.slice(4));
+        if (Number.isFinite(v)) cur.CURV = v;
+        continue;
+      }
+
+      if (up.startsWith("DISZ")) {
+        const v = parseZemaxFirstNumber(line.slice(4));
+        if (Number.isFinite(v)) cur.DISZ = v;
+        continue;
+      }
+
+      if (up.startsWith("DIAM")) {
+        const v = parseZemaxFirstNumber(line.slice(4));
+        if (Number.isFinite(v)) cur.DIAM = Math.abs(v);
+        continue;
+      }
+
+      if (up.startsWith("GLAS")) {
+        const parts = line.split(/\s+/);
+        if (parts[1]) cur.GLAS = String(parts[1]).trim();
+        continue;
+      }
+
+      if (/^STOP\b/i.test(line)) {
+        cur.STOP = true;
+        continue;
+      }
+    }
+
+    pushCur();
+    if (!parsed.length) throw new Error("No SURF blocks found");
+
+    parsed.sort((a, b) => a.idx - b.idx);
+    const surfaces = parsed.map((s, i) => {
+      const curv = Number(s.CURV || 0);
+      const R = Math.abs(curv) < 1e-12 ? 0 : (1 / curv) * unitScaleToMm; // Zemax CURV -> our R
+      const t = Number.isFinite(Number(s.DISZ)) ? Number(s.DISZ) * unitScaleToMm : 0; // DISZ -> thickness
+      const apSemi = Number.isFinite(Number(s.DIAM)) ? Math.max(0.01, Number(s.DIAM) * unitScaleToMm) : 10; // DIAM is semi-diameter
+
+      const g = String(s.GLAS || "AIR").trim();
+      const glass = (!g || g === "-" || /^MIRROR$/i.test(g)) ? "AIR" : g;
+
+      return {
+        type: String(i),
+        R,
+        t,
+        ap: apSemi,
+        ap_optical: apSemi,
+        ap_mech: apSemi,
+        draw_mode: "zemax_like",
+        shoulder_mode: "none",
+        shoulder_depth: 0,
+        bevel: 0,
+        edge_thickness_mode: "auto",
+        glass,
+        stop: !!s.STOP,
+        zmx: {
+          surf: s.idx,
+          curv: curv,
+          disz: Number(s.DISZ),
+          diam: Number(s.DIAM),
+        },
+      };
+    });
+
+    if (!surfaces.length) throw new Error("No valid surfaces after parse");
+
+    return {
+      name: String(sourceName || "Zemax import").replace(/\.(zmx|seq|txt)$/i, ""),
+      notes: [
+        "Imported from Zemax sequential text.",
+        "Mapping: R = 1/CURV, t = DISZ, glass = GLAS, ap = DIAM (semi-diameter).",
+      ],
+      import_options: { use_same_ap_for_optics_and_mechanics: true },
+      surfaces,
+    };
+  }
+
   async function loadLensFromURL(url) {
     try {
       const r = await fetch(url, { cache: "no-store" });
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-      const obj = await r.json();
-      loadLens(obj);
-      toast("Loaded lens JSON");
-      return true;
+      const txt = await r.text();
+
+      try {
+        const obj = JSON.parse(txt);
+        loadLens(obj);
+        toast("Loaded lens JSON");
+        return true;
+      } catch (_) {}
+
+      if (isLikelyZemaxSequentialText(txt) || /\.(zmx|seq|txt)(\?|$)/i.test(url)) {
+        const obj = parseZemaxSequentialText(txt, url.split("/").pop() || "Zemax import");
+        loadLens(obj);
+        toast("Loaded Zemax lens");
+        return true;
+      }
+
+      throw new Error("Unknown lens format (expected JSON or Zemax sequential text)");
     } catch (e) {
-      if (ui.footerWarn) ui.footerWarn.textContent = `Lens JSON load failed: ${url} (${e?.message || e})`;
+      if (ui.footerWarn) ui.footerWarn.textContent = `Lens load failed: ${url} (${e?.message || e})`;
       return false;
     }
   }
@@ -4319,16 +4473,41 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
-      try {
-        const txt = String(reader.result || "");
+      const txt = String(reader.result || "");
+      const name = String(file?.name || "");
+      const lower = name.toLowerCase();
+
+      const parseAttempts = [];
+      const tryJson = () => {
         const obj = JSON.parse(txt);
         loadLens(obj);
         toast("Loaded lens JSON (file)");
-        resolve(true);
-      } catch (e) {
-        if (ui.footerWarn) ui.footerWarn.textContent = `Lens JSON parse failed: ${e?.message || e}`;
-        reject(e);
+        return true;
+      };
+      const tryZemax = () => {
+        if (!isLikelyZemaxSequentialText(txt) && !/\.(zmx|seq|txt)$/i.test(lower)) {
+          throw new Error("Not Zemax sequential text");
+        }
+        const obj = parseZemaxSequentialText(txt, name || "Zemax import");
+        loadLens(obj);
+        toast("Loaded Zemax lens (file)");
+        return true;
+      };
+
+      const order = /\.(zmx|seq)$/i.test(lower) ? [tryZemax, tryJson] : [tryJson, tryZemax];
+      for (const fn of order) {
+        try {
+          fn();
+          resolve(true);
+          return;
+        } catch (e) {
+          parseAttempts.push(e?.message || String(e));
+        }
       }
+
+      const msg = `Lens parse failed (${parseAttempts.join(" | ")})`;
+      if (ui.footerWarn) ui.footerWarn.textContent = msg;
+      reject(new Error(msg));
     };
     reader.onerror = reject;
     reader.readAsText(file);
