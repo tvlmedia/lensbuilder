@@ -1638,9 +1638,45 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     };
   }
 
+  function leastSquaresLineIntersection2D(rays) {
+    if (!Array.isArray(rays) || rays.length < 2) return null;
+
+    let a11 = 0, a12 = 0, a22 = 0;
+    let b1 = 0, b2 = 0;
+    let used = 0;
+
+    for (const r of rays) {
+      if (!r?.p || !r?.d) continue;
+      const m = Math.hypot(r.d.x, r.d.y);
+      if (!Number.isFinite(m) || m < 1e-12) continue;
+
+      const dx = r.d.x / m;
+      const dy = r.d.y / m;
+      const nx = -dy;
+      const ny = dx;
+      const c = nx * r.p.x + ny * r.p.y;
+
+      a11 += nx * nx;
+      a12 += nx * ny;
+      a22 += ny * ny;
+      b1 += nx * c;
+      b2 += ny * c;
+      used++;
+    }
+
+    if (used < 2) return null;
+    const det = a11 * a22 - a12 * a12;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null;
+
+    const x = (b1 * a22 - b2 * a12) / det;
+    const y = (a11 * b2 - a12 * b1) / det;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y, used };
+  }
+
   function estimateStopPointImageParaxial(frontStack, xStop, yStop, wavePreset) {
     const startX = xStop + 1e-4;
-    const slopes = [-0.20, -0.12, -0.07, -0.03, 0.03, 0.07, 0.12, 0.20];
+    const slopes = [-0.06, -0.04, -0.025, -0.015, 0.015, 0.025, 0.04, 0.06];
     const endRays = [];
 
     for (const slope of slopes) {
@@ -1654,6 +1690,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     if (endRays.length < 2) return null;
+
+    const lsq = leastSquaresLineIntersection2D(endRays);
+    if (lsq && Math.abs(lsq.x) < 1e6 && Math.abs(lsq.y) < 1e6) {
+      return { x: lsq.x, y: lsq.y, n: lsq.used, method: "lsq" };
+    }
 
     const intersections = [];
     for (let i = 0; i < endRays.length; i++) {
@@ -1697,7 +1738,64 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const x = core.reduce((sum, p) => sum + p.x, 0) / core.length;
     const y = core.reduce((sum, p) => sum + p.y, 0) / core.length;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    return { x, y, n: core.length };
+    return { x, y, n: core.length, method: "pairwise" };
+  }
+
+  function estimateEntrancePupilFromOnAxisBundle(surfaces, wavePreset = "d") {
+    if (!Array.isArray(surfaces) || !surfaces.length) return null;
+
+    const xStart = (Number(surfaces[0]?.vx) || 0) - 120;
+    const testPass = (y) => {
+      const ray = {
+        p: { x: xStart, y },
+        d: normalize({ x: 1, y: 0 }),
+      };
+      const tr = traceRayForward(clone(ray), surfaces, wavePreset, { skipIMS: true });
+      return !!(tr && !tr.vignetted && !tr.tir);
+    };
+
+    if (!testPass(0)) return null;
+
+    let apMax = 1;
+    for (const s of surfaces) {
+      if (!isPhysicalSurfaceType(s?.type)) continue;
+      apMax = Math.max(apMax, getSurfaceOpticalAp(s));
+    }
+
+    let lo = 0;
+    let hi = Math.max(1, apMax * 1.25);
+    for (let i = 0; i < 8; i++) {
+      if (!testPass(hi)) break;
+      lo = hi;
+      hi *= 1.5;
+    }
+
+    if (lo === 0 && !testPass(hi)) {
+      // keep current bracket
+    } else if (testPass(hi)) {
+      // no clipping even at high test value; clamp to tested max
+      return {
+        diameterMm: 2 * hi,
+        radiusMm: hi,
+        xMm: xStart,
+        method: "on_axis_bundle_unclipped",
+      };
+    }
+
+    for (let iter = 0; iter < 30; iter++) {
+      const mid = 0.5 * (lo + hi);
+      if (testPass(mid)) lo = mid;
+      else hi = mid;
+    }
+
+    const radius = Math.max(0, lo);
+    if (!Number.isFinite(radius) || radius <= 1e-6) return null;
+    return {
+      diameterMm: 2 * radius,
+      radiusMm: radius,
+      xMm: xStart,
+      method: "on_axis_bundle",
+    };
   }
 
   function estimateEntrancePupil(surfaces, wavePreset = "d") {
@@ -1718,8 +1816,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       };
     }
 
+    const bundleEP = estimateEntrancePupilFromOnAxisBundle(surfaces, wavePreset);
+    if (bundleEP && Number.isFinite(bundleEP.diameterMm) && bundleEP.diameterMm > 1e-6) {
+      return bundleEP;
+    }
+
     const frontStack = surfaces.slice(0, stopIdx + 1);
-    const yPara = Math.min(2.5, Math.max(0.15, stopAp * 0.08));
+    const yPara = Math.min(1.5, Math.max(0.10, stopAp * 0.03));
     const pPos = estimateStopPointImageParaxial(frontStack, xStop, +yPara, wavePreset);
     const pNeg = estimateStopPointImageParaxial(frontStack, xStop, -yPara, wavePreset);
 
@@ -1747,6 +1850,38 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
           radiusMm: radius,
           xMm: pOne.x,
           method: "paraxial_single_side",
+        };
+      }
+    }
+
+    // Near-edge paraxial mapping (less ideal than small-signal, but often robust for very fast lenses).
+    const yEdge = stopAp * 0.95;
+    const ePos = estimateStopPointImageParaxial(frontStack, xStop, +yEdge, wavePreset);
+    const eNeg = estimateStopPointImageParaxial(frontStack, xStop, -yEdge, wavePreset);
+    if (ePos && eNeg) {
+      const mEdge = (ePos.y - eNeg.y) / (2 * yEdge);
+      const radius = Math.abs(mEdge) * stopAp;
+      if (Number.isFinite(radius) && radius > 1e-6 && radius < 1e5) {
+        return {
+          diameterMm: 2 * radius,
+          radiusMm: radius,
+          xMm: 0.5 * (ePos.x + eNeg.x),
+          method: "edge_paraxial_stop_image",
+        };
+      }
+    }
+
+    const eOne = ePos || eNeg;
+    if (eOne) {
+      const yObj = ePos ? yEdge : -yEdge;
+      const m = eOne.y / yObj;
+      const radius = Math.abs(m) * stopAp;
+      if (Number.isFinite(radius) && radius > 1e-6 && radius < 1e5) {
+        return {
+          diameterMm: 2 * radius,
+          radiusMm: radius,
+          xMm: eOne.x,
+          method: "edge_paraxial_single_side",
         };
       }
     }
