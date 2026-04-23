@@ -130,6 +130,7 @@
     btnSave: $("#btnSave"),
     fileLoad: $("#fileLoad"),
     btnAutoFocus: $("#btnAutoFocus"),
+    btnRenderEngine: $("#btnRenderEngine"),
 
     newLensModal: $("#newLensModal"),
     nlClose: $("#nlClose"),
@@ -2064,7 +2065,54 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   // -------------------- render scheduler (RAF throttle) --------------------
   let _rafAll = 0;
+  let _rafPrev = 0;
+  let renderEngineEnabled = true;
+  let _previewRenderJobId = 0;
+
+  function updateRenderEngineButton() {
+    if (!ui.btnRenderEngine) return;
+    ui.btnRenderEngine.textContent = renderEngineEnabled ? "Render: ON" : "Render: OFF";
+    ui.btnRenderEngine.classList.toggle("btnPrimary", renderEngineEnabled);
+    ui.btnRenderEngine.classList.toggle("btnDanger", !renderEngineEnabled);
+    ui.btnRenderEngine.setAttribute("aria-pressed", renderEngineEnabled ? "true" : "false");
+    ui.btnRenderEngine.title = renderEngineEnabled ? "Disable render engine" : "Enable render engine";
+    if (ui.btnRenderPreview) ui.btnRenderPreview.disabled = !renderEngineEnabled;
+  }
+
+  function setRenderEngineEnabled(enabled) {
+    const next = !!enabled;
+    if (renderEngineEnabled === next) return;
+    renderEngineEnabled = next;
+
+    _previewRenderJobId++;
+
+    if (_rafAll) {
+      cancelAnimationFrame(_rafAll);
+      _rafAll = 0;
+    }
+    if (_rafPrev) {
+      cancelAnimationFrame(_rafPrev);
+      _rafPrev = 0;
+    }
+
+    if (!renderEngineEnabled) {
+      hidePreviewProgress();
+      toast("Render engine: OFF", 1200);
+    } else {
+      renderAll();
+      if (preview.ready) scheduleRenderPreview();
+      toast("Render engine: ON", 1200);
+    }
+
+    updateRenderEngineButton();
+  }
+
+  function toggleRenderEngine() {
+    setRenderEngineEnabled(!renderEngineEnabled);
+  }
+
   function scheduleRenderAll() {
+    if (!renderEngineEnabled) return;
     if (_rafAll) return;
     _rafAll = requestAnimationFrame(() => {
       _rafAll = 0;
@@ -2072,12 +2120,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     });
   }
 
-  let _rafPrev = 0;
   function scheduleRenderPreview() {
+    if (!renderEngineEnabled) return;
     if (_rafPrev) return;
     _rafPrev = requestAnimationFrame(() => {
       _rafPrev = 0;
-      if (preview.ready) renderPreview();
+      if (preview.ready && renderEngineEnabled) renderPreview();
     });
   }
 
@@ -2085,6 +2133,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   // RENDER ALL (rays pane)
   // ===========================
   function renderAll() {
+    if (!renderEngineEnabled) return;
     if (!canvas || !ctx) return;
     if (ui.footerWarn) ui.footerWarn.textContent = "";
 
@@ -3170,8 +3219,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
  function renderPreview() {
+  if (!renderEngineEnabled) {
+    hidePreviewProgress();
+    return;
+  }
   if (!pctx || !previewCanvasEl) return;
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
+  const jobId = ++_previewRenderJobId;
   setNoUsableCircle("pending");
 
   const doDOF = !!document.getElementById("optDOF")?.checked;
@@ -3302,6 +3356,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const kPerFrame = (q === "hq") ? 18 : (q === "draft" ? 40 : 26);
 
     function buildStep() {
+      if (!renderEngineEnabled || jobId !== _previewRenderJobId) {
+        hidePreviewProgress();
+        return;
+      }
       const end = Math.min(LUT_N, k + kPerFrame);
       setPreviewProgress(k / LUT_N, `LUT ${Math.round((k / LUT_N) * 100)}%`);
 
@@ -3506,6 +3564,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const rowsPerChunk = (q === "hq") ? 10 : (q === "draft" ? 24 : 16);
 
     function step() {
+      if (!renderEngineEnabled || jobId !== _previewRenderJobId) {
+        hidePreviewProgress();
+        return;
+      }
       const yEnd = Math.min(H, row + rowsPerChunk);
       setPreviewProgress(row / H, `DOF ${Math.round((row / H) * 100)}%`);
 
@@ -3938,6 +4000,7 @@ function wireUI() {
   on("#btnScaleToFocal", "click", scaleToTargetFocal);
   on("#btnSetTStop", "click", setTargetTStop);
   on("#btnAutoFocus", "click", autoFocus);
+  on("#btnRenderEngine", "click", toggleRenderEngine);
 
   on("#btnSave", "click", saveLensToFile);
 
@@ -4004,6 +4067,7 @@ function wireUI() {
 // -------------------- boot --------------------
 function boot() {
   wireUI();
+  updateRenderEngineButton();
   bindViewControls();
   bindPreviewViewControls();
 
