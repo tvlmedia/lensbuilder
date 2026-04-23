@@ -1638,6 +1638,68 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     };
   }
 
+  function estimateStopPointImageParaxial(frontStack, xStop, yStop, wavePreset) {
+    const startX = xStop + 1e-4;
+    const slopes = [-0.20, -0.12, -0.07, -0.03, 0.03, 0.07, 0.12, 0.20];
+    const endRays = [];
+
+    for (const slope of slopes) {
+      const ray = {
+        p: { x: startX, y: yStop },
+        d: normalize({ x: -1, y: slope }),
+      };
+      const tr = traceRayReverse(clone(ray), frontStack, wavePreset);
+      if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
+      endRays.push(tr.endRay);
+    }
+
+    if (endRays.length < 2) return null;
+
+    const intersections = [];
+    for (let i = 0; i < endRays.length; i++) {
+      for (let j = i + 1; j < endRays.length; j++) {
+        const d1 = endRays[i].d;
+        const d2 = endRays[j].d;
+        const m1 = Math.hypot(d1.x, d1.y);
+        const m2 = Math.hypot(d2.x, d2.y);
+        if (m1 < 1e-12 || m2 < 1e-12) continue;
+        const cosang = Math.abs((d1.x * d2.x + d1.y * d2.y) / (m1 * m2));
+        if (cosang > 0.99995) continue;
+
+        const cross = lineIntersectionFromRays2D(endRays[i], endRays[j]);
+        if (!cross) continue;
+        if (!Number.isFinite(cross.x) || !Number.isFinite(cross.y)) continue;
+        if (Math.abs(cross.x) > 1e6 || Math.abs(cross.y) > 1e6) continue;
+        intersections.push(cross);
+      }
+    }
+
+    if (!intersections.length) return null;
+
+    const xs = intersections.map((p) => p.x).sort((a, b) => a - b);
+    const ys = intersections.map((p) => p.y).sort((a, b) => a - b);
+    const median = (arr) => {
+      const n = arr.length;
+      if (!n) return NaN;
+      const mid = Math.floor(n / 2);
+      return (n % 2) ? arr[mid] : 0.5 * (arr[mid - 1] + arr[mid]);
+    };
+    const mx = median(xs);
+    const my = median(ys);
+    if (!Number.isFinite(mx) || !Number.isFinite(my)) return null;
+
+    const ranked = intersections
+      .map((p) => ({ p, d: Math.hypot(p.x - mx, p.y - my) }))
+      .sort((a, b) => a.d - b.d);
+    const keepN = Math.max(1, Math.ceil(ranked.length * 0.6));
+    const core = ranked.slice(0, keepN).map((e) => e.p);
+
+    const x = core.reduce((sum, p) => sum + p.x, 0) / core.length;
+    const y = core.reduce((sum, p) => sum + p.y, 0) / core.length;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y, n: core.length };
+  }
+
   function estimateEntrancePupil(surfaces, wavePreset = "d") {
     const stopIdx = findStopSurfaceIndex(surfaces);
     if (stopIdx < 0) return null;
@@ -1657,6 +1719,39 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     const frontStack = surfaces.slice(0, stopIdx + 1);
+    const yPara = Math.min(2.5, Math.max(0.15, stopAp * 0.08));
+    const pPos = estimateStopPointImageParaxial(frontStack, xStop, +yPara, wavePreset);
+    const pNeg = estimateStopPointImageParaxial(frontStack, xStop, -yPara, wavePreset);
+
+    if (pPos && pNeg) {
+      const m = (pPos.y - pNeg.y) / (2 * yPara);
+      const radius = Math.abs(m) * stopAp;
+      if (Number.isFinite(radius) && radius > 1e-6 && radius < 1e5) {
+        return {
+          diameterMm: 2 * radius,
+          radiusMm: radius,
+          xMm: 0.5 * (pPos.x + pNeg.x),
+          method: "paraxial_stop_image",
+        };
+      }
+    }
+
+    const pOne = pPos || pNeg;
+    if (pOne) {
+      const yObj = pPos ? yPara : -yPara;
+      const m = pOne.y / yObj;
+      const radius = Math.abs(m) * stopAp;
+      if (Number.isFinite(radius) && radius > 1e-6 && radius < 1e5) {
+        return {
+          diameterMm: 2 * radius,
+          radiusMm: radius,
+          xMm: pOne.x,
+          method: "paraxial_single_side",
+        };
+      }
+    }
+
+    // Fallback: use full edge imaging (more aberration-sensitive but robust).
     const startX = xStop + 1e-4;
     const slopeBases = [0.03, 0.08, 0.15, 0.25];
     const edgeSigns = [1, -1];
@@ -4761,8 +4856,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         t,
         ap: apSemi,
         ap_optical: apSemi,
-        ap_mech: apSemi,
-        draw_mode: "zemax_like",
+        ap_mech: null,
+        draw_mode: "optical",
         shoulder_mode: "none",
         shoulder_depth: 0,
         bevel: 0,
@@ -4796,9 +4891,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         "Imported from Zemax sequential text.",
         "Mapping: R = 1/CURV, t = DISZ, glass = GLAS, ap = DIAM (semi-diameter).",
         "GLAS lines with explicit nd/Vd are preserved per surface (e.g. ___BLANK).",
+        "Default draw mode for Zemax import is optical-only (no inferred mechanical shoulders).",
       ],
       import_options: {
-        use_same_ap_for_optics_and_mechanics: true,
+        use_same_ap_for_optics_and_mechanics: false,
         preserve_ims_aperture: true,
       },
       surfaces,
