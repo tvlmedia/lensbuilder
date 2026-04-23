@@ -767,8 +767,10 @@ function onCellCommit(e) {
   const HIT_T_EPS = 1e-9;
   const SURFACE_BRANCH_EPS = 1e-6;
   const DEBUG_FIRST_NEG_SURFACE_INTERSECT = true;
+  const DEBUG_FIRST_TRACE_FAIL = true;
   let _loggedNegSurfaceBranch2D = false;
   let _loggedNegSurfaceBranch3D = false;
+  let _loggedTraceFail = false;
 
   function maybeLogNegativeSurfaceBranch2D(surf, roots, chosen) {
     if (!DEBUG_FIRST_NEG_SURFACE_INTERSECT || _loggedNegSurfaceBranch2D) return;
@@ -798,6 +800,12 @@ function onCellCommit(e) {
         ? { t: chosen.t, hit: chosen.hit, xExpected: chosen.xExpected, branchError: chosen.branchError }
         : null,
     });
+  }
+
+  function maybeLogTraceFail(tag, payload) {
+    if (!DEBUG_FIRST_TRACE_FAIL || _loggedTraceFail) return;
+    _loggedTraceFail = true;
+    console.warn(`[trace] ${tag}`, payload);
   }
 
   function refract(I, N, n1, n2) {
@@ -1012,13 +1020,18 @@ function onCellCommit(e) {
     let vignetted = false;
     let tir = false;
 
-    for (let i = surfaces.length - 1; i >= 0; i--){
-      const s = surfaces[i];
-      const type = String(s?.type || "").toUpperCase();
-      const isIMS  = type === "IMS";
-      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+  for (let i = surfaces.length - 1; i >= 0; i--){
+    const s = surfaces[i];
+    const type = String(s?.type || "").toUpperCase();
+    const isOBJ  = type === "OBJ";
+    const isIMS  = type === "IMS";
+    const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
-      const hitInfo = intersectSurface3D(ray, s);
+    if (isOBJ){
+      continue;
+    }
+
+    const hitInfo = intersectSurface3D(ray, s);
       if (!hitInfo){ vignetted = true; break; }
 
       if (!isIMS && hitInfo.vignetted){ vignetted = true; break; }
@@ -1128,17 +1141,42 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i];
     const type = String(s?.type || "").toUpperCase();
+    const isOBJ = type === "OBJ";
     const isIMS = type === "IMS";
     const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
+    if (isOBJ) continue;
     if (skipIMS && isIMS) continue;
 
     const hitInfo = intersectSurface(ray, s);
-    if (!hitInfo) { vignetted = true; break; }
+    if (!hitInfo) {
+      maybeLogTraceFail("forward_no_hit", {
+        surfaceIndex: i,
+        type,
+        vx: Number(s?.vx || 0),
+        R: Number(s?.R || 0),
+        ap: Number(s?.ap || 0),
+        rayP: ray?.p,
+        rayD: ray?.d,
+      });
+      vignetted = true;
+      break;
+    }
 
     pts.push(hitInfo.hit);
 
-    if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+    if (!isIMS && hitInfo.vignetted) {
+      maybeLogTraceFail("forward_aperture_clip", {
+        surfaceIndex: i,
+        type,
+        vx: Number(s?.vx || 0),
+        R: Number(s?.R || 0),
+        ap: Number(s?.ap || 0),
+        hit: hitInfo.hit,
+      });
+      vignetted = true;
+      break;
+    }
 
     if (isIMS || isMECH) {
       ray = { p: hitInfo.hit, d: ray.d };
@@ -1154,7 +1192,19 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
-    if (!newDir) { tir = true; break; }
+    if (!newDir) {
+      maybeLogTraceFail("forward_tir", {
+        surfaceIndex: i,
+        type,
+        vx: Number(s?.vx || 0),
+        R: Number(s?.R || 0),
+        nBefore,
+        nAfter,
+        hit: hitInfo.hit,
+      });
+      tir = true;
+      break;
+    }
 
     ray = { p: hitInfo.hit, d: newDir };
     nBefore = nAfter;
@@ -1171,9 +1221,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     for (let i = surfaces.length - 1; i >= 0; i--) {
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
+      const isOBJ = type === "OBJ";
       const isIMS = type === "IMS";
       const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
+      if (isOBJ) continue;
       const hitInfo = intersectSurface(ray, s);
       if (!hitInfo) { vignetted = true; break; }
 
