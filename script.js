@@ -764,6 +764,42 @@ function onCellCommit(e) {
   function add(a, b) { return { x: a.x + b.x, y: a.y + b.y }; }
   function mul(a, s) { return { x: a.x * s, y: a.y * s }; }
 
+  const HIT_T_EPS = 1e-9;
+  const SURFACE_BRANCH_EPS = 1e-6;
+  const DEBUG_FIRST_NEG_SURFACE_INTERSECT = true;
+  let _loggedNegSurfaceBranch2D = false;
+  let _loggedNegSurfaceBranch3D = false;
+
+  function maybeLogNegativeSurfaceBranch2D(surf, roots, chosen) {
+    if (!DEBUG_FIRST_NEG_SURFACE_INTERSECT || _loggedNegSurfaceBranch2D) return;
+    if (!(Number(surf?.R || 0) < -1e-9)) return;
+    _loggedNegSurfaceBranch2D = true;
+    console.log("[intersectSurface 2D] first negative-surface branch check", {
+      type: String(surf?.type || ""),
+      vx: Number(surf?.vx || 0),
+      R: Number(surf?.R || 0),
+      roots,
+      chosen: chosen
+        ? { t: chosen.t, hit: chosen.hit, xExpected: chosen.xExpected, branchError: chosen.branchError }
+        : null,
+    });
+  }
+
+  function maybeLogNegativeSurfaceBranch3D(surf, roots, chosen) {
+    if (!DEBUG_FIRST_NEG_SURFACE_INTERSECT || _loggedNegSurfaceBranch3D) return;
+    if (!(Number(surf?.R || 0) < -1e-9)) return;
+    _loggedNegSurfaceBranch3D = true;
+    console.log("[intersectSurface3D] first negative-surface branch check", {
+      type: String(surf?.type || ""),
+      vx: Number(surf?.vx || 0),
+      R: Number(surf?.R || 0),
+      roots,
+      chosen: chosen
+        ? { t: chosen.t, hit: chosen.hit, xExpected: chosen.xExpected, branchError: chosen.branchError }
+        : null,
+    });
+  }
+
   function refract(I, N, n1, n2) {
     I = normalize(I);
     N = normalize(N);
@@ -778,17 +814,17 @@ function onCellCommit(e) {
 
   function intersectSurface(ray, surf) {
     const vx = surf.vx;
-    const R = surf.R;
-    const ap = Math.max(0, surf.ap);
+    const R = Number(surf.R || 0);
+    const ap = Math.max(0, Number(surf.ap || 0));
 
     if (Math.abs(R) < 1e-9) {
       if (Math.abs(ray.d.x) < 1e-12) return null;
 
       const t = (vx - ray.p.x) / ray.d.x;
-      if (!Number.isFinite(t) || t <= 1e-9) return null;
+      if (!Number.isFinite(t) || t <= HIT_T_EPS) return null;
 
       const hit = add(ray.p, mul(ray.d, t));
-      const vignetted = Math.abs(hit.y) > ap + 1e-9;
+      const vignetted = Math.abs(hit.y) > ap + HIT_T_EPS;
 
       const N = { x: -1, y: 0 };
       return { hit, t, vignetted, normal: N };
@@ -803,6 +839,7 @@ function onCellCommit(e) {
     const dy = ray.d.y;
 
     const A = dx * dx + dy * dy;
+    if (!Number.isFinite(A) || Math.abs(A) < 1e-18) return null;
     const B = 2 * (px * dx + py * dy);
     const C = px * px + py * py - rad * rad;
 
@@ -813,14 +850,33 @@ function onCellCommit(e) {
     const t1 = (-B - sdisc) / (2 * A);
     const t2 = (-B + sdisc) / (2 * A);
 
-    let t = null;
-    if (t1 > 1e-9 && t2 > 1e-9) t = Math.min(t1, t2);
-    else if (t1 > 1e-9) t = t1;
-    else if (t2 > 1e-9) t = t2;
-    else return null;
+    const signR = Math.sign(R) || 1;
+    const evalRoot = (t) => {
+      if (!Number.isFinite(t)) {
+        return { t, positive: false, inside: null, hit: null, xExpected: null, branchError: null, branchOk: false };
+      }
+      const hit = add(ray.p, mul(ray.d, t));
+      const inside = rad * rad - hit.y * hit.y;
+      const xExpected = cx - signR * Math.sqrt(Math.max(0, inside));
+      const branchError = Math.abs(hit.x - xExpected);
+      const positive = t > HIT_T_EPS;
+      const branchOk = positive && inside >= -SURFACE_BRANCH_EPS && branchError <= SURFACE_BRANCH_EPS;
+      return { t, positive, inside, hit, xExpected, branchError, branchOk };
+    };
 
-    const hit = add(ray.p, mul(ray.d, t));
-    const vignetted = Math.abs(hit.y) > ap + 1e-9;
+    const roots = [evalRoot(t1), evalRoot(t2)];
+    let chosen = null;
+    for (const r of roots) {
+      if (!r.branchOk) continue;
+      if (!chosen || r.t < chosen.t) chosen = r;
+    }
+
+    maybeLogNegativeSurfaceBranch2D(surf, roots, chosen);
+    if (!chosen) return null;
+
+    const hit = chosen.hit;
+    const t = chosen.t;
+    const vignetted = Math.abs(hit.y) > ap + HIT_T_EPS;
     const Nout = normalize({ x: hit.x - cx, y: hit.y });
     return { hit, t, vignetted, normal: Nout };
   }
@@ -886,11 +942,11 @@ function onCellCommit(e) {
     if (isPlane){
       if (Math.abs(ray.d.x) < 1e-12) return null;
       const t = (vx - ray.p.x) / ray.d.x;
-      if (!Number.isFinite(t) || t <= 1e-9) return null;
+      if (!Number.isFinite(t) || t <= HIT_T_EPS) return null;
 
       const hit = add3(ray.p, mul3(ray.d, t));
       const r = Math.hypot(hit.y, hit.z);
-      const vignetted = r > ap + 1e-9;
+      const vignetted = r > ap + HIT_T_EPS;
 
       const N = { x:-1, y:0, z:0 };
       return { hit, t, vignetted, normal: N };
@@ -907,6 +963,7 @@ function onCellCommit(e) {
     const dz = ray.d.z;
 
     const A = dx*dx + dy*dy + dz*dz;
+    if (!Number.isFinite(A) || Math.abs(A) < 1e-18) return null;
     const B = 2 * (px*dx + py*dy + pz*dz);
     const C = px*px + py*py + pz*pz - rad*rad;
 
@@ -917,15 +974,35 @@ function onCellCommit(e) {
     const t1 = (-B - sdisc) / (2*A);
     const t2 = (-B + sdisc) / (2*A);
 
-    let t = null;
-    if (t1 > 1e-9 && t2 > 1e-9) t = Math.min(t1, t2);
-    else if (t1 > 1e-9) t = t1;
-    else if (t2 > 1e-9) t = t2;
-    else return null;
+    const signR = Math.sign(R) || 1;
+    const evalRoot = (t) => {
+      if (!Number.isFinite(t)) {
+        return { t, positive: false, r2: null, inside: null, hit: null, xExpected: null, branchError: null, branchOk: false };
+      }
+      const hit = add3(ray.p, mul3(ray.d, t));
+      const r2 = hit.y * hit.y + hit.z * hit.z;
+      const inside = rad * rad - r2;
+      const xExpected = cx - signR * Math.sqrt(Math.max(0, inside));
+      const branchError = Math.abs(hit.x - xExpected);
+      const positive = t > HIT_T_EPS;
+      const branchOk = positive && inside >= -SURFACE_BRANCH_EPS && branchError <= SURFACE_BRANCH_EPS;
+      return { t, positive, r2, inside, hit, xExpected, branchError, branchOk };
+    };
 
-    const hit = add3(ray.p, mul3(ray.d, t));
+    const roots = [evalRoot(t1), evalRoot(t2)];
+    let chosen = null;
+    for (const r of roots) {
+      if (!r.branchOk) continue;
+      if (!chosen || r.t < chosen.t) chosen = r;
+    }
+
+    maybeLogNegativeSurfaceBranch3D(surf, roots, chosen);
+    if (!chosen) return null;
+
+    const hit = chosen.hit;
+    const t = chosen.t;
     const r = Math.hypot(hit.y, hit.z);
-    const vignetted = r > ap + 1e-9;
+    const vignetted = r > ap + HIT_T_EPS;
 
     const Nout = normalize3({ x: hit.x - cx, y: hit.y, z: hit.z });
     return { hit, t, vignetted, normal: Nout };
