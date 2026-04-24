@@ -70,6 +70,19 @@
       relAtCutoff: 0,
       source: "",
     },
+    focusAssist: {
+      cacheKey: "",
+      sensorX: 0,
+      metrics: null,
+    },
+    debug: {
+      focusDeltaMm: null,
+      spotRmsMm: null,
+      spotRmsPx: null,
+      kernelPx: null,
+      mmPerPx: null,
+      method: "",
+    },
   };
   preview.imgCtx = preview.imgCanvas.getContext("2d");
   preview.worldCtx = preview.worldCanvas.getContext("2d");
@@ -3383,6 +3396,56 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     // --- diagonal ruler (toggle) ---
     if (preview.rulerOn) drawPreviewDiagonalRuler(sr);
+    drawPreviewDebugOverlay(sr0);
+    pctx.restore();
+  }
+
+  function drawPreviewDebugOverlay(sr) {
+    if (!pctx || !sr) return;
+    const d = preview.debug || {};
+    const lines = [];
+    const focusTxt = (Number.isFinite(d.focusDeltaMm))
+      ? `Focus Δ: ${d.focusDeltaMm >= 0 ? "+" : ""}${d.focusDeltaMm.toFixed(3)}mm`
+      : "Focus Δ: —";
+    const rmsMmTxt = Number.isFinite(d.spotRmsMm) ? `${d.spotRmsMm.toFixed(4)}mm` : "—";
+    const rmsPxTxt = Number.isFinite(d.spotRmsPx) ? `${d.spotRmsPx.toFixed(2)}px` : "—";
+    const kPxTxt = Number.isFinite(d.kernelPx) ? `${d.kernelPx.toFixed(2)}px` : "—";
+    const mppTxt = Number.isFinite(d.mmPerPx) ? `${d.mmPerPx.toFixed(5)} mm/px` : "—";
+
+    lines.push(focusTxt);
+    lines.push(`Spot RMS: ${rmsMmTxt} • ${rmsPxTxt}`);
+    lines.push(`Kernel: ${kPxTxt} • Scale: ${mppTxt}`);
+    if (d.method) lines.push(`Method: ${String(d.method)}`);
+
+    pctx.save();
+    const mono = (getComputedStyle(document.documentElement).getPropertyValue("--mono") || "ui-monospace").trim();
+    pctx.font = `11px ${mono}`;
+    pctx.textAlign = "left";
+    pctx.textBaseline = "top";
+
+    let maxW = 0;
+    for (const ln of lines) maxW = Math.max(maxW, pctx.measureText(ln).width);
+
+    const pad = 8;
+    const lineH = 14;
+    const boxW = Math.ceil(maxW + pad * 2);
+    const boxH = Math.ceil(lines.length * lineH + pad * 2);
+    const x = Math.max(10, sr.x + 10);
+    const y = Math.max(42, sr.y + 10);
+
+    pctx.fillStyle = "rgba(0,0,0,.55)";
+    pctx.strokeStyle = "rgba(255,255,255,.16)";
+    pctx.lineWidth = 1;
+    pctx.beginPath();
+    if (typeof pctx.roundRect === "function") pctx.roundRect(x, y, boxW, boxH, 8);
+    else pctx.rect(x, y, boxW, boxH);
+    pctx.fill();
+    pctx.stroke();
+
+    pctx.fillStyle = "rgba(255,255,255,.90)";
+    for (let i = 0; i < lines.length; i++) {
+      pctx.fillText(lines[i], x + pad, y + pad + i * lineH);
+    }
     pctx.restore();
   }
 
@@ -4167,6 +4230,168 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     setUsableCircleFromRadialCurve(rMm, gain, "LUT");
   }
 
+  const PREVIEW_FOCUS_PUPIL_POINTS = [
+    { y: 0.00, z: 0.00 },
+    { y: 0.65, z: 0.00 },
+    { y: -0.65, z: 0.00 },
+    { y: 0.00, z: 0.65 },
+    { y: 0.00, z: -0.65 },
+    { y: 0.46, z: 0.46 },
+    { y: -0.46, z: 0.46 },
+    { y: 0.46, z: -0.46 },
+    { y: -0.46, z: -0.46 },
+    { y: 0.90, z: 0.00 },
+    { y: -0.90, z: 0.00 },
+    { y: 0.00, z: 0.90 },
+    { y: 0.00, z: -0.90 },
+  ];
+
+  function evaluatePreviewFocusAtSensorX({
+    surfaces,
+    wavePreset,
+    lensShift,
+    sensorX,
+    objDist,
+    sensorHv,
+  }) {
+    computeVertices(surfaces, lensShift, sensorX);
+    const stopIdx = findStopSurfaceIndex(surfaces);
+    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
+    const stopAp = Math.max(1e-6, getSurfaceOpticalAp(stopSurf));
+    const xStop = Number(stopSurf?.vx || 0);
+    const xObjPlane = Number(surfaces?.[0]?.vx || 0) - objDist;
+    const startX = sensorX + 0.05;
+
+    const fieldYs = [0, -sensorHv * 0.20, sensorHv * 0.20];
+    const fieldW = [1.0, 0.6, 0.6];
+
+    let weightedRms = 0;
+    let weightSum = 0;
+    let totalHits = 0;
+    let totalRays = 0;
+
+    for (let fi = 0; fi < fieldYs.length; fi++) {
+      const sy = fieldYs[fi];
+      const hits = [];
+
+      for (const p of PREVIEW_FOCUS_PUPIL_POINTS) {
+        const py = p.y * stopAp;
+        const pz = p.z * stopAp;
+        const dir = normalize3({ x: xStop - startX, y: py - sy, z: pz });
+        const tr = traceRayReverse3D({ p: { x: startX, y: sy, z: 0 }, d: dir }, surfaces, wavePreset);
+        totalRays++;
+        if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
+        const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+        if (!hitObj) continue;
+        hits.push(hitObj);
+      }
+
+      totalHits += hits.length;
+      if (hits.length < 4) continue;
+
+      const my = hits.reduce((s, h) => s + h.y, 0) / hits.length;
+      const mz = hits.reduce((s, h) => s + h.z, 0) / hits.length;
+      const rms = Math.sqrt(
+        hits.reduce((acc, h) => acc + (h.y - my) ** 2 + (h.z - mz) ** 2, 0) / hits.length
+      );
+      weightedRms += rms * fieldW[fi];
+      weightSum += fieldW[fi];
+    }
+
+    const hitRate = totalRays > 0 ? (totalHits / totalRays) : 0;
+    if (!(weightSum > 0) || hitRate < 0.30) {
+      return { score: Infinity, rmsMm: null, hitRate };
+    }
+
+    const rmsMm = weightedRms / weightSum;
+    const penalty = (hitRate < 0.95) ? (1 + (0.95 - hitRate) * 4) : 1;
+    return {
+      score: rmsMm * penalty,
+      rmsMm,
+      hitRate,
+    };
+  }
+
+  function autoFocusPreviewSensorForObjectDistance({
+    surfaces,
+    wavePreset,
+    lensShift,
+    sensorX,
+    objDist,
+    sensorHv,
+  }) {
+    const keyParts = [
+      wavePreset,
+      objDist.toFixed(6),
+      lensShift.toFixed(6),
+      String(surfaces?.length || 0),
+      ...((surfaces || []).map((s) => [
+        String(s?.type || ""),
+        Number(s?.R || 0).toFixed(6),
+        Number(s?.t || 0).toFixed(6),
+        Number(getSurfaceOpticalAp(s)).toFixed(6),
+        String(s?.glass || "AIR"),
+        s?.stop ? "1" : "0",
+      ].join(","))),
+    ];
+    const key = keyParts.join("|");
+
+    if (preview.focusAssist.cacheKey === key && Number.isFinite(preview.focusAssist.sensorX)) {
+      const cached = Number(preview.focusAssist.sensorX);
+      const m = preview.focusAssist.metrics || null;
+      computeVertices(surfaces, lensShift, cached);
+      return {
+        sensorX: cached,
+        deltaMm: cached - sensorX,
+        rmsMm: Number.isFinite(Number(m?.rmsMm)) ? Number(m.rmsMm) : null,
+        hitRate: Number.isFinite(Number(m?.hitRate)) ? Number(m.hitRate) : null,
+        method: "preview_af_cached",
+      };
+    }
+
+    const efl = estimateEflBflParaxial(surfaces, wavePreset).efl;
+    const range = Math.max(2, Math.min(36, Number.isFinite(efl) && efl > 0 ? efl * 0.26 : 16));
+    const coarseStep = Math.max(0.35, range / 12);
+    const fineStep = Math.max(0.05, coarseStep / 6);
+
+    let bestX = sensorX;
+    let best = evaluatePreviewFocusAtSensorX({
+      surfaces, wavePreset, lensShift, sensorX: bestX, objDist, sensorHv,
+    });
+
+    for (let x = sensorX - range; x <= sensorX + range + 1e-9; x += coarseStep) {
+      const ev = evaluatePreviewFocusAtSensorX({
+        surfaces, wavePreset, lensShift, sensorX: x, objDist, sensorHv,
+      });
+      if (ev.score < best.score) {
+        best = ev;
+        bestX = x;
+      }
+    }
+
+    for (let x = bestX - coarseStep; x <= bestX + coarseStep + 1e-9; x += fineStep) {
+      const ev = evaluatePreviewFocusAtSensorX({
+        surfaces, wavePreset, lensShift, sensorX: x, objDist, sensorHv,
+      });
+      if (ev.score < best.score) {
+        best = ev;
+        bestX = x;
+      }
+    }
+
+    preview.focusAssist.cacheKey = key;
+    preview.focusAssist.sensorX = bestX;
+    preview.focusAssist.metrics = best;
+
+    return {
+      sensorX: bestX,
+      deltaMm: bestX - sensorX,
+      rmsMm: best.rmsMm,
+      hitRate: best.hitRate,
+      method: "preview_af_search",
+    };
+  }
+
   function estimatePreviewObjectHalfHeightFromChief({
     surfaces,
     wavePreset,
@@ -4290,7 +4515,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));
 
   const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
-  const sensorX   = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
+  let sensorX   = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
   const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0.0;
 
   computeVertices(lens.surfaces, lensShift, sensorX);
@@ -4298,13 +4523,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const wavePreset = ui.wavePreset?.value || "d";
   const { w: sensorW, h: sensorH } = getSensorWH();
 
-  const stopIdx = findStopSurfaceIndex(lens.surfaces);
-  const stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
-  const xStop = stopSurf.vx;
-  const stopAp = Math.max(1e-6, Number(stopSurf?.ap || 0));
+  let stopIdx = findStopSurfaceIndex(lens.surfaces);
+  let stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
+  let xStop = Number(stopSurf?.vx || 0);
+  let stopAp = Math.max(1e-6, getSurfaceOpticalAp(stopSurf));
 
-  const objDist   = Number(ui.prevObjDist?.value || 2000);
-  const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+  const objDist = Number(ui.prevObjDist?.value || 2000);
+  let xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
   const base = Math.max(64, Number(ui.prevRes?.value || 720));
   const aspect = sensorW / sensorH;
@@ -4323,6 +4548,43 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const imgH = preview.imgCanvas.height;
   const imgData = hasImg ? preview.imgData : null;
   const autoFill = !!ui.previewAutoFit?.checked;
+
+  let focusInfo = {
+    sensorX,
+    deltaMm: 0,
+    rmsMm: null,
+    hitRate: null,
+    method: "preview_af_none",
+  };
+  if (focusMode === "cam" && Number.isFinite(objDist) && objDist > 0.1 && objDist < 1e8) {
+    focusInfo = autoFocusPreviewSensorForObjectDistance({
+      surfaces: lens.surfaces,
+      wavePreset,
+      lensShift,
+      sensorX,
+      objDist,
+      sensorHv,
+    });
+    if (Number.isFinite(focusInfo?.sensorX)) {
+      const prevSensorX = sensorX;
+      sensorX = Number(focusInfo.sensorX);
+      computeVertices(lens.surfaces, lensShift, sensorX);
+      stopIdx = findStopSurfaceIndex(lens.surfaces);
+      stopSurf = stopIdx >= 0 ? lens.surfaces[stopIdx] : lens.surfaces[0];
+      xStop = Number(stopSurf?.vx || 0);
+      stopAp = Math.max(1e-6, getSurfaceOpticalAp(stopSurf));
+      xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
+      if (ui.sensorOffset) ui.sensorOffset.value = sensorX.toFixed(4);
+      if (Math.abs(sensorX - prevSensorX) > 1e-6) scheduleRenderAll();
+    }
+  }
+
+  preview.debug.focusDeltaMm = Number.isFinite(focusInfo?.deltaMm) ? focusInfo.deltaMm : null;
+  preview.debug.spotRmsMm = Number.isFinite(focusInfo?.rmsMm) ? focusInfo.rmsMm : null;
+  preview.debug.spotRmsPx = null;
+  preview.debug.kernelPx = null;
+  preview.debug.mmPerPx = (H > 0) ? (sensorH / H) : null;
+  preview.debug.method = String(focusInfo?.method || "");
 
   function sample(u, v) {
     if (!hasImg) return [255, 255, 255, 255];
@@ -4505,6 +4767,17 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       }
 
       setUsableCircleFromLUT(transLUT[1], naturalLUT, rMaxSensor, previewOverscan);
+      const centerL = lookup(1, 0);
+      const centerKernelPx = Number.isFinite(centerL?.sigma)
+        ? Math.max(
+            (centerL.sigma * 0.85 / Math.max(1e-9, 2 * halfObjW)) * W,
+            (centerL.sigma * 0.85 / Math.max(1e-9, 2 * halfObjH)) * H
+          )
+        : null;
+      preview.debug.kernelPx = Number.isFinite(centerKernelPx) ? centerKernelPx : null;
+      if (!Number.isFinite(preview.debug.spotRmsPx) && Number.isFinite(centerKernelPx)) {
+        preview.debug.spotRmsPx = centerKernelPx;
+      }
 
       // Allocate world canvas AFTER LUT is ready
       preview.worldCanvas.width = W;
