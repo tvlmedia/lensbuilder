@@ -180,6 +180,7 @@
     verifyWeights: $("#verifyWeights"),
     verifyVig: $("#verifyVig"),
     verifyPupil: $("#verifyPupil"),
+    verifyMatchZemaxWave: $("#verifyMatchZemaxWave"),
 
     toastHost: $("#toastHost"),
   };
@@ -480,6 +481,11 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
 
   function wavePresetToLambdaNm(w){
     const ww = String(w || "d");
+    if (ww === "zemax_pwav") {
+      const z = Number(lens?.zemax?.primaryWavelengthNm);
+      if (Number.isFinite(z) && z > 0) return z;
+      return WL.d;
+    }
     const mNm = ww.match(/^nm:\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)$/i);
     if (mNm) {
       const nm = Number(mNm[1]);
@@ -491,6 +497,15 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     if (ww === "F") return WL.F;
     if (ww === "g") return WL.g;
     return WL.d;
+  }
+
+  function getActiveAnalysisLambdaNm({ preferZemax = false } = {}) {
+    if (preferZemax === true) {
+      const z = Number(lens?.zemax?.primaryWavelengthNm);
+      if (Number.isFinite(z) && z > 0) return z;
+    }
+    const preset = ui.wavePreset?.value || "d";
+    return wavePresetToLambdaNm(preset);
   }
 
   function ensureWavePresetOptionForNm(nm, labelPrefix = "Custom") {
@@ -507,6 +522,36 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     }
     opt.textContent = `${labelPrefix} (${n.toFixed(1)}nm)`;
     return value;
+  }
+
+  function ensureZemaxPrimaryWaveOption() {
+    if (!ui.wavePreset) return;
+    const nm = Number(lens?.zemax?.primaryWavelengthNm);
+    const value = "zemax_pwav";
+    const existing = Array.from(ui.wavePreset.options).find((o) => String(o.value) === value);
+    if (!(Number.isFinite(nm) && nm > 0)) {
+      if (existing) existing.remove();
+      if (ui.wavePreset.value === value) ui.wavePreset.value = "d";
+      return;
+    }
+    let opt = existing;
+    if (!opt) {
+      opt = document.createElement("option");
+      opt.value = value;
+      ui.wavePreset.appendChild(opt);
+    }
+    opt.textContent = `Zemax PWAV (${nm.toFixed(1)}nm) — imported primary wavelength`;
+  }
+
+  function setVisibleDefaultWavePresetAfterZemaxImport() {
+    if (!ui.wavePreset) return;
+    const pwavNm = Number(lens?.zemax?.primaryWavelengthNm);
+    // Keep visible-light default for preview/sanity; Zemax PWAV remains selectable.
+    if (Number.isFinite(pwavNm) && Math.abs(pwavNm - WL.d) < 1.0) {
+      ui.wavePreset.value = "d";
+      return;
+    }
+    ui.wavePreset.value = "d";
   }
 
   function setWavePresetFromNm(nm, labelPrefix = "Custom") {
@@ -785,6 +830,8 @@ function warnMissingGlass(name) {
       obj?.import_options?.preserve_ims_aperture === true,
     use_zemax_fields:
       obj?.import_options?.use_zemax_fields === true,
+    match_zemax_wavelength:
+      obj?.import_options?.match_zemax_wavelength === true,
     autofocus_mode: autofocusMode,
   };
 
@@ -870,6 +917,8 @@ function warnMissingGlass(name) {
   function loadLens(obj) {
     lens = sanitizeLens(obj);
     if (ui.useZemaxFields) ui.useZemaxFields.checked = !!lens?.import_options?.use_zemax_fields;
+    if (ui.verifyMatchZemaxWave) ui.verifyMatchZemaxWave.checked = !!lens?.import_options?.match_zemax_wavelength;
+    ensureZemaxPrimaryWaveOption();
     selectedIndex = 0;
     clampAllApertures(lens.surfaces);
     buildTable();
@@ -3356,6 +3405,82 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     ctx.restore();
   }
 
+  function wavePresetSemanticLabel(presetValue) {
+    const v = String(presetValue || "d");
+    if (v === "d") return "d-line (587.6nm) — visible default";
+    if (v === "g") return "g-line (435.8nm) — blue";
+    if (v === "c") return "c-line (656.3nm) — red";
+    if (v === "zemax_pwav") {
+      const z = Number(lens?.zemax?.primaryWavelengthNm);
+      return Number.isFinite(z)
+        ? `Zemax PWAV (${z.toFixed(1)}nm) — imported primary wavelength`
+        : "Zemax PWAV — unavailable";
+    }
+    const nm = wavePresetToLambdaNm(v);
+    return Number.isFinite(nm) ? `${v} (${nm.toFixed(1)}nm)` : v;
+  }
+
+  function updateZemaxVerifyPanel({ sensorX = 0 } = {}) {
+    if (!ui.verifyPanel) return;
+    const z = lens?.zemax;
+    if (!z) {
+      ui.verifyPanel.classList.add("hidden");
+      return;
+    }
+
+    ui.verifyPanel.classList.remove("hidden");
+
+    const preferZemax = !!ui.verifyMatchZemaxWave?.checked;
+    if (lens?.import_options) lens.import_options.match_zemax_wavelength = preferZemax;
+
+    const lambdaPreviewNm = getActiveAnalysisLambdaNm({ preferZemax: false });
+    const lambdaVerifyNm = getActiveAnalysisLambdaNm({ preferZemax: preferZemax });
+
+    const verifyParax = estimateEflBflParaxial(lens.surfaces, lambdaVerifyNm);
+    const verifyT = estimateTStopApprox(verifyParax.efl, lens.surfaces, lambdaVerifyNm);
+    const verifyEP = estimateEntrancePupil(lens.surfaces, lambdaVerifyNm);
+
+    const fields = Array.isArray(z.fields) ? z.fields : [];
+    const fieldTxt = fields.length
+      ? fields.map((f) => Number(f?.angleDeg || 0).toFixed(2)).join(", ")
+      : "—";
+    const weightTxt = fields.length
+      ? fields.map((f) => Number(f?.weight ?? 1).toFixed(3)).join(", ")
+      : "—";
+    const vigTxt = fields.length
+      ? fields.map((f) => `f${Number(f?.index || 0)}: vdx=${Number(f?.vdx || 0).toFixed(3)} vdy=${Number(f?.vdy || 0).toFixed(3)} vcx=${Number(f?.vcx || 0).toFixed(3)} vcy=${Number(f?.vcy || 0).toFixed(3)}`).join(" | ")
+      : "—";
+
+    const pwavNm = Number(z?.primaryWavelengthNm);
+    const selectedPreset = String(ui.wavePreset?.value || "d");
+
+    if (ui.verifySummary) {
+      const eflTxt = Number.isFinite(verifyParax?.efl) ? `${verifyParax.efl.toFixed(3)}mm` : "—";
+      const bflTxt = Number.isFinite(verifyParax?.bfl) ? `${verifyParax.bfl.toFixed(3)}mm` : "—";
+      const tTxt = Number.isFinite(verifyT) ? `T≈${verifyT.toFixed(3)}` : "T≈—";
+      ui.verifySummary.textContent = `Verify @ ${lambdaVerifyNm.toFixed(1)}nm • EFL ${eflTxt} • BFL ${bflTxt} • ${tTxt}`;
+    }
+    if (ui.verifyWave) {
+      const pwavTxt = Number.isFinite(pwavNm) ? `${pwavNm.toFixed(1)}nm` : "—";
+      const modeTxt = preferZemax ? "match Zemax PWAV" : "use dropdown reference";
+      ui.verifyWave.textContent = `Preview λ: ${wavePresetSemanticLabel(selectedPreset)} (${lambdaPreviewNm.toFixed(1)}nm) • Verify mode: ${modeTxt} • Zemax PWAV: ${pwavTxt}`;
+    }
+    if (ui.verifyFields) {
+      ui.verifyFields.textContent = `Fields (${fields.length}): ${fieldTxt}`;
+    }
+    if (ui.verifyWeights) {
+      ui.verifyWeights.textContent = `Field weights: ${weightTxt}`;
+    }
+    if (ui.verifyVig) {
+      ui.verifyVig.textContent = `Vignetting factors: ${vigTxt}`;
+    }
+    if (ui.verifyPupil) {
+      const epTxt = Number.isFinite(Number(verifyEP?.diameterMm)) ? `${Number(verifyEP.diameterMm).toFixed(4)}mm` : "—";
+      const epMethod = String(verifyEP?.method || "n/a");
+      ui.verifyPupil.textContent = `Entrance pupil Ø: ${epTxt} • method: ${epMethod} • sensorX=${Number(sensorX || 0).toFixed(4)}mm`;
+    }
+  }
+
   // -------------------- render scheduler (RAF throttle) --------------------
   let _rafAll = 0;
   let _rafPrev = 0;
@@ -3510,6 +3635,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
     }
     if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
+    updateZemaxVerifyPanel({ sensorX });
 
     resizeCanvasToCSS();
     const r = canvas.getBoundingClientRect();
@@ -6172,6 +6298,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         use_same_ap_for_optics_and_mechanics: false,
         preserve_ims_aperture: true,
         use_zemax_fields: fields.length > 0,
+        match_zemax_wavelength: false,
       },
       zemax: {
         source: "zemax",
@@ -6210,12 +6337,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     loadLens(parsed);
 
-    const pwavNm = Number(parsed?.zemax?.primaryWavelengthNm);
-    if (Number.isFinite(pwavNm) && pwavNm > 0) {
-      setWavePresetFromNm(pwavNm, "Zemax PWAV");
-      scheduleRenderAll();
-      scheduleRenderPreview();
-    }
+    ensureZemaxPrimaryWaveOption();
+    setVisibleDefaultWavePresetAfterZemaxImport();
+    scheduleRenderAll();
+    scheduleRenderPreview();
 
     const displayName = parsed.zemaxName || parsed.name || sourceNameToLensName(sourceName);
     toast(`Loaded Zemax lens: ${displayName}`);
@@ -6459,6 +6584,12 @@ function wireUI() {
     ui.previewAutoFit.addEventListener("change", () => {
       syncPreviewFitUI();
       scheduleRenderPreview();
+    });
+  }
+  if (ui.verifyMatchZemaxWave) {
+    ui.verifyMatchZemaxWave.addEventListener("change", () => {
+      if (lens?.import_options) lens.import_options.match_zemax_wavelength = !!ui.verifyMatchZemaxWave.checked;
+      scheduleRenderAll();
     });
   }
   syncPreviewFitUI();

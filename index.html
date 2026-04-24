@@ -103,9 +103,9 @@
             <div class="ctrl">
               <label for="wavePreset">Wavelength</label>
               <select id="wavePreset">
-                <option value="d">d-line (587.6nm) — simple</option>
-                <option value="g">g-line (blue) — approx</option>
-                <option value="c">c-line (red) — approx</option>
+                <option value="d">d-line (587.6nm) — visible default</option>
+                <option value="g">g-line (435.8nm) — blue</option>
+                <option value="c">c-line (656.3nm) — red</option>
               </select>
             </div>
 
@@ -250,6 +250,10 @@
 
         <div id="verifyPanel" class="verifyPanel hidden" aria-label="Zemax verify panel">
           <div class="verifyTitle">Zemax Verify</div>
+          <label class="verifyToggle" for="verifyMatchZemaxWave">
+            <input id="verifyMatchZemaxWave" type="checkbox" />
+            <span>Match Zemax wavelength</span>
+          </label>
           <div id="verifySummary" class="verifyLine">—</div>
           <div id="verifyWave" class="verifyLine">—</div>
           <div id="verifyFields" class="verifyLine">—</div>
