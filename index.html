@@ -46,6 +46,7 @@
       <div class="sep" aria-hidden="true"></div>
 
       <button id="btnSave" class="btn" type="button">Save JSON</button>
+      <button id="btnPasteZmx" class="btn" type="button">Paste ZMX</button>
       <label class="fileBtn btn" role="button" tabindex="0">
         Load Lens
         <input id="fileLoad" type="file" accept=".json,.zmx,.seq,.txt,application/json,text/plain" />
@@ -311,6 +312,33 @@
   <!-- MODALS (jouw modals blijven hetzelfde, maar script ondersteunt ze al) -->
   <div id="newLensModal" class="modal hidden" aria-hidden="true"></div>
   <div id="elementModal" class="modal hidden" aria-hidden="true"></div>
+  <div id="zmxPasteModal" class="modal hidden" aria-hidden="true">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="zmxPasteTitle">
+      <div class="modalTop">
+        <div>
+          <div id="zmxPasteTitle" class="modalTitle">Import ZMX Text</div>
+          <div class="modalSub">Paste raw Zemax sequential text (`VERS`, `MODE SEQ`, `SURF`...)</div>
+        </div>
+        <button id="zmxPasteClose" class="modalX" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="modalScroll">
+        <div class="field fieldFull">
+          <label for="zmxPasteText">Zemax text</label>
+          <textarea
+            id="zmxPasteText"
+            class="glassNote zmxPasteArea"
+            spellcheck="false"
+            placeholder="Paste Zemax text here..."
+          ></textarea>
+        </div>
+      </div>
+      <div class="modalBottom zmxPasteBottom">
+        <button id="zmxPasteClear" class="btn" type="button">Clear</button>
+        <button id="zmxPasteCancel" class="btn" type="button">Cancel</button>
+        <button id="zmxPasteImport" class="btn btnPrimary" type="button">Import</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toastHost" class="toastHost" aria-live="polite" aria-atomic="true"></div>
   <script src="./script.js"></script>

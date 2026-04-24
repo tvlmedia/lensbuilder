@@ -518,6 +518,16 @@ canvas{
   font-size:12px;
   min-height:64px;
 }
+.zmxPasteArea{
+  min-height:320px;
+  resize:vertical;
+  font-family:var(--mono);
+  line-height:1.35;
+  white-space:pre;
+}
+.zmxPasteBottom{
+  gap:10px;
+}
 
 .modalBottom{
   padding:12px 16px 16px 16px;

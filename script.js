@@ -136,6 +136,7 @@
     btnMoveDown: $("#btnMoveDown"),
     btnRemove: $("#btnRemove"),
     btnSave: $("#btnSave"),
+    btnPasteZmx: $("#btnPasteZmx"),
     fileLoad: $("#fileLoad"),
     btnAutoFocus: $("#btnAutoFocus"),
     btnRenderEngine: $("#btnRenderEngine"),
@@ -149,6 +150,13 @@
     nlT: $("#nlT"),
     nlStopPos: $("#nlStopPos"),
     nlName: $("#nlName"),
+
+    zmxPasteModal: $("#zmxPasteModal"),
+    zmxPasteText: $("#zmxPasteText"),
+    zmxPasteImport: $("#zmxPasteImport"),
+    zmxPasteCancel: $("#zmxPasteCancel"),
+    zmxPasteClear: $("#zmxPasteClear"),
+    zmxPasteClose: $("#zmxPasteClose"),
 
     verifyPanel: $("#verifyPanel"),
     verifySummary: $("#verifySummary"),
@@ -735,6 +743,9 @@ function warnMissingGlass(name) {
 
     return {
       source: String(z.source || "zemax"),
+      name: (z?.name != null && String(z.name).trim() !== "") ? String(z.name).trim() : null,
+      version: (z?.version != null && String(z.version).trim() !== "") ? String(z.version).trim() : null,
+      mode: (z?.mode != null && String(z.mode).trim() !== "") ? String(z.mode).trim().toUpperCase() : null,
       fieldType: String(z.fieldType || "angle_deg"),
       wavelengthsNm,
       primaryWavelengthIndex: Number.isInteger(primaryWavelengthIndex) ? primaryWavelengthIndex : null,
@@ -759,8 +770,22 @@ function warnMissingGlass(name) {
     notes: Array.isArray(obj?.notes) ? obj.notes.map(String) : [],
     surfaces: Array.isArray(obj?.surfaces) ? obj.surfaces : [],
     import_options: importOptions,
+    importSource: (obj?.importSource != null && String(obj.importSource).trim() !== "")
+      ? String(obj.importSource).trim()
+      : null,
+    originalZmxText: (obj?.originalZmxText != null && String(obj.originalZmxText).trim() !== "")
+      ? String(obj.originalZmxText)
+      : null,
+    zemaxName: (obj?.zemaxName != null && String(obj.zemaxName).trim() !== "")
+      ? String(obj.zemaxName).trim()
+      : null,
+    zemaxVersion: (obj?.zemaxVersion != null && String(obj.zemaxVersion).trim() !== "")
+      ? String(obj.zemaxVersion).trim()
+      : null,
     zemax: sanitizeZemaxMeta(obj?.zemax),
   };
+  if (!safe.zemaxName && safe.zemax?.name) safe.zemaxName = String(safe.zemax.name);
+  if (!safe.zemaxVersion && safe.zemax?.version) safe.zemaxVersion = String(safe.zemax.version);
 
   safe.surfaces = safe.surfaces.map((s) => {
     const aps = normalizeSurfaceApertures(s, importOptions);
@@ -821,6 +846,7 @@ function warnMissingGlass(name) {
 
   function loadLens(obj) {
     lens = sanitizeLens(obj);
+    if (ui.useZemaxFields) ui.useZemaxFields.checked = !!lens?.import_options?.use_zemax_fields;
     selectedIndex = 0;
     clampAllApertures(lens.surfaces);
     buildTable();
@@ -4949,6 +4975,59 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }, 50);
   }
 
+  function isZmxPasteModalOpen() {
+    return !!(ui.zmxPasteModal && !ui.zmxPasteModal.classList.contains("hidden"));
+  }
+
+  function openZmxPasteModal() {
+    if (!ui.zmxPasteModal) return;
+    ui.zmxPasteModal.classList.remove("hidden");
+    ui.zmxPasteModal.setAttribute("aria-hidden", "false");
+    setTimeout(() => {
+      if (ui.zmxPasteText) ui.zmxPasteText.focus({ preventScroll: true });
+    }, 0);
+  }
+
+  function closeZmxPasteModal() {
+    if (!ui.zmxPasteModal) return;
+    ui.zmxPasteModal.classList.add("hidden");
+    ui.zmxPasteModal.setAttribute("aria-hidden", "true");
+  }
+
+  function clearZmxPasteText() {
+    if (!ui.zmxPasteText) return;
+    ui.zmxPasteText.value = "";
+    ui.zmxPasteText.focus({ preventScroll: true });
+  }
+
+  async function importFromZmxPasteModal() {
+    const raw = String(ui.zmxPasteText?.value || "");
+    if (!raw.trim()) {
+      const msg = "Paste Zemax text first.";
+      if (ui.footerWarn) ui.footerWarn.textContent = msg;
+      toast(msg);
+      return false;
+    }
+
+    if (!/(^|\n)\s*SURF\s+-?\d+/im.test(raw)) {
+      const msg = "This does not look like a Zemax sequential file.";
+      if (ui.footerWarn) ui.footerWarn.textContent = msg;
+      toast(msg);
+      return false;
+    }
+
+    try {
+      importZemaxText(raw, "pasted_zmx", { importSource: "zmx_text" });
+      closeZmxPasteModal();
+      return true;
+    } catch (e) {
+      const msg = e?.message || String(e);
+      if (ui.footerWarn) ui.footerWarn.textContent = `ZMX paste import failed: ${msg}`;
+      toast(`ZMX import failed: ${msg}`);
+      return false;
+    }
+  }
+
   // -------------------- preview source + image load --------------------
   function syncPreviewFitUI() {
     if (!ui.prevObjH || !ui.previewAutoFit) return;
@@ -5045,6 +5124,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return m ? Number(m[0]) : NaN;
   }
 
+  function parseZemaxNumberList(s) {
+    const m = String(s ?? "").replace(/,/g, ".").match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/g);
+    if (!m) return [];
+    return m
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v));
+  }
+
   function unitTokenToMmScale(token) {
     const u = String(token ?? "").trim().toUpperCase();
     if (u === "MM" || u === "MILLIMETER" || u === "MILLIMETERS") return 1;
@@ -5054,9 +5141,26 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return 1;
   }
 
+  function stripOptionalQuotes(s) {
+    const raw = String(s ?? "").trim();
+    if (!raw) return "";
+    if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+      return raw.slice(1, -1).trim();
+    }
+    return raw;
+  }
+
+  function sourceNameToLensName(sourceName = "Zemax import") {
+    return String(sourceName || "Zemax import").replace(/\.(zmx|seq|txt)$/i, "");
+  }
+
   function isLikelyZemaxSequentialText(txt) {
     if (!txt) return false;
-    return /(^|\n)\s*SURF\s+\d+/im.test(txt) && /(^|\n)\s*CURV\s+/im.test(txt);
+    const s = String(txt);
+    const hasSurf = /(^|\n)\s*SURF\s+-?\d+/im.test(s);
+    const hasModeSeq = /(^|\n)\s*MODE\s+SEQ\b/im.test(s);
+    const hasCurv = /(^|\n)\s*CURV\s+/im.test(s);
+    return hasSurf && (hasModeSeq || hasCurv);
   }
 
   function parseZemaxGlassLine(line) {
@@ -5148,6 +5252,24 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const parsed = [];
     let cur = null;
 
+    const zemaxMeta = {
+      source: "zemax",
+      name: null,
+      version: null,
+      mode: null,
+      fieldType: "angle_deg",
+      wavelengthsByIndex: new Map(),
+      primaryWavelengthIndex: null,
+      fieldsRaw: {
+        yfln: [],
+        fwgn: [],
+        vdx: [],
+        vdy: [],
+        vcx: [],
+        vcy: [],
+      },
+    };
+
     const pushCur = () => {
       if (!cur) return;
       parsed.push(cur);
@@ -5160,6 +5282,71 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       if (line.startsWith("!") || line.startsWith("#") || line.startsWith("//")) continue;
 
       const up = line.toUpperCase();
+
+      if (/^VERS\b/i.test(line)) {
+        zemaxMeta.version = stripOptionalQuotes(line.replace(/^VERS\b/i, ""));
+        continue;
+      }
+      if (/^MODE\b/i.test(line)) {
+        zemaxMeta.mode = stripOptionalQuotes(line.replace(/^MODE\b/i, "")).toUpperCase();
+        continue;
+      }
+      if (/^NAME\b/i.test(line)) {
+        const nm = stripOptionalQuotes(line.replace(/^NAME\b/i, ""));
+        if (nm) zemaxMeta.name = nm;
+        continue;
+      }
+      if (/^PWAV\b/i.test(line)) {
+        const nums = parseZemaxNumberList(line.replace(/^PWAV\b/i, ""));
+        if (nums.length) zemaxMeta.primaryWavelengthIndex = Math.max(1, Math.round(nums[0]));
+        continue;
+      }
+      if (/^WAVM\b/i.test(line)) {
+        const nums = parseZemaxNumberList(line.replace(/^WAVM\b/i, ""));
+        if (nums.length) {
+          let idx = 0;
+          let lam = nums[nums.length - 1];
+          if (nums.length >= 2) idx = Math.round(nums[0]);
+          if (!Number.isFinite(idx) || idx <= 0) idx = zemaxMeta.wavelengthsByIndex.size + 1;
+          if (Number.isFinite(lam) && lam > 0) {
+            const lamNm = lam < 10 ? lam * 1000 : lam;
+            zemaxMeta.wavelengthsByIndex.set(idx, lamNm);
+          }
+        }
+        continue;
+      }
+      if (/^FTYP\b/i.test(line)) {
+        const nums = parseZemaxNumberList(line.replace(/^FTYP\b/i, ""));
+        const ftyp = nums.length ? Math.round(nums[0]) : 0;
+        // 0 in Zemax is angular fields; keep default as angle_deg.
+        if (ftyp === 0) zemaxMeta.fieldType = "angle_deg";
+        else if (ftyp === 1) zemaxMeta.fieldType = "image_height";
+        continue;
+      }
+      if (/^YFLN\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.yfln = parseZemaxNumberList(line.replace(/^YFLN\b/i, ""));
+        continue;
+      }
+      if (/^FWGN\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.fwgn = parseZemaxNumberList(line.replace(/^FWGN\b/i, ""));
+        continue;
+      }
+      if (/^VDX\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vdx = parseZemaxNumberList(line.replace(/^VDX\b/i, ""));
+        continue;
+      }
+      if (/^VDY\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vdy = parseZemaxNumberList(line.replace(/^VDY\b/i, ""));
+        continue;
+      }
+      if (/^VCX\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vcx = parseZemaxNumberList(line.replace(/^VCX\b/i, ""));
+        continue;
+      }
+      if (/^VCY\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vcy = parseZemaxNumberList(line.replace(/^VCY\b/i, ""));
+        continue;
+      }
 
       if (up.startsWith("UNIT")) {
         const parts = up.split(/\s+/);
@@ -5231,9 +5418,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     parsed.sort((a, b) => a.idx - b.idx);
     const surfaces = parsed.map((s, i) => {
       const curv = Number(s.CURV || 0);
-      const R = Math.abs(curv) < 1e-12 ? 0 : (1 / curv) * unitScaleToMm; // Zemax CURV -> our R
-      const t = Number.isFinite(Number(s.DISZ)) ? Number(s.DISZ) * unitScaleToMm : 0; // DISZ -> thickness
-      const apSemi = Number.isFinite(Number(s.DIAM)) ? Math.max(0.01, Number(s.DIAM) * unitScaleToMm) : 10; // DIAM is semi-diameter
+      const R = Math.abs(curv) < 1e-12 ? 0 : (1 / curv) * unitScaleToMm;
+      const t = Number.isFinite(Number(s.DISZ)) ? Number(s.DISZ) * unitScaleToMm : 0;
+      const apSemi = Number.isFinite(Number(s.DIAM)) ? Math.max(0.01, Number(s.DIAM) * unitScaleToMm) : 10;
 
       const g = String(s.GLAS || "AIR").trim();
       const glass = (!g || g === "-" || /^MIRROR$/i.test(g)) ? "AIR" : g;
@@ -5277,11 +5464,49 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         },
       };
     });
-
     if (!surfaces.length) throw new Error("No valid surfaces after parse");
 
+    const sortedWaveIdx = Array.from(zemaxMeta.wavelengthsByIndex.keys()).sort((a, b) => a - b);
+    const wavelengthsNm = sortedWaveIdx
+      .map((idx) => Number(zemaxMeta.wavelengthsByIndex.get(idx)))
+      .filter((v) => Number.isFinite(v) && v > 0);
+
+    const primaryWavelengthIndex = Number.isFinite(Number(zemaxMeta.primaryWavelengthIndex))
+      ? Math.max(1, Math.round(Number(zemaxMeta.primaryWavelengthIndex)))
+      : null;
+    const primaryWavelengthNm = (primaryWavelengthIndex != null && zemaxMeta.wavelengthsByIndex.has(primaryWavelengthIndex))
+      ? Number(zemaxMeta.wavelengthsByIndex.get(primaryWavelengthIndex))
+      : null;
+
+    const yfln = Array.isArray(zemaxMeta.fieldsRaw.yfln) ? zemaxMeta.fieldsRaw.yfln : [];
+    const fwgn = Array.isArray(zemaxMeta.fieldsRaw.fwgn) ? zemaxMeta.fieldsRaw.fwgn : [];
+    const vdx = Array.isArray(zemaxMeta.fieldsRaw.vdx) ? zemaxMeta.fieldsRaw.vdx : [];
+    const vdy = Array.isArray(zemaxMeta.fieldsRaw.vdy) ? zemaxMeta.fieldsRaw.vdy : [];
+    const vcx = Array.isArray(zemaxMeta.fieldsRaw.vcx) ? zemaxMeta.fieldsRaw.vcx : [];
+    const vcy = Array.isArray(zemaxMeta.fieldsRaw.vcy) ? zemaxMeta.fieldsRaw.vcy : [];
+    const fieldCount = Math.max(yfln.length, fwgn.length, vdx.length, vdy.length, vcx.length, vcy.length, 0);
+    const fields = [];
+    for (let i = 0; i < fieldCount; i++) {
+      const angleDegRaw = Number(yfln[i]);
+      const angleDeg = Number.isFinite(angleDegRaw) ? angleDegRaw : (i === 0 ? 0 : null);
+      if (angleDeg == null) continue;
+      const weightRaw = Number(fwgn[i]);
+      fields.push({
+        index: i,
+        angleDeg,
+        weight: Number.isFinite(weightRaw) ? Math.max(0, weightRaw) : 1,
+        vdx: Number.isFinite(Number(vdx[i])) ? Number(vdx[i]) : 0,
+        vdy: Number.isFinite(Number(vdy[i])) ? Number(vdy[i]) : 0,
+        vcx: Number.isFinite(Number(vcx[i])) ? Number(vcx[i]) : 0,
+        vcy: Number.isFinite(Number(vcy[i])) ? Number(vcy[i]) : 0,
+      });
+    }
+
+    const lensName = zemaxMeta.name || sourceNameToLensName(sourceName);
     return {
-      name: String(sourceName || "Zemax import").replace(/\.(zmx|seq|txt)$/i, ""),
+      name: lensName,
+      zemaxName: zemaxMeta.name || null,
+      zemaxVersion: zemaxMeta.version || null,
       notes: [
         "Imported from Zemax sequential text.",
         "Mapping: R = 1/CURV, t = DISZ, glass = GLAS, ap = DIAM (semi-diameter).",
@@ -5291,9 +5516,55 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       import_options: {
         use_same_ap_for_optics_and_mechanics: false,
         preserve_ims_aperture: true,
+        use_zemax_fields: fields.length > 0,
+      },
+      zemax: {
+        source: "zemax",
+        name: zemaxMeta.name || null,
+        version: zemaxMeta.version || null,
+        mode: zemaxMeta.mode || null,
+        fieldType: zemaxMeta.fieldType || "angle_deg",
+        wavelengthsNm,
+        primaryWavelengthIndex,
+        primaryWavelengthNm,
+        fields,
       },
       surfaces,
     };
+  }
+
+  function importZemaxText(rawText, sourceName = "pasted_zmx", opts = {}) {
+    const text = String(rawText ?? "").trim();
+    if (!text) throw new Error("Paste Zemax text first.");
+
+    const hasSurf = /(^|\n)\s*SURF\s+-?\d+/im.test(text);
+    if (!hasSurf) throw new Error("This does not look like a Zemax sequential file.");
+
+    const hasModeSeq = /(^|\n)\s*MODE\s+SEQ\b/im.test(text);
+    const hasVers = /(^|\n)\s*VERS\b/im.test(text);
+    if (!hasModeSeq && !hasVers && !/(^|\n)\s*CURV\s+/im.test(text)) {
+      throw new Error("This does not look like a Zemax sequential file.");
+    }
+
+    const parsed = parseZemaxSequentialText(text, sourceName);
+    parsed.importSource = String(opts.importSource || "zmx_text");
+    parsed.originalZmxText = text;
+    parsed.zemaxName = parsed.zemaxName || parsed.zemax?.name || null;
+    parsed.zemaxVersion = parsed.zemaxVersion || parsed.zemax?.version || null;
+    if (parsed.zemaxName) parsed.name = parsed.zemaxName;
+
+    loadLens(parsed);
+
+    const pwavNm = Number(parsed?.zemax?.primaryWavelengthNm);
+    if (Number.isFinite(pwavNm) && pwavNm > 0) {
+      setWavePresetFromNm(pwavNm, "Zemax PWAV");
+      scheduleRenderAll();
+      scheduleRenderPreview();
+    }
+
+    const displayName = parsed.zemaxName || parsed.name || sourceNameToLensName(sourceName);
+    toast(`Loaded Zemax lens: ${displayName}`);
+    return parsed;
   }
 
   async function loadLensFromURL(url) {
@@ -5310,9 +5581,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       } catch (_) {}
 
       if (isLikelyZemaxSequentialText(txt) || /\.(zmx|seq|txt)(\?|$)/i.test(url)) {
-        const obj = parseZemaxSequentialText(txt, url.split("/").pop() || "Zemax import");
-        loadLens(obj);
-        toast("Loaded Zemax lens");
+        importZemaxText(txt, url.split("/").pop() || "Zemax import", { importSource: "zmx_file" });
         return true;
       }
 
@@ -5342,9 +5611,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         if (!isLikelyZemaxSequentialText(txt) && !/\.(zmx|seq|txt)$/i.test(lower)) {
           throw new Error("Not Zemax sequential text");
         }
-        const obj = parseZemaxSequentialText(txt, name || "Zemax import");
-        loadLens(obj);
-        toast("Loaded Zemax lens (file)");
+        importZemaxText(txt, name || "Zemax import", { importSource: "zmx_file" });
         return true;
       };
 
@@ -5371,7 +5638,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   // -------------------- save lens JSON --------------------
   function saveLensToFile() {
     try {
-      const blob = new Blob([JSON.stringify(lens, null, 2)], { type: "application/json" });
+      const out = clone(lens);
+      if (out?.originalZmxText) {
+        const keep = window.confirm("Include original ZMX text in saved JSON? (larger file)");
+        if (!keep) delete out.originalZmxText;
+      }
+      const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
       const url = URL.createObjectURL(blob);
       a.href = url;
@@ -5437,6 +5709,7 @@ function wireUI() {
   on("#btnNew", "click", newClearLens);
   on("#btnLoadOmit", "click", () => loadLens(omit50ConceptV1()));
   on("#btnLoadDemo", "click", () => loadLens(demoLensSimple()));
+  on("#btnPasteZmx", "click", openZmxPasteModal);
 
   on("#btnAdd", "click", addSurface);
   on("#btnAddElement", "click", () => {
@@ -5468,6 +5741,44 @@ function wireUI() {
       if (!f) return;
       await loadLensFromFile(f);
       ui.fileLoad.value = "";
+    });
+  }
+
+  if (ui.zmxPasteImport) {
+    ui.zmxPasteImport.addEventListener("click", (e) => {
+      e.preventDefault();
+      importFromZmxPasteModal();
+    });
+  }
+  if (ui.zmxPasteCancel) {
+    ui.zmxPasteCancel.addEventListener("click", (e) => {
+      e.preventDefault();
+      closeZmxPasteModal();
+    });
+  }
+  if (ui.zmxPasteClose) {
+    ui.zmxPasteClose.addEventListener("click", (e) => {
+      e.preventDefault();
+      closeZmxPasteModal();
+    });
+  }
+  if (ui.zmxPasteClear) {
+    ui.zmxPasteClear.addEventListener("click", (e) => {
+      e.preventDefault();
+      clearZmxPasteText();
+    });
+  }
+  if (ui.zmxPasteText) {
+    ui.zmxPasteText.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        importFromZmxPasteModal();
+      }
+    });
+  }
+  if (ui.zmxPasteModal) {
+    ui.zmxPasteModal.addEventListener("mousedown", (e) => {
+      if (e.target === ui.zmxPasteModal) closeZmxPasteModal();
     });
   }
 
@@ -5519,6 +5830,11 @@ function wireUI() {
 
   // selection hotkeys
   window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isZmxPasteModalOpen()) {
+      e.preventDefault();
+      closeZmxPasteModal();
+      return;
+    }
     if (e.key === "Delete" || e.key === "Backspace") {
       if (document.activeElement && ["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) return;
       removeSelected();
