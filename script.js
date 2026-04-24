@@ -84,6 +84,15 @@
       kernelPx: null,
       mmPerPx: null,
       method: "",
+      centerRmsMm: null,
+      centerRmsPx: null,
+      midRmsMm: null,
+      midRmsPx: null,
+      cornerRmsMm: null,
+      cornerRmsPx: null,
+      bestFocusCenterShiftMm: null,
+      bestFocusCornerShiftMm: null,
+      fieldCurvatureDeltaMm: null,
     },
   };
   preview.imgCtx = preview.imgCanvas.getContext("2d");
@@ -4189,6 +4198,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     // --- diagonal ruler (toggle) ---
     if (preview.rulerOn) drawPreviewDiagonalRuler(sr);
+    if (debugOutlineOverlayEnabled) drawPreviewDebugOverlay(sr);
     pctx.restore();
   }
 
@@ -4203,10 +4213,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const rmsPxTxt = Number.isFinite(d.spotRmsPx) ? `${d.spotRmsPx.toFixed(2)}px` : "—";
     const kPxTxt = Number.isFinite(d.kernelPx) ? `${d.kernelPx.toFixed(2)}px` : "—";
     const mppTxt = Number.isFinite(d.mmPerPx) ? `${d.mmPerPx.toFixed(5)} mm/px` : "—";
+    const cTxt = Number.isFinite(d.centerRmsMm) ? `${d.centerRmsMm.toFixed(4)}mm / ${Number(d.centerRmsPx || 0).toFixed(2)}px` : "—";
+    const mTxt = Number.isFinite(d.midRmsMm) ? `${d.midRmsMm.toFixed(4)}mm / ${Number(d.midRmsPx || 0).toFixed(2)}px` : "—";
+    const kTxt = Number.isFinite(d.cornerRmsMm) ? `${d.cornerRmsMm.toFixed(4)}mm / ${Number(d.cornerRmsPx || 0).toFixed(2)}px` : "—";
+    const curvTxt = Number.isFinite(d.fieldCurvatureDeltaMm)
+      ? `${d.fieldCurvatureDeltaMm >= 0 ? "+" : ""}${d.fieldCurvatureDeltaMm.toFixed(3)}mm`
+      : "—";
 
     lines.push(focusTxt);
     lines.push(`Spot RMS: ${rmsMmTxt} • ${rmsPxTxt}`);
     lines.push(`Kernel: ${kPxTxt} • Scale: ${mppTxt}`);
+    lines.push(`RMS C/M/K: ${cTxt} • ${mTxt} • ${kTxt}`);
+    lines.push(`Best focus Δ(center→corner): ${curvTxt}`);
     if (d.method) lines.push(`Method: ${String(d.method)}`);
 
     pctx.save();
@@ -5072,6 +5090,69 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return [{ sy: 0, sz: 0, w: 1.00, label: "center" }];
   }
 
+  function evaluatePreviewSpotAtSensorPoint({
+    surfaces,
+    wavePreset,
+    lensShift,
+    sensorX,
+    objDist,
+    sy = 0,
+    sz = 0,
+  }) {
+    computeVertices(surfaces, lensShift, sensorX);
+    const sensorPlaneX = getSensorPlaneX(surfaces, sensorX);
+    const stopIdx = findStopSurfaceIndex(surfaces);
+    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
+    const stopAp = Math.max(1e-6, getSurfaceOpticalAp(stopSurf));
+    const xStop = Number(stopSurf?.vx || 0);
+    const xObjPlane = Number(surfaces?.[0]?.vx || 0) - objDist;
+    const startX = sensorPlaneX + 0.05;
+
+    const hits = [];
+    let raysUsed = 0;
+    for (const p of PREVIEW_FOCUS_PUPIL_POINTS) {
+      const py = p.y * stopAp;
+      const pz = p.z * stopAp;
+      const dir = normalize3({ x: xStop - startX, y: py - sy, z: pz - sz });
+      const tr = traceRayReverse3D({ p: { x: startX, y: sy, z: sz }, d: dir }, surfaces, wavePreset);
+      raysUsed++;
+      if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
+      const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+      if (!hitObj) continue;
+      hits.push(hitObj);
+    }
+
+    const hitRate = raysUsed > 0 ? (hits.length / raysUsed) : 0;
+    if (hits.length < 4) {
+      return {
+        ok: false,
+        sensorPlaneX,
+        rmsMm: null,
+        hitRate,
+        raysUsed,
+        validHits: hits.length,
+        centroidY: null,
+        centroidZ: null,
+      };
+    }
+
+    const centroidY = hits.reduce((s, h) => s + h.y, 0) / hits.length;
+    const centroidZ = hits.reduce((s, h) => s + h.z, 0) / hits.length;
+    const rmsMm = Math.sqrt(
+      hits.reduce((acc, h) => acc + (h.y - centroidY) ** 2 + (h.z - centroidZ) ** 2, 0) / hits.length
+    );
+    return {
+      ok: true,
+      sensorPlaneX,
+      rmsMm,
+      hitRate,
+      raysUsed,
+      validHits: hits.length,
+      centroidY,
+      centroidZ,
+    };
+  }
+
   function evaluatePreviewFocusAtSensorX({
     surfaces,
     wavePreset,
@@ -5085,48 +5166,32 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       ? String(autofocusMode).toLowerCase()
       : PREVIEW_AUTOFOCUS_DEFAULT_MODE;
 
-    computeVertices(surfaces, lensShift, sensorX);
-    const sensorPlaneX = getSensorPlaneX(surfaces, sensorX);
-    const stopIdx = findStopSurfaceIndex(surfaces);
-    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
-    const stopAp = Math.max(1e-6, getSurfaceOpticalAp(stopSurf));
-    const xStop = Number(stopSurf?.vx || 0);
-    const xObjPlane = Number(surfaces?.[0]?.vx || 0) - objDist;
-    const startX = sensorPlaneX + 0.05;
     const sensorSamples = getPreviewAutofocusSensorSamples(sensorHv, mode);
 
     let weightedRms = 0;
     let weightSum = 0;
     let totalHits = 0;
     let totalRays = 0;
+    let sensorPlaneX = null;
 
     for (let fi = 0; fi < sensorSamples.length; fi++) {
       const sample = sensorSamples[fi];
-      const sy = sample.sy;
-      const sz = sample.sz;
-      const hits = [];
-
-      for (const p of PREVIEW_FOCUS_PUPIL_POINTS) {
-        const py = p.y * stopAp;
-        const pz = p.z * stopAp;
-        const dir = normalize3({ x: xStop - startX, y: py - sy, z: pz - sz });
-        const tr = traceRayReverse3D({ p: { x: startX, y: sy, z: sz }, d: dir }, surfaces, wavePreset);
-        totalRays++;
-        if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
-        const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
-        if (!hitObj) continue;
-        hits.push(hitObj);
+      const spot = evaluatePreviewSpotAtSensorPoint({
+        surfaces,
+        wavePreset,
+        lensShift,
+        sensorX,
+        objDist,
+        sy: sample.sy,
+        sz: sample.sz,
+      });
+      if (!Number.isFinite(sensorPlaneX) && Number.isFinite(spot?.sensorPlaneX)) {
+        sensorPlaneX = Number(spot.sensorPlaneX);
       }
-
-      totalHits += hits.length;
-      if (hits.length < 4) continue;
-
-      const my = hits.reduce((s, h) => s + h.y, 0) / hits.length;
-      const mz = hits.reduce((s, h) => s + h.z, 0) / hits.length;
-      const rms = Math.sqrt(
-        hits.reduce((acc, h) => acc + (h.y - my) ** 2 + (h.z - mz) ** 2, 0) / hits.length
-      );
-      weightedRms += rms * sample.w;
+      totalRays += Number(spot?.raysUsed || 0);
+      totalHits += Number(spot?.validHits || 0);
+      if (!spot?.ok || !Number.isFinite(spot?.rmsMm)) continue;
+      weightedRms += Number(spot.rmsMm) * sample.w;
       weightSum += sample.w;
     }
 
@@ -5136,7 +5201,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         score: Infinity,
         rmsMm: null,
         hitRate,
-        sensorPlaneX,
+        sensorPlaneX: Number.isFinite(sensorPlaneX) ? sensorPlaneX : null,
         raysUsed: totalRays,
         validHits: totalHits,
         sampleCount: sensorSamples.length,
@@ -5150,7 +5215,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       score: rmsMm * penalty,
       rmsMm,
       hitRate,
-      sensorPlaneX,
+      sensorPlaneX: Number.isFinite(sensorPlaneX) ? sensorPlaneX : null,
       raysUsed: totalRays,
       validHits: totalHits,
       sampleCount: sensorSamples.length,
@@ -5508,6 +5573,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   preview.debug.kernelPx = null;
   preview.debug.mmPerPx = (H > 0) ? (sensorH / H) : null;
   preview.debug.method = String(focusInfo?.method || "");
+  preview.debug.centerRmsMm = null;
+  preview.debug.centerRmsPx = null;
+  preview.debug.midRmsMm = null;
+  preview.debug.midRmsPx = null;
+  preview.debug.cornerRmsMm = null;
+  preview.debug.cornerRmsPx = null;
+  preview.debug.bestFocusCenterShiftMm = null;
+  preview.debug.bestFocusCornerShiftMm = null;
+  preview.debug.fieldCurvatureDeltaMm = null;
 
   function sample(u, v) {
     if (!hasImg) return [255, 255, 255, 255];
@@ -5576,6 +5650,149 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return objectMmToUV(x, y);
   }
 
+  function rmsMmToPreviewPx(rmsMm) {
+    const mm = Number(rmsMm);
+    if (!Number.isFinite(mm)) return null;
+    const pxPerMmX = W / Math.max(1e-9, 2 * halfObjW);
+    const pxPerMmY = H / Math.max(1e-9, 2 * halfObjH);
+    const pxPerMm = Math.sqrt(pxPerMmX * pxPerMmY);
+    return mm * pxPerMm;
+  }
+
+  function findBestSensorShiftForSpot({ sy = 0, sz = 0, startShift = sensorShift }) {
+    const efl = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
+    const range = Math.max(1.5, Math.min(18, Number.isFinite(efl) && efl > 0 ? efl * 0.16 : 8));
+    const coarseStep = Math.max(0.25, range / 10);
+    const fineStep = Math.max(0.05, coarseStep / 6);
+
+    let bestShift = Number(startShift) || 0;
+    let best = evaluatePreviewSpotAtSensorPoint({
+      surfaces: lens.surfaces,
+      wavePreset,
+      lensShift,
+      sensorX: bestShift,
+      objDist: focusChartDistanceMm,
+      sy,
+      sz,
+    });
+
+    for (let x = bestShift - range; x <= bestShift + range + 1e-9; x += coarseStep) {
+      const ev = evaluatePreviewSpotAtSensorPoint({
+        surfaces: lens.surfaces,
+        wavePreset,
+        lensShift,
+        sensorX: x,
+        objDist: focusChartDistanceMm,
+        sy,
+        sz,
+      });
+      const evRms = Number(ev?.rmsMm);
+      const bestRms = Number(best?.rmsMm);
+      if (Number.isFinite(evRms) && (!Number.isFinite(bestRms) || evRms < bestRms)) {
+        best = ev;
+        bestShift = x;
+      }
+    }
+
+    for (let x = bestShift - coarseStep; x <= bestShift + coarseStep + 1e-9; x += fineStep) {
+      const ev = evaluatePreviewSpotAtSensorPoint({
+        surfaces: lens.surfaces,
+        wavePreset,
+        lensShift,
+        sensorX: x,
+        objDist: focusChartDistanceMm,
+        sy,
+        sz,
+      });
+      const evRms = Number(ev?.rmsMm);
+      const bestRms = Number(best?.rmsMm);
+      if (Number.isFinite(evRms) && (!Number.isFinite(bestRms) || evRms < bestRms)) {
+        best = ev;
+        bestShift = x;
+      }
+    }
+
+    return {
+      bestShiftMm: bestShift,
+      bestRmsMm: Number.isFinite(best?.rmsMm) ? Number(best.rmsMm) : null,
+      bestSensorPlaneX: Number.isFinite(best?.sensorPlaneX) ? Number(best.sensorPlaneX) : null,
+    };
+  }
+
+  function updatePreviewFieldSpotDebug() {
+    const halfW = sensorW * 0.5;
+    const halfH = sensorH * 0.5;
+
+    let midSy = halfW * 0.55;
+    let midSz = 0;
+    let cornerSy = halfW * 0.92;
+    let cornerSz = halfH * 0.92;
+
+    if (ui.useZemaxFields?.checked && Array.isArray(lens?.zemax?.fields) && lens.zemax.fields.length > 1) {
+      const angs = lens.zemax.fields
+        .map((f) => Math.abs(Number(f?.angleDeg)))
+        .filter((v) => Number.isFinite(v));
+      const maxA = angs.length ? Math.max(...angs) : 0;
+      if (maxA > 1e-9) {
+        const sorted = [...angs].sort((a, b) => a - b);
+        const midA = sorted[Math.floor(sorted.length * 0.5)] || (0.5 * maxA);
+        const midFrac = clamp(midA / maxA, 0, 1);
+        const cornerFrac = clamp(1.0, 0, 1);
+        midSy = halfW * midFrac;
+        midSz = 0;
+        cornerSy = halfW * cornerFrac * 0.98;
+        cornerSz = halfH * cornerFrac * 0.98;
+      }
+    }
+
+    const center = evaluatePreviewSpotAtSensorPoint({
+      surfaces: lens.surfaces,
+      wavePreset,
+      lensShift,
+      sensorX: sensorShift,
+      objDist: focusChartDistanceMm,
+      sy: 0,
+      sz: 0,
+    });
+    const mid = evaluatePreviewSpotAtSensorPoint({
+      surfaces: lens.surfaces,
+      wavePreset,
+      lensShift,
+      sensorX: sensorShift,
+      objDist: focusChartDistanceMm,
+      sy: midSy,
+      sz: midSz,
+    });
+    const corner = evaluatePreviewSpotAtSensorPoint({
+      surfaces: lens.surfaces,
+      wavePreset,
+      lensShift,
+      sensorX: sensorShift,
+      objDist: focusChartDistanceMm,
+      sy: cornerSy,
+      sz: cornerSz,
+    });
+
+    preview.debug.centerRmsMm = Number.isFinite(center?.rmsMm) ? Number(center.rmsMm) : null;
+    preview.debug.centerRmsPx = Number.isFinite(preview.debug.centerRmsMm) ? rmsMmToPreviewPx(preview.debug.centerRmsMm) : null;
+    preview.debug.midRmsMm = Number.isFinite(mid?.rmsMm) ? Number(mid.rmsMm) : null;
+    preview.debug.midRmsPx = Number.isFinite(preview.debug.midRmsMm) ? rmsMmToPreviewPx(preview.debug.midRmsMm) : null;
+    preview.debug.cornerRmsMm = Number.isFinite(corner?.rmsMm) ? Number(corner.rmsMm) : null;
+    preview.debug.cornerRmsPx = Number.isFinite(preview.debug.cornerRmsMm) ? rmsMmToPreviewPx(preview.debug.cornerRmsMm) : null;
+
+    const centerBest = findBestSensorShiftForSpot({ sy: 0, sz: 0, startShift: sensorShift });
+    const cornerBest = findBestSensorShiftForSpot({ sy: cornerSy, sz: cornerSz, startShift: sensorShift });
+    preview.debug.bestFocusCenterShiftMm = Number.isFinite(centerBest?.bestShiftMm) ? Number(centerBest.bestShiftMm) : null;
+    preview.debug.bestFocusCornerShiftMm = Number.isFinite(cornerBest?.bestShiftMm) ? Number(cornerBest.bestShiftMm) : null;
+    preview.debug.fieldCurvatureDeltaMm = (
+      Number.isFinite(preview.debug.bestFocusCenterShiftMm) &&
+      Number.isFinite(preview.debug.bestFocusCornerShiftMm)
+    ) ? (preview.debug.bestFocusCornerShiftMm - preview.debug.bestFocusCenterShiftMm) : null;
+
+    // Restore current preview pose after spot diagnostics (helper traces move vertices).
+    computeVertices(lens.surfaces, lensShift, sensorShift);
+  }
+
   function naturalCos4(rS) {
     const dirChief0 = normalize3({ x: xStop - (sensorX + 0.05), y: -rS, z: 0 });
     const cosT = clamp(Math.abs(dirChief0.x), 0, 1);
@@ -5595,7 +5812,35 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return { y: rr * Math.cos(phi), z: rr * Math.sin(phi) };
   }
 
-  const taps = [[0,0],[0.55,0.15],[-0.48,0.36],[0.25,-0.58],[-0.28,-0.18]];
+  const taps = [
+    [0, 0],
+    [0.55, 0.15],
+    [-0.48, 0.36],
+    [0.25, -0.58],
+    [-0.28, -0.18],
+    [0.78, -0.22],
+    [-0.72, -0.44],
+    [0.12, 0.74],
+    [-0.14, -0.82],
+  ];
+
+  if (Number.isFinite(focusChartDistanceMm) && focusChartDistanceMm > 0.1 && focusChartDistanceMm < 1e8) {
+    updatePreviewFieldSpotDebug();
+    sensorX = getSensorPlaneX(lens.surfaces, sensorShift);
+    if (ui.useZemaxFields?.checked && Array.isArray(lens?.zemax?.fields) && lens.zemax.fields.length) {
+      preview.debug.method = `${preview.debug.method} • fields=zemax`;
+    }
+  } else {
+    preview.debug.centerRmsMm = null;
+    preview.debug.centerRmsPx = null;
+    preview.debug.midRmsMm = null;
+    preview.debug.midRmsPx = null;
+    preview.debug.cornerRmsMm = null;
+    preview.debug.cornerRmsPx = null;
+    preview.debug.bestFocusCenterShiftMm = null;
+    preview.debug.bestFocusCornerShiftMm = null;
+    preview.debug.fieldCurvatureDeltaMm = null;
+  }
 
   function renderFastLUT() {
     const LUT_N = 900;
@@ -5603,6 +5848,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const rObjLUT   = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
     const transLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+    const sigmaRadLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
+    const sigmaTanLUT = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
     const sigmaLUT  = [new Float32Array(LUT_N), new Float32Array(LUT_N), new Float32Array(LUT_N)];
     const naturalLUT = new Float32Array(LUT_N);
 
@@ -5618,6 +5865,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       return {
         rObj:   rObjLUT[ch][i0]   * (1 - u) + rObjLUT[ch][i1]   * u,
         trans:  transLUT[ch][i0]  * (1 - u) + transLUT[ch][i1]  * u,
+        sigmaRad: sigmaRadLUT[ch][i0] * (1 - u) + sigmaRadLUT[ch][i1] * u,
+        sigmaTan: sigmaTanLUT[ch][i0] * (1 - u) + sigmaTanLUT[ch][i1] * u,
         sigma:  sigmaLUT[ch][i0]  * (1 - u) + sigmaLUT[ch][i1]  * u,
         nat:    naturalLUT[i0]    * (1 - u) + naturalLUT[i1]    * u,
       };
@@ -5690,8 +5939,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
             const my = sumY / ok, mz = sumZ / ok;
             const varY = Math.max(0, sumYY / ok - my * my);
             const varZ = Math.max(0, sumZZ / ok - mz * mz);
+            sigmaRadLUT[ch][k] = Math.sqrt(varY);
+            sigmaTanLUT[ch][k] = Math.sqrt(varZ);
             sigmaLUT[ch][k] = Math.sqrt(varY + varZ);
+            // Use centroid radius for mapping to preserve coma/field-curvature shifts
+            // better than chief-only mapping in fast mode.
+            rObjLUT[ch][k] = Math.hypot(my, mz);
           } else {
+            sigmaRadLUT[ch][k] = 0;
+            sigmaTanLUT[ch][k] = 0;
             sigmaLUT[ch][k] = 0;
           }
         }
@@ -5704,11 +5960,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
       setUsableCircleFromLUT(transLUT[1], naturalLUT, rMaxSensor, previewOverscan);
       const centerL = lookup(1, 0);
-      const centerKernelPx = Number.isFinite(centerL?.sigma)
-        ? Math.max(
-            (centerL.sigma * 0.85 / Math.max(1e-9, 2 * halfObjW)) * W,
-            (centerL.sigma * 0.85 / Math.max(1e-9, 2 * halfObjH)) * H
-          )
+      const centerSigmaRad = Number.isFinite(centerL?.sigmaRad) ? Number(centerL.sigmaRad) : Number(centerL?.sigma || 0);
+      const centerSigmaTan = Number.isFinite(centerL?.sigmaTan) ? Number(centerL.sigmaTan) : Number(centerL?.sigma || 0);
+      const pxPerMmX = W / Math.max(1e-9, 2 * halfObjW);
+      const pxPerMmY = H / Math.max(1e-9, 2 * halfObjH);
+      const centerKernelPx = (Number.isFinite(centerSigmaRad) || Number.isFinite(centerSigmaTan))
+        ? Math.max(centerSigmaRad * pxPerMmX, centerSigmaTan * pxPerMmY)
         : null;
       preview.debug.kernelPx = Number.isFinite(centerKernelPx) ? centerKernelPx : null;
       if (!Number.isFinite(preview.debug.spotRmsPx) && Number.isFinite(centerKernelPx)) {
@@ -5751,11 +6008,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
             const p = objXYPhysical(L, sx, sy, rS);
             const uv0 = objectHitToPreviewUV(p.ox, p.oy);
+            const sigmaBoost = 1.15;
+            const sigR = Math.max(0, Number(L.sigmaRad || L.sigma || 0) * sigmaBoost);
+            const sigT = Math.max(0, Number(L.sigmaTan || L.sigma || 0) * sigmaBoost);
+            const pNorm = Math.hypot(p.ox, p.oy);
+            const urx = pNorm > 1e-9 ? (p.ox / pNorm) : 1;
+            const ury = pNorm > 1e-9 ? (p.oy / pNorm) : 0;
+            const utx = -ury;
+            const uty = urx;
 
-            const su = (L.sigma * 0.85) / (2 * halfObjW);
-            const sv = (L.sigma * 0.85) / (2 * halfObjH);
-
-            if (su < 1e-4 && sv < 1e-4) {
+            if (sigR < 1e-4 && sigT < 1e-4) {
               const c = sample(uv0.u, uv0.v);
               outD[idx]     = clamp(c[0] * gain, 0, 255);
               outD[idx + 1] = clamp(c[1] * gain, 0, 255);
@@ -5765,7 +6027,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
               let r = 0, g = 0, b = 0;
               for (let t = 0; t < taps.length; t++) {
                 const o = taps[t];
-                const c = sample(uv0.u + o[0] * su, uv0.v + o[1] * sv);
+                const ox = p.ox + urx * (o[0] * sigR) + utx * (o[1] * sigT);
+                const oy = p.oy + ury * (o[0] * sigR) + uty * (o[1] * sigT);
+                const uv = objectHitToPreviewUV(ox, oy);
+                const c = sample(uv.u, uv.v);
                 r += c[0]; g += c[1]; b += c[2];
               }
               const inv = 1 / taps.length;
@@ -5794,11 +6059,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
           function chanSample(L, sx, sy, rS, chGain, chIndex){
             const p = objXYPhysical(L, sx, sy, rS);
             const uv0 = objectHitToPreviewUV(p.ox, p.oy);
+            const sigmaBoost = 1.15;
+            const sigR = Math.max(0, Number(L.sigmaRad || L.sigma || 0) * sigmaBoost);
+            const sigT = Math.max(0, Number(L.sigmaTan || L.sigma || 0) * sigmaBoost);
+            const pNorm = Math.hypot(p.ox, p.oy);
+            const urx = pNorm > 1e-9 ? (p.ox / pNorm) : 1;
+            const ury = pNorm > 1e-9 ? (p.oy / pNorm) : 0;
+            const utx = -ury;
+            const uty = urx;
 
-            const su = (L.sigma * 0.85) / (2 * halfObjW);
-            const sv = (L.sigma * 0.85) / (2 * halfObjH);
-
-            if (su < 1e-4 && sv < 1e-4) {
+            if (sigR < 1e-4 && sigT < 1e-4) {
               const c = sample(uv0.u, uv0.v);
               return clamp(c[chIndex] * chGain, 0, 255);
             }
@@ -5806,7 +6076,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
             let acc = 0;
             for (let t = 0; t < taps.length; t++){
               const o = taps[t];
-              const c = sample(uv0.u + o[0]*su, uv0.v + o[1]*sv);
+              const ox = p.ox + urx * (o[0] * sigR) + utx * (o[1] * sigT);
+              const oy = p.oy + ury * (o[0] * sigR) + uty * (o[1] * sigT);
+              const uv = objectHitToPreviewUV(ox, oy);
+              const c = sample(uv.u, uv.v);
               acc += c[chIndex];
             }
             return clamp((acc / taps.length) * chGain, 0, 255);
