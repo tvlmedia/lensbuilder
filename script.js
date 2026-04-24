@@ -1848,6 +1848,27 @@ function onCellCommit(e) {
   const AP_MIN = 0.01;
   const DEFAULT_SHOULDER_MIN_DIFF = 0.35;
 
+  function isZemaxImportedLens() {
+    const src = String(lens?.importSource || "").trim().toLowerCase();
+    const zsrc = String(lens?.zemax?.source || "").trim().toLowerCase();
+    return (
+      src === "zemax" ||
+      src === "zmx_text" ||
+      src === "zmx_file" ||
+      src.includes("zemax") ||
+      src.includes("zmx") ||
+      zsrc === "zemax" ||
+      !!lens?.originalZmxText
+    );
+  }
+
+  function shouldBypassApertureClampForSurface(s) {
+    if (!isZemaxImportedLens()) return false;
+    const surfNo = Number(s?.zmx?.surf);
+    if (Number.isFinite(surfNo) && surfNo >= 0) return true;
+    return !!lens?.originalZmxText;
+  }
+
   function isAirMediumName(name) {
     return String(name ?? "AIR").trim().toUpperCase() === "AIR";
   }
@@ -1859,6 +1880,9 @@ function onCellCommit(e) {
 
   function getSurfaceOpticalAp(s) {
     const ap = Number(s?.ap_optical ?? s?.ap ?? AP_MIN);
+    if (shouldBypassApertureClampForSurface(s)) {
+      return Math.max(AP_MIN, ap);
+    }
     const lim = maxApForSurface(s);
     return Math.max(AP_MIN, Math.min(ap, lim));
   }
@@ -1934,6 +1958,12 @@ function onCellCommit(e) {
 
     const lim = maxApForSurface(s);
     const apOpt = Number(s.ap_optical ?? s.ap ?? AP_MIN);
+    if (shouldBypassApertureClampForSurface(s)) {
+      const unclamped = Math.max(AP_MIN, apOpt);
+      s.ap_optical = unclamped;
+      s.ap = unclamped;
+      return;
+    }
     const clamped = Math.max(AP_MIN, Math.min(apOpt, lim));
     s.ap_optical = clamped;
     s.ap = clamped;
@@ -1980,6 +2010,8 @@ function onCellCommit(e) {
   // -------------------- tracing --------------------
 function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const skipIMS = !!opts.skipIMS;
+  const rayIndex = Number.isFinite(Number(opts?.rayIndex)) ? Number(opts.rayIndex) : null;
+  const debugTrace = opts?.debugTrace === true;
 
   let pts = [];
   let vignetted = false;
@@ -1989,6 +2021,30 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   pts.push({ x: ray.p.x, y: ray.p.y });
 
   let nBefore = 1.0;
+  const logTraceFailDetailed = (reason, surfaceIndex, s, hitInfo, nAfter = null) => {
+    if (!debugTrace) return;
+    console.warn("[trace fail]", {
+      reason,
+      rayIndex,
+      surfaceIndex,
+      zmxSurf: Number.isFinite(Number(s?.zmx?.surf)) ? Number(s.zmx.surf) : null,
+      type: String(s?.type || ""),
+      vx: Number(s?.vx || 0),
+      R: Number(s?.R || 0),
+      t: Number(s?.t || 0),
+      ap: Number(getSurfaceOpticalAp(s)),
+      glass: String(s?.glass || "AIR"),
+      nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+      vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
+      nBefore: Number.isFinite(Number(nBefore)) ? Number(nBefore) : null,
+      nAfter: Number.isFinite(Number(nAfter)) ? Number(nAfter) : null,
+      hit: hitInfo?.hit || null,
+      rayP: ray?.p || null,
+      rayD: ray?.d || null,
+      activeZoomConfig: Number.isFinite(Number(lens?.zoom?.activeConfig)) ? Number(lens.zoom.activeConfig) : null,
+      activeZoomLabel: String(lens?.zemax?.currentConfigLabel || lens?.zemax?.currentConfigIndex || "—"),
+    });
+  };
 
   for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i];
@@ -2002,15 +2058,30 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const hitInfo = intersectSurface(ray, s);
     if (!hitInfo) {
+      if (Number.isFinite(Number(s?.vx)) && Math.abs(Number(ray?.d?.x || 0)) > 1e-12) {
+        const tFail = (Number(s.vx) - Number(ray.p.x || 0)) / Number(ray.d.x || 1);
+        if (Number.isFinite(tFail) && tFail > 0) {
+          pts.push(add(ray.p, mul(ray.d, tFail)));
+        }
+      }
+      const nAfter = (!isIMS && !isMECH) ? surfaceN(s, wavePreset) : null;
       maybeLogTraceFail("forward_no_hit", {
         surfaceIndex: i,
+        rayIndex,
         type,
         vx: Number(s?.vx || 0),
         R: Number(s?.R || 0),
-        ap: Number(s?.ap || 0),
+        t: Number(s?.t || 0),
+        ap: Number(getSurfaceOpticalAp(s)),
+        glass: String(s?.glass || "AIR"),
+        nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+        vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
+        nBefore,
+        nAfter,
         rayP: ray?.p,
         rayD: ray?.d,
       });
+      logTraceFailDetailed("no_hit", i, s, null, nAfter);
       vignetted = true;
       break;
     }
@@ -2018,14 +2089,23 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     pts.push(hitInfo.hit);
 
     if (!isIMS && hitInfo.vignetted) {
+      const nAfter = !isMECH ? surfaceN(s, wavePreset) : null;
       maybeLogTraceFail("forward_aperture_clip", {
         surfaceIndex: i,
+        rayIndex,
         type,
         vx: Number(s?.vx || 0),
         R: Number(s?.R || 0),
-        ap: Number(s?.ap || 0),
+        t: Number(s?.t || 0),
+        ap: Number(getSurfaceOpticalAp(s)),
+        glass: String(s?.glass || "AIR"),
+        nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+        vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
+        nBefore,
+        nAfter,
         hit: hitInfo.hit,
       });
+      logTraceFailDetailed("aperture_clip", i, s, hitInfo, nAfter);
       vignetted = true;
       break;
     }
@@ -2047,13 +2127,20 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     if (!newDir) {
       maybeLogTraceFail("forward_tir", {
         surfaceIndex: i,
+        rayIndex,
         type,
         vx: Number(s?.vx || 0),
         R: Number(s?.R || 0),
+        t: Number(s?.t || 0),
+        ap: Number(getSurfaceOpticalAp(s)),
+        glass: String(s?.glass || "AIR"),
+        nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+        vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
         nBefore,
         nAfter,
         hit: hitInfo.hit,
       });
+      logTraceFailDetailed("tir", i, s, hitInfo, nAfter);
       tir = true;
       break;
     }
@@ -2120,12 +2207,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const stopIdx = findStopSurfaceIndex(surfaces);
     if (stopIdx >= 0) {
       const s = surfaces[stopIdx];
-      return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10) * 0.98), refIdx: stopIdx };
+      return { xRef: s.vx, apRef: Math.max(1e-3, getSurfaceOpticalAp(s) * 0.98), refIdx: stopIdx };
     }
     let refIdx = 1;
     if (!surfaces[refIdx] || String(surfaces[refIdx].type).toUpperCase() === "IMS") refIdx = 0;
     const s = surfaces[refIdx] || surfaces[0];
-    return { xRef: s.vx, apRef: Math.max(1e-3, Number(s.ap || 10) * 0.98), refIdx };
+    return { xRef: s.vx, apRef: Math.max(1e-3, getSurfaceOpticalAp(s) * 0.98), refIdx };
   }
 
   function buildRays(surfaces, fieldAngleDeg, count) {
@@ -2145,6 +2232,25 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const yAtRef = a * hMax;
       const y0 = yAtRef - tanT * (xRef - xStart);
       rays.push({ p: { x: xStart, y: y0 }, d: dir });
+    }
+    return rays;
+  }
+
+  function buildDebugCenterRays(surfaces, count = 31) {
+    const n = Math.max(3, Math.min(101, count | 0));
+    const first = (surfaces || []).find((s) => {
+      const t = String(s?.type || "").toUpperCase();
+      return t !== "OBJ" && t !== "IMS";
+    }) || (surfaces || []).find((s) => String(s?.type || "").toUpperCase() !== "OBJ");
+    const firstAp = Math.max(0.5, getSurfaceOpticalAp(first) * 0.65);
+    const xStart = Number(first?.vx || 0) - 20;
+    const rays = [];
+    for (let k = 0; k < n; k++) {
+      const a = (k / (n - 1)) * 2 - 1;
+      rays.push({
+        p: { x: xStart, y: a * firstAp },
+        d: normalize({ x: 1, y: 0 }),
+      });
     }
     return rays;
   }
@@ -4472,15 +4578,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     computeVertices(traceSurfaces, lensShift, sensorShift);
     const traceSensorX = getSensorPlaneX(traceSurfaces, sensorShift);
 
-    const rays = buildRays(traceSurfaces, fieldAngle, rayCount);
-    const traces = rays.map((r) => traceRayForward(clone(r), traceSurfaces, wavePreset));
+    const useDebugCenterBundle = Math.abs(fieldAngle) < 1e-9;
+    const rays = useDebugCenterBundle
+      ? buildDebugCenterRays(traceSurfaces, rayCount)
+      : buildRays(traceSurfaces, fieldAngle, rayCount);
+    const traces = rays.map((r, ri) => traceRayForward(clone(r), traceSurfaces, wavePreset, { rayIndex: ri, debugTrace: true }));
 
     const vCount = traces.filter((t) => t.vignetted).length;
     const tirCount = traces.filter((t) => t.tir).length;
     const vigPct = traces.length ? Math.round((vCount / traces.length) * 100) : 0;
 
-    const { efl, bfl } = estimateEflBflParaxial(lens.surfaces, wavePreset);
-    const T = estimateTStopApprox(efl, lens.surfaces, wavePreset);
+    const { efl, bfl } = estimateEflBflParaxial(traceSurfaces, wavePreset);
+    const T = estimateTStopApprox(efl, traceSurfaces, wavePreset);
 
     const fov = computeFovDeg(efl, sensorW, sensorH);
     const fovTxt = !fov
@@ -6048,6 +6157,22 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   let stopAp = Math.max(1e-6, getSurfaceOpticalAp(stopSurf));
 
   let xObjPlane = (lens.surfaces[0]?.vx ?? 0) - focusChartDistanceMm;
+
+  const previewParax = estimateEflBflParaxial(lens.surfaces, wavePreset);
+  if (!Number.isFinite(Number(previewParax?.efl))) {
+    resizePreviewCanvasToCSS();
+    const rc = previewCanvasEl.getBoundingClientRect();
+    pctx.clearRect(0, 0, rc.width, rc.height);
+    pctx.fillStyle = "rgba(0,0,0,0.92)";
+    pctx.fillRect(0, 0, rc.width, rc.height);
+    pctx.fillStyle = "rgba(255,255,255,0.9)";
+    pctx.font = "600 16px var(--font-main, sans-serif)";
+    pctx.textAlign = "center";
+    pctx.textBaseline = "middle";
+    pctx.fillText("No valid optical trace yet", rc.width * 0.5, rc.height * 0.5);
+    hidePreviewProgress();
+    return;
+  }
 
   const base = Math.max(64, Number(ui.prevRes?.value || 720));
   const aspect = sensorW / sensorH;
@@ -8008,7 +8133,9 @@ function wireUI() {
   if (ui.zoomConfigSelect) {
     ui.zoomConfigSelect.addEventListener("change", () => {
       const idx = Number(ui.zoomConfigSelect.value);
-      applyZoomConfigToLens(idx);
+      applyZoomConfigToLens(idx, { silent: false, skipBuild: false, skipRender: false });
+      renderAll();
+      scheduleRenderPreview();
     });
   }
 
