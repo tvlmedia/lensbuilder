@@ -122,7 +122,11 @@
     wavePreset: $("#wavePreset"),
     sensorOffset: $("#sensorOffset"),
     focusMode: $("#focusMode"),
+    focusMechanism: $("#focusMechanism"),
     lensFocus: $("#lensFocus"),
+    focusShiftSlider: $("#focusShiftSlider"),
+    autoRefocusOnDistanceChange: $("#autoRefocusOnDistanceChange"),
+    focusShiftActive: $("#focusShiftActive"),
     renderScale: $("#renderScale"),
 
     prevImg: $("#prevImg"),
@@ -919,6 +923,8 @@ function warnMissingGlass(name) {
     if (ui.useZemaxFields) ui.useZemaxFields.checked = !!lens?.import_options?.use_zemax_fields;
     if (ui.verifyMatchZemaxWave) ui.verifyMatchZemaxWave.checked = !!lens?.import_options?.match_zemax_wavelength;
     ensureZemaxPrimaryWaveOption();
+    setFocusShiftMm(getFocusShiftMm(), { updateStatus: false });
+    syncFocusControlsUI();
     selectedIndex = 0;
     clampAllApertures(lens.surfaces);
     buildTable();
@@ -2206,6 +2212,204 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   // -------------------- autofocus --------------------
+  const FOCUS_MODE_SET = new Set(["fixed", "manual", "auto"]);
+  const FOCUS_MECHANISM_SET = new Set(["move-lens", "move-ims", "move-focus-group"]);
+  const FOCUS_SHIFT_FALLBACK_MM = 0;
+
+  const focusRuntime = {
+    lastAutoKey: "",
+    lastAutoMetric: null,
+    lastAutoShiftMm: 0,
+  };
+
+  function normalizeFocusMode(raw) {
+    const m = String(raw || "manual").trim().toLowerCase();
+    return FOCUS_MODE_SET.has(m) ? m : "manual";
+  }
+
+  function normalizeFocusMechanism(raw) {
+    const m = String(raw || "move-lens").trim().toLowerCase();
+    return FOCUS_MECHANISM_SET.has(m) ? m : "move-lens";
+  }
+
+  function getFocusShiftMm() {
+    const raw = Number(ui.lensFocus?.value ?? FOCUS_SHIFT_FALLBACK_MM);
+    return Number.isFinite(raw) ? raw : FOCUS_SHIFT_FALLBACK_MM;
+  }
+
+  function setFocusShiftMm(nextShiftMm, { updateStatus = true } = {}) {
+    const shift = Number.isFinite(Number(nextShiftMm)) ? Number(nextShiftMm) : FOCUS_SHIFT_FALLBACK_MM;
+    if (ui.lensFocus) ui.lensFocus.value = shift.toFixed(4);
+    if (ui.focusShiftSlider) ui.focusShiftSlider.value = String(shift);
+    if (updateStatus) updateFocusShiftStatus();
+    return shift;
+  }
+
+  function focusPoseFromShift(shiftMm, mechanismRaw) {
+    const mechanism = normalizeFocusMechanism(mechanismRaw);
+    const shift = Number.isFinite(Number(shiftMm)) ? Number(shiftMm) : 0;
+
+    if (mechanism === "move-ims") {
+      return {
+        focusMechanism: mechanism,
+        focusShiftMm: shift,
+        lensShift: 0,
+        sensorX: shift,
+        mechanismApplied: "move-ims",
+      };
+    }
+
+    if (mechanism === "move-focus-group") {
+      // Placeholder: until focus-group surfaces are modelled, map to whole-lens move.
+      return {
+        focusMechanism: mechanism,
+        focusShiftMm: shift,
+        lensShift: shift,
+        sensorX: 0,
+        mechanismApplied: "move-lens (focus-group placeholder)",
+      };
+    }
+
+    return {
+      focusMechanism: mechanism,
+      focusShiftMm: shift,
+      lensShift: shift,
+      sensorX: 0,
+      mechanismApplied: "move-lens",
+    };
+  }
+
+  function getFocusContext({ objectDistanceMm = null, wavePreset = "d", allowAutoRefocus = false } = {}) {
+    const focusMode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const focusMechanism = normalizeFocusMechanism(ui.focusMechanism?.value || "move-lens");
+    const autoRefocusOnDistanceChange = !!ui.autoRefocusOnDistanceChange?.checked;
+    const targetDist = Number.isFinite(Number(objectDistanceMm)) ? Number(objectDistanceMm) : null;
+
+    let focusShiftMm = getFocusShiftMm();
+    let autoRun = null;
+
+    if (focusMode === "auto" && allowAutoRefocus && Number.isFinite(targetDist) && targetDist > 0.1) {
+      const autoKey = [
+        focusMechanism,
+        String(wavePreset || "d"),
+        targetDist.toFixed(6),
+      ].join("|");
+      let shouldRun = false;
+      if (!focusRuntime.lastAutoKey) {
+        shouldRun = true;
+      } else {
+        const [lastMech, lastWave, lastDist] = String(focusRuntime.lastAutoKey).split("|");
+        const distChanged = lastDist !== targetDist.toFixed(6);
+        const nonDistChanged = lastMech !== focusMechanism || lastWave !== String(wavePreset || "d");
+        shouldRun = nonDistChanged || (autoRefocusOnDistanceChange && distChanged);
+      }
+      if (shouldRun) {
+        autoRun = runAutofocusForShift({
+          objectDistanceMm: targetDist,
+          wavePreset,
+          focusMechanism,
+          currentShiftMm: focusShiftMm,
+          autofocusMode: getPreviewAutofocusMode(),
+        });
+        if (autoRun?.ok && Number.isFinite(autoRun.focusShiftMm)) {
+          focusShiftMm = setFocusShiftMm(autoRun.focusShiftMm, { updateStatus: false });
+          focusRuntime.lastAutoKey = autoKey;
+          focusRuntime.lastAutoMetric = Number.isFinite(autoRun.bestMetricRmsMm) ? autoRun.bestMetricRmsMm : null;
+          focusRuntime.lastAutoShiftMm = focusShiftMm;
+        }
+      }
+    }
+
+    const pose = focusPoseFromShift(focusShiftMm, focusMechanism);
+    return {
+      focusMode,
+      focusMechanism,
+      autoRefocusOnDistanceChange,
+      focusShiftMm: pose.focusShiftMm,
+      lensShift: pose.lensShift,
+      sensorX: pose.sensorX,
+      mechanismApplied: pose.mechanismApplied,
+      autoRun,
+    };
+  }
+
+  function updateFocusShiftStatus(extra = "") {
+    if (!ui.focusShiftActive) return;
+    const mode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const mechanism = normalizeFocusMechanism(ui.focusMechanism?.value || "move-lens");
+    const shift = getFocusShiftMm();
+    const suffix = extra ? ` • ${extra}` : "";
+    ui.focusShiftActive.textContent = `${shift.toFixed(4)} mm • mode ${mode} • mechanism ${mechanism}${suffix}`;
+  }
+
+  function syncFocusControlsUI() {
+    const mode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const disableShift = mode === "auto";
+    if (ui.lensFocus) ui.lensFocus.disabled = disableShift;
+    if (ui.focusShiftSlider) ui.focusShiftSlider.disabled = disableShift;
+    if (ui.autoRefocusOnDistanceChange) ui.autoRefocusOnDistanceChange.disabled = mode !== "auto";
+    updateFocusShiftStatus();
+  }
+
+  function runAutofocusForShift({
+    objectDistanceMm,
+    wavePreset,
+    focusMechanism,
+    currentShiftMm,
+    autofocusMode,
+    sensorHv: sensorHvOverride = null,
+  }) {
+    const dist = Number(objectDistanceMm);
+    if (!Number.isFinite(dist) || dist <= 0.1) {
+      return { ok: false, reason: "invalid_object_distance" };
+    }
+
+    const { h: sensorH } = getSensorWH();
+    const sensorHv = Number.isFinite(Number(sensorHvOverride))
+      ? Math.max(1e-6, Number(sensorHvOverride))
+      : Math.max(1e-6, sensorH * OV_DEFAULT * 0.5);
+    const mech = normalizeFocusMechanism(focusMechanism);
+    const startShift = Number.isFinite(Number(currentShiftMm)) ? Number(currentShiftMm) : 0;
+
+    if (mech === "move-ims") {
+      const best = autoFocusPreviewSensorForObjectDistance({
+        surfaces: lens.surfaces,
+        wavePreset,
+        lensShift: 0,
+        sensorX: startShift,
+        objDist: dist,
+        sensorHv,
+        autofocusMode,
+      });
+      const ok = Number.isFinite(best?.sensorX);
+      return {
+        ok,
+        focusShiftMm: ok ? Number(best.sensorX) : startShift,
+        bestMetricRmsMm: Number.isFinite(best?.rmsMm) ? Number(best.rmsMm) : null,
+        raysUsed: Number.isFinite(best?.raysUsed) ? Number(best.raysUsed) : 0,
+        method: "move-ims",
+      };
+    }
+
+    const best = autoFocusLensShiftForObjectDistance({
+      surfaces: lens.surfaces,
+      wavePreset,
+      lensShift: startShift,
+      sensorX: 0,
+      objDist: dist,
+      sensorHv,
+      autofocusMode,
+    });
+    const ok = Number.isFinite(best?.lensShift);
+    return {
+      ok,
+      focusShiftMm: ok ? Number(best.lensShift) : startShift,
+      bestMetricRmsMm: Number.isFinite(best?.rmsMm) ? Number(best.rmsMm) : null,
+      raysUsed: Number.isFinite(best?.raysUsed) ? Number(best.raysUsed) : 0,
+      method: mech === "move-focus-group" ? "move-focus-group (placeholder→lens)" : "move-lens",
+    };
+  }
+
   function getFocusChartDistanceMm() {
     const d = Number(ui.prevObjDist?.value || 2000);
     if (!Number.isFinite(d) || d <= 0.1) return null;
@@ -2254,6 +2458,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     wavePreset,
     lensShift,
     sensorX,
+    focusMechanism = "move-lens",
     autofocusMode = PREVIEW_AUTOFOCUS_DEFAULT_MODE,
     sensorHv,
     distancesMm = [2000, 20000],
@@ -2271,32 +2476,48 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const startSensorX = Number(sensorX) || 0;
     const startLensShift = Number(lensShift) || 0;
+    const mechanism = normalizeFocusMechanism(focusMechanism);
+    const startShiftMm = mechanism === "move-ims" ? startSensorX : startLensShift;
     const sensorHvMm = Number.isFinite(Number(sensorHv)) ? Number(sensorHv) : 1;
 
     const rows = [];
     for (const objectDistanceMm of uniqueDistances) {
-      const af = autoFocusPreviewSensorForObjectDistance({
+      const af = runAutofocusForShift({
+        objectDistanceMm,
+        wavePreset,
+        focusMechanism: mechanism,
+        currentShiftMm: startShiftMm,
+        autofocusMode,
+        sensorHv: sensorHvMm,
+      });
+      const pose = focusPoseFromShift(af?.focusShiftMm, mechanism);
+      const ev = evaluatePreviewFocusAtSensorX({
         surfaces,
         wavePreset,
-        lensShift: startLensShift,
-        sensorX: startSensorX,
+        lensShift: pose.lensShift,
+        sensorX: pose.sensorX,
         objDist: objectDistanceMm,
         sensorHv: sensorHvMm,
         autofocusMode,
       });
+      computeVertices(surfaces, pose.lensShift, pose.sensorX);
+      const stopIdx = findStopSurfaceIndex(surfaces);
+      const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : surfaces[0];
       const predictedImageDistanceMm = thinLensImageDistanceMm(efl, objectDistanceMm);
       rows.push({
         focalLengthMm: efl,
         objectDistanceMm,
         predictedImageDistanceMm,
-        actualSensorXMm: Number(af?.sensorX),
-        deltaFromStartMm: Number.isFinite(Number(af?.sensorX)) ? (Number(af.sensorX) - startSensorX) : null,
-        rmsMm: Number.isFinite(Number(af?.rmsMm)) ? Number(af.rmsMm) : null,
-        hitRate: Number.isFinite(Number(af?.hitRate)) ? Number(af.hitRate) : null,
+        actualSensorXMm: Number(pose.sensorX),
+        actualLensShiftMm: Number(pose.lensShift),
+        actualFocusShiftMm: Number.isFinite(Number(af?.focusShiftMm)) ? Number(af.focusShiftMm) : null,
+        deltaFromStartMm: Number.isFinite(Number(af?.focusShiftMm)) ? (Number(af.focusShiftMm) - startShiftMm) : null,
+        rmsMm: Number.isFinite(Number(ev?.rmsMm)) ? Number(ev.rmsMm) : null,
+        hitRate: Number.isFinite(Number(ev?.hitRate)) ? Number(ev.hitRate) : null,
         raysUsed: Number.isFinite(Number(af?.raysUsed)) ? Number(af.raysUsed) : 0,
-        xObjPlaneMm: Number.isFinite(Number(af?.xObjPlaneMm)) ? Number(af.xObjPlaneMm) : null,
-        startRayXMm: Number.isFinite(Number(af?.startRayXMm)) ? Number(af.startRayXMm) : null,
-        stopXMm: Number.isFinite(Number(af?.stopXMm)) ? Number(af.stopXMm) : null,
+        xObjPlaneMm: Number(surfaces?.[0]?.vx || 0) - objectDistanceMm,
+        startRayXMm: Number(pose.sensorX) + 0.05,
+        stopXMm: Number(stopSurf?.vx || 0),
       });
     }
 
@@ -2334,28 +2555,28 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const checkDistanceMm = Number.isFinite(Number(targetDistanceMm))
       ? Number(targetDistanceMm)
       : (row2000 ? 2000 : uniqueDistances[0]);
-    const baseAtCheck = autoFocusPreviewSensorForObjectDistance({
-      surfaces,
+    const baseAtCheck = runAutofocusForShift({
+      objectDistanceMm: checkDistanceMm,
       wavePreset,
-      lensShift: startLensShift,
-      sensorX: startSensorX,
-      objDist: checkDistanceMm,
+      focusMechanism: mechanism,
+      currentShiftMm: startShiftMm,
+      autofocusMode,
       sensorHv: sensorHvMm,
-      autofocusMode,
     });
-    const scaledAtCheck = autoFocusPreviewSensorForObjectDistance({
-      surfaces,
+    const scaledAtCheck = runAutofocusForShift({
+      objectDistanceMm: checkDistanceMm,
       wavePreset,
-      lensShift: startLensShift,
-      sensorX: startSensorX,
-      objDist: checkDistanceMm,
-      sensorHv: sensorHvMm * 1.7,
+      focusMechanism: mechanism,
+      currentShiftMm: startShiftMm,
       autofocusMode,
+      sensorHv: sensorHvMm * 1.7,
     });
+    const baseShift = Number(baseAtCheck?.focusShiftMm);
+    const scaledShift = Number(scaledAtCheck?.focusShiftMm);
     const scaleLeakMm = (
-      Number.isFinite(Number(baseAtCheck?.sensorX)) &&
-      Number.isFinite(Number(scaledAtCheck?.sensorX))
-    ) ? (Number(scaledAtCheck.sensorX) - Number(baseAtCheck.sensorX)) : null;
+      Number.isFinite(baseShift) &&
+      Number.isFinite(scaledShift)
+    ) ? (scaledShift - baseShift) : null;
 
     computeVertices(surfaces, startLensShift, startSensorX);
 
@@ -2369,6 +2590,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const report = {
       autofocusMode,
+      focusMechanism: mechanism,
       focalLengthMm: efl,
       targetDistanceMm: Number.isFinite(Number(targetDistanceMm)) ? Number(targetDistanceMm) : null,
       rows,
@@ -2383,11 +2605,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     if (printToConsole) {
       console.groupCollapsed("[focus-verify] finite-distance autofocus");
       console.log("Focal length (mm):", Number(efl.toFixed(6)));
+      console.log("Focus mechanism:", mechanism);
       console.log("Autofocus mode:", autofocusMode);
       console.table(rows.map((r) => ({
         focalLengthMm: Number(r.focalLengthMm.toFixed(6)),
         objectDistanceMm: r.objectDistanceMm,
         predictedThinLensImageDistanceMm: Number.isFinite(r.predictedImageDistanceMm) ? Number(r.predictedImageDistanceMm.toFixed(6)) : null,
+        actualFocusShiftMm: Number.isFinite(r.actualFocusShiftMm) ? Number(r.actualFocusShiftMm.toFixed(6)) : null,
+        actualLensShiftMm: Number.isFinite(r.actualLensShiftMm) ? Number(r.actualLensShiftMm.toFixed(6)) : null,
         actualAutofocusSensorXMm: Number.isFinite(r.actualSensorXMm) ? Number(r.actualSensorXMm.toFixed(6)) : null,
         predictedVsActualMm: Number.isFinite(r.predictedVsActualMm) ? Number(r.predictedVsActualMm.toFixed(6)) : null,
         xObjPlaneMm: Number.isFinite(r.xObjPlaneMm) ? Number(r.xObjPlaneMm.toFixed(6)) : null,
@@ -2475,62 +2700,59 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function autoFocus() {
-    const prevMode = String(ui.focusMode?.value || "cam").toLowerCase();
-    if (ui.focusMode) ui.focusMode.value = "lens";
+    const focusMode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const focusMechanism = normalizeFocusMechanism(ui.focusMechanism?.value || "move-lens");
     const wavePreset = ui.wavePreset?.value || "d";
     const targetDistance = getFocusChartDistanceMm();
     const autofocusMode = getPreviewAutofocusMode();
-    const { h: sensorH } = getSensorWH();
-    const sensorHv = Math.max(1e-6, sensorH * OV_DEFAULT * 0.5);
 
     if (!(targetDistance > 0.1)) {
       if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus failed: set a valid focus chart distance first.";
       return;
     }
 
-    const currentLensShift = Number(ui.lensFocus?.value || 0);
-
-    const best = autoFocusLensShiftForObjectDistance({
-      surfaces: lens.surfaces,
+    const currentShiftMm = getFocusShiftMm();
+    const af = runAutofocusForShift({
+      objectDistanceMm: targetDistance,
       wavePreset,
-      lensShift: currentLensShift,
-      // Sensor stays fixed during autofocus; only lens shift is optimized.
-      sensorX: 0,
-      objDist: targetDistance,
-      sensorHv,
+      focusMechanism,
+      currentShiftMm,
       autofocusMode,
     });
 
-    if (!Number.isFinite(best?.lensShift)) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus (lens shift) failed: too few valid chart rays.";
-      computeVertices(lens.surfaces, currentLensShift, 0);
+    if (!af?.ok) {
+      if (ui.footerWarn) ui.footerWarn.textContent = "Refocus failed: too few valid chart-center rays.";
       renderAll();
       return;
     }
 
-    const nextLensShift = Number(best.lensShift);
-    if (ui.lensFocus) ui.lensFocus.value = nextLensShift.toFixed(4);
-    computeVertices(lens.surfaces, nextLensShift, 0);
-    console.log("[autofocus:lens-only]", {
+    const nextShiftMm = setFocusShiftMm(af.focusShiftMm, { updateStatus: false });
+    const pose = focusPoseFromShift(nextShiftMm, focusMechanism);
+    computeVertices(lens.surfaces, pose.lensShift, pose.sensorX);
+
+    console.log("[focus:refocus-now]", {
+      objectDistanceMm: targetDistance,
+      focusMode,
       mode: autofocusMode,
-      previousFocusMode: prevMode,
-      targetChartDistanceMm: targetDistance,
-      raysUsed: Number(best?.raysUsed || 0),
-      previousLensShiftMm: currentLensShift,
-      bestLensShiftMm: nextLensShift,
-      bestMetricRmsMm: Number.isFinite(best?.rmsMm) ? best.rmsMm : null,
+      focusMechanism,
+      mechanismApplied: pose.mechanismApplied,
+      previousFocusShiftMm: currentShiftMm,
+      focusShiftMm: nextShiftMm,
+      autofocusBestMetricRmsMm: Number.isFinite(af?.bestMetricRmsMm) ? af.bestMetricRmsMm : null,
+      raysUsed: Number(af?.raysUsed || 0),
     });
-    const rmsTxt = Number.isFinite(best?.rmsMm) ? best.rmsMm.toFixed(4) : "—";
+    const rmsTxt = Number.isFinite(af?.bestMetricRmsMm) ? af.bestMetricRmsMm.toFixed(4) : "—";
+    updateFocusShiftStatus(`auto metric ${rmsTxt}mm`);
     if (ui.footerWarn) ui.footerWarn.textContent =
-      `Auto focus (lens-only): lens=${nextLensShift.toFixed(3)}mm • RMS=${rmsTxt}mm • d=${targetDistance.toFixed(1)}mm`;
+      `Refocus: shift=${nextShiftMm.toFixed(3)}mm • RMS=${rmsTxt}mm • d=${targetDistance.toFixed(1)}mm • ${pose.mechanismApplied}`;
 
     const diagReport = runFiniteDistanceFocusDiagnostics({
       surfaces: lens.surfaces,
       wavePreset,
-      lensShift: Number(ui.lensFocus?.value || 0),
-      sensorX: 0,
+      lensShift: pose.lensShift,
+      sensorX: pose.sensorX,
+      focusMechanism,
       autofocusMode,
-      sensorHv,
       distancesMm: [2000, 20000],
       targetDistanceMm: targetDistance,
       printToConsole: true,
@@ -3568,9 +3790,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const { w: sensorW, h: sensorH, halfH } = getSensorWH();
 
-    const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
-    const sensorX = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
-    const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0;
+    const objectDistanceMm = getFocusChartDistanceMm();
+    const focusCtx = getFocusContext({
+      objectDistanceMm,
+      wavePreset,
+      allowAutoRefocus: true,
+    });
+    const focusMode = focusCtx.focusMode;
+    const focusMechanism = focusCtx.focusMechanism;
+    const sensorX = focusCtx.sensorX;
+    const lensShift = focusCtx.lensShift;
 
     computeVertices(lens.surfaces, lensShift, sensorX);
 
@@ -3657,9 +3886,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const eflTxt = efl == null ? "—" : `${efl.toFixed(2)}mm`;
     const tTxt   = T == null ? "—" : `T${T.toFixed(2)}`;
-    const focusTxt = (focusMode === "cam")
-      ? `CamFocus ${sensorX.toFixed(2)}mm`
-      : `LensFocus ${lensShift.toFixed(2)}mm`;
+    const focusTxt = `Focus ${focusMode}/${focusMechanism} shift ${focusCtx.focusShiftMm.toFixed(2)}mm`;
 
     const titleParts = [
       lens?.name || "Lens",
@@ -3673,6 +3900,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       focusTxt,
     ];
     drawTitleOverlay(titleParts);
+    const autoMetricMm = Number(focusCtx?.autoRun?.bestMetricRmsMm);
+    updateFocusShiftStatus(
+      focusCtx.autoRun?.ok
+        ? `auto metric ${Number.isFinite(autoMetricMm) ? autoMetricMm.toFixed(4) : "—"}mm`
+        : ""
+    );
   }
 
   // -------------------- view controls (RAYS canvas) --------------------
@@ -5025,13 +5258,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;
   const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));
 
-  const focusMode = String(ui.focusMode?.value || "cam").toLowerCase();
-  let sensorX   = (focusMode === "cam") ? Number(ui.sensorOffset?.value || 0) : 0.0;
-  const lensShift = (focusMode === "lens") ? Number(ui.lensFocus?.value || 0) : 0.0;
+  const wavePreset = ui.wavePreset?.value || "d";
+  const focusChartDistanceMm = getFocusChartDistanceMm() ?? 2000;
+  const focusCtx = getFocusContext({
+    objectDistanceMm: focusChartDistanceMm,
+    wavePreset,
+    allowAutoRefocus: true,
+  });
+  let sensorX = focusCtx.sensorX;
+  const lensShift = focusCtx.lensShift;
 
   computeVertices(lens.surfaces, lensShift, sensorX);
 
-  const wavePreset = ui.wavePreset?.value || "d";
   const { w: sensorW, h: sensorH } = getSensorWH();
 
   let stopIdx = findStopSurfaceIndex(lens.surfaces);
@@ -5039,7 +5277,6 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   let xStop = Number(stopSurf?.vx || 0);
   let stopAp = Math.max(1e-6, getSurfaceOpticalAp(stopSurf));
 
-  const focusChartDistanceMm = getFocusChartDistanceMm() ?? 2000;
   let xObjPlane = (lens.surfaces[0]?.vx ?? 0) - focusChartDistanceMm;
 
   const base = Math.max(64, Number(ui.prevRes?.value || 720));
@@ -5065,7 +5302,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     deltaMm: 0,
     rmsMm: null,
     hitRate: null,
-    method: "preview_af_none",
+    method: `preview_focus_${focusCtx.focusMode}`,
   };
   if (Number.isFinite(focusChartDistanceMm) && focusChartDistanceMm > 0.1 && focusChartDistanceMm < 1e8) {
     const autofocusMode = getPreviewAutofocusMode();
@@ -5083,9 +5320,17 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       deltaMm: 0,
       rmsMm: Number.isFinite(ev?.rmsMm) ? Number(ev.rmsMm) : null,
       hitRate: Number.isFinite(ev?.hitRate) ? Number(ev.hitRate) : null,
-      method: "preview_focus_eval_only",
+      method: focusCtx.autoRun?.ok
+        ? `preview_focus_eval_only (auto ${focusCtx.focusMechanism})`
+        : "preview_focus_eval_only",
     };
   }
+
+  if (focusCtx.autoRun?.ok) scheduleRenderAll();
+  const metricTxt = Number.isFinite(focusCtx?.autoRun?.bestMetricRmsMm)
+    ? `auto metric ${Number(focusCtx.autoRun.bestMetricRmsMm).toFixed(4)}mm`
+    : "";
+  updateFocusShiftStatus(metricTxt);
 
   preview.debug.focusDeltaMm = Number.isFinite(focusInfo?.deltaMm) ? focusInfo.deltaMm : null;
   preview.debug.spotRmsMm = Number.isFinite(focusInfo?.rmsMm) ? focusInfo.rmsMm : null;
@@ -6469,7 +6714,7 @@ function wireUI() {
   // live render controls
   [
     "fieldAngle","rayCount","wavePreset",
-    "sensorOffset","focusMode","lensFocus",
+    "focusMode","focusMechanism","lensFocus","focusShiftSlider","autoRefocusOnDistanceChange",
     "renderScale","prevObjDist","prevObjH","prevRes","previewAutoFit"
   ].forEach((id) => {
     const el = ui[id];
@@ -6477,6 +6722,40 @@ function wireUI() {
     el.addEventListener("input", () => { scheduleRenderAll(); scheduleRenderPreview(); });
     el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
   });
+
+  if (ui.lensFocus) {
+    ui.lensFocus.addEventListener("input", () => {
+      setFocusShiftMm(ui.lensFocus.value, { updateStatus: true });
+      scheduleRenderAll();
+      scheduleRenderPreview();
+    });
+    ui.lensFocus.addEventListener("change", () => {
+      setFocusShiftMm(ui.lensFocus.value, { updateStatus: true });
+      renderAll();
+      scheduleRenderPreview();
+    });
+  }
+  if (ui.focusShiftSlider) {
+    ui.focusShiftSlider.addEventListener("input", () => {
+      setFocusShiftMm(ui.focusShiftSlider.value, { updateStatus: true });
+      scheduleRenderAll();
+      scheduleRenderPreview();
+    });
+    ui.focusShiftSlider.addEventListener("change", () => {
+      setFocusShiftMm(ui.focusShiftSlider.value, { updateStatus: true });
+      renderAll();
+      scheduleRenderPreview();
+    });
+  }
+  if (ui.focusMode || ui.focusMechanism) {
+    const focusModeHandler = () => {
+      syncFocusControlsUI();
+      scheduleRenderAll();
+      scheduleRenderPreview();
+    };
+    if (ui.focusMode) ui.focusMode.addEventListener("change", focusModeHandler);
+    if (ui.focusMechanism) ui.focusMechanism.addEventListener("change", focusModeHandler);
+  }
 
   // preview options (DOF/CA/quality)
   ["optDOF","optCA","renderQuality"].forEach((id) => {
@@ -6645,6 +6924,8 @@ function boot() {
   updateDebugOverlayButton();
   bindViewControls();
   bindPreviewViewControls();
+  setFocusShiftMm(getFocusShiftMm(), { updateStatus: false });
+  syncFocusControlsUI();
 
   if (typeof window !== "undefined") {
     window.runFiniteDistanceFocusDiagnostics = (opts = {}) => {
@@ -6654,11 +6935,14 @@ function boot() {
       const sensorHv = Number.isFinite(Number(opts.sensorHv))
         ? Number(opts.sensorHv)
         : Math.max(1e-6, sensorH * OV_DEFAULT * 0.5);
+      const focusMechanism = normalizeFocusMechanism(opts.focusMechanism || ui.focusMechanism?.value || "move-lens");
+      const focusShiftMm = Number(opts.focusShiftMm ?? opts.lensShift ?? ui.lensFocus?.value ?? 0);
+      const pose = focusPoseFromShift(focusShiftMm, focusMechanism);
       const report = runFiniteDistanceFocusDiagnostics({
         surfaces: lens.surfaces,
         wavePreset,
-        lensShift: Number(opts.lensShift ?? ui.lensFocus?.value ?? 0),
-        sensorX: Number(opts.sensorX ?? ui.sensorOffset?.value ?? 0),
+        lensShift: Number(opts.lensShift ?? pose.lensShift),
+        sensorX: Number(opts.sensorX ?? pose.sensorX),
         autofocusMode,
         sensorHv,
         distancesMm: Array.isArray(opts.distancesMm) ? opts.distancesMm : [2000, 20000],
