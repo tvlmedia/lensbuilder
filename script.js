@@ -1073,6 +1073,9 @@ function warnMissingGlass(name) {
       zmx: {
         surf: Number.isFinite(Number(s?.zmx?.surf)) ? Number(s.zmx.surf) : null,
         curv: Number.isFinite(Number(s?.zmx?.curv)) ? Number(s.zmx.curv) : null,
+        baseCurv: Number.isFinite(Number(s?.zmx?.baseCurv))
+          ? Number(s.zmx.baseCurv)
+          : (Number.isFinite(Number(s?.zmx?.curv)) ? Number(s.zmx.curv) : null),
         disz: Number.isFinite(Number(s?.zmx?.disz)) ? Number(s.zmx.disz) : null,
         diam: Number.isFinite(Number(s?.zmx?.diam)) ? Number(s.zmx.diam) : null,
         glass_name: (s?.zmx?.glass_name != null && String(s.zmx.glass_name).trim() !== "")
@@ -1105,6 +1108,7 @@ function warnMissingGlass(name) {
   }
 
   let lens = sanitizeLens(omit50ConceptV1());
+  let _lastParaxialFailSignature = "";
 
   function zoomRoleForIndex(idx, total) {
     if (total <= 1) return null;
@@ -1159,21 +1163,27 @@ function warnMissingGlass(name) {
     const target = Number(configIndex);
     const cfg = lens.zoom.configs.find((c) => Number(c?.index) === target);
     if (!cfg) return false;
+    const overrideKeys = Object.keys(cfg?.thicknessOverrides || {})
+      .map((k) => String(Math.max(0, Math.trunc(Number(k)))))
+      .filter((k) => k !== "0");
+    const matchedOverrideKeys = new Set();
 
     for (const s of lens.surfaces || []) {
-      if (!s || !isPhysicalSurfaceType(s?.type)) continue;
+      if (!s) continue;
       if (!s.zmx || typeof s.zmx !== "object") s.zmx = {};
       if (!Number.isFinite(Number(s.zmx.baseDisz)) && Number.isFinite(Number(s.t))) {
         s.zmx.baseDisz = Number(s.t);
       }
 
       const surfNo = Number(s?.zmx?.surf);
-      if (!Number.isFinite(surfNo)) continue;
+      const type = String(s?.type || "").toUpperCase();
+      if (!Number.isFinite(surfNo) || surfNo <= 0 || type === "IMS") continue;
 
       const key = String(Math.max(0, Math.trunc(surfNo)));
       const override = Number(cfg?.thicknessOverrides?.[key]);
       if (Number.isFinite(override)) {
         s.t = override;
+        matchedOverrideKeys.add(key);
       } else if (Number.isFinite(Number(s?.zmx?.baseDisz))) {
         s.t = Number(s.zmx.baseDisz);
       }
@@ -1222,7 +1232,46 @@ function warnMissingGlass(name) {
 
     lens.zoom.activeConfig = Number(cfg.index);
     clampAllApertures(lens.surfaces);
+    computeVertices(lens.surfaces, 0, 0);
     updateZoomConfigUI();
+
+    try {
+      const availableSurfNos = (lens.surfaces || [])
+        .map((s) => Number(s?.zmx?.surf))
+        .filter((n) => Number.isFinite(n))
+        .map((n) => String(Math.max(0, Math.trunc(n))));
+      const unmatchedOverrides = overrideKeys.filter((k) => !matchedOverrideKeys.has(k));
+      const rows = (lens.surfaces || []).map((s, i) => {
+        const zmxSurfNum = Number(s?.zmx?.surf);
+        const zmxSurfKey = Number.isFinite(zmxSurfNum) ? String(Math.max(0, Math.trunc(zmxSurfNum))) : null;
+        const overrideRaw = zmxSurfKey != null ? cfg?.thicknessOverrides?.[zmxSurfKey] : null;
+        const override = Number(overrideRaw);
+        return {
+          row: i,
+          type: String(s?.type || ""),
+          zmxSurf: Number.isFinite(zmxSurfNum) ? zmxSurfNum : null,
+          R: Number(s?.R),
+          t: Number(s?.t),
+          baseDisz: Number.isFinite(Number(s?.zmx?.baseDisz)) ? Number(s.zmx.baseDisz) : null,
+          override: Number.isFinite(override) ? override : null,
+          glass: String(s?.glass || "AIR"),
+          nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+          vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
+          ap: Number(s?.ap),
+          stop: !!s?.stop,
+        };
+      });
+      console.groupCollapsed(`[zoom-config] Applied ${formatZoomConfigLabel(cfg, Math.max(0, cfgIdx), lens.zoom.configs.length)}`);
+      console.table(rows);
+      console.log("[zoom-config] thicknessOverrides", cfg?.thicknessOverrides || {});
+      console.log("[zoom-config] matchedOverrideKeys", Array.from(matchedOverrideKeys).sort((a, b) => Number(a) - Number(b)));
+      if (unmatchedOverrides.length) {
+        console.warn("[zoom-config] Unmatched THIC overrides (zmx surface numbers not found):", unmatchedOverrides, {
+          availableSurfNos,
+        });
+      }
+      console.groupEnd();
+    } catch (_) {}
 
     if (!options.skipBuild) buildTable();
     if (!options.skipRender) {
@@ -2160,6 +2209,134 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return Number.isFinite(minX) ? minX : (surfaces[0]?.vx ?? 0);
   }
 
+  function traceParaxialRayDetailed(surfaces, wavePreset, xStart, y0) {
+    let ray = { p: { x: xStart, y: y0 }, d: normalize({ x: 1, y: 0 }) };
+    let nBefore = 1.0;
+    let lastSurfaceInfo = null;
+
+    for (let i = 0; i < (surfaces?.length || 0); i++) {
+      const s = surfaces[i];
+      const type = String(s?.type || "").toUpperCase();
+      const isOBJ = type === "OBJ";
+      const isIMS = type === "IMS";
+      const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
+      if (isOBJ || isIMS) continue;
+
+      const hitInfo = intersectSurface(ray, s);
+      if (!hitInfo) {
+        return {
+          ok: false,
+          reason: "no_hit",
+          surfaceIndex: i,
+          surface: s,
+          nBefore,
+          nAfter: null,
+          hit: null,
+          vignetted: false,
+          tir: false,
+        };
+      }
+
+      if (hitInfo.vignetted) {
+        return {
+          ok: false,
+          reason: "aperture_clip",
+          surfaceIndex: i,
+          surface: s,
+          nBefore,
+          nAfter: null,
+          hit: hitInfo.hit,
+          vignetted: true,
+          tir: false,
+        };
+      }
+
+      if (isMECH) {
+        ray = { p: hitInfo.hit, d: ray.d };
+        continue;
+      }
+
+      const nAfter = surfaceN(s, wavePreset);
+      lastSurfaceInfo = { index: i, surface: s, nBefore, nAfter, hit: hitInfo.hit };
+
+      if (Math.abs(nAfter - nBefore) < 1e-9) {
+        ray = { p: hitInfo.hit, d: ray.d };
+        nBefore = nAfter;
+        continue;
+      }
+
+      const newDir = refract(ray.d, hitInfo.normal, nBefore, nAfter);
+      if (!newDir) {
+        return {
+          ok: false,
+          reason: "tir",
+          surfaceIndex: i,
+          surface: s,
+          nBefore,
+          nAfter,
+          hit: hitInfo.hit,
+          vignetted: false,
+          tir: true,
+        };
+      }
+
+      ray = { p: hitInfo.hit, d: newDir };
+      nBefore = nAfter;
+    }
+
+    return {
+      ok: true,
+      endRay: ray,
+      y0,
+      lastSurfaceInfo,
+    };
+  }
+
+  function maybeLogParaxialFailure(surfaces, wavePreset, xStart, y0, fail) {
+    if (!fail || fail.ok) return;
+    const s = fail.surface || {};
+    const signature = [
+      fail.reason,
+      String(fail.surfaceIndex),
+      String(Number(s?.zmx?.surf)),
+      Number(s?.R || 0).toFixed(6),
+      Number(s?.t || 0).toFixed(6),
+      String(s?.glass || "AIR"),
+      Number(fail.nBefore || 0).toFixed(6),
+      Number(fail.nAfter || 0).toFixed(6),
+    ].join("|");
+    if (signature === _lastParaxialFailSignature) return;
+    _lastParaxialFailSignature = signature;
+
+    const row = {
+      reason: fail.reason,
+      y0,
+      xStart,
+      surfaceIndex: fail.surfaceIndex,
+      zmxSurf: Number.isFinite(Number(s?.zmx?.surf)) ? Number(s.zmx.surf) : null,
+      type: String(s?.type || ""),
+      R: Number(s?.R || 0),
+      t: Number(s?.t || 0),
+      vx: Number(s?.vx || 0),
+      ap: Number(s?.ap_optical ?? s?.ap ?? 0),
+      glass: String(s?.glass || "AIR"),
+      nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+      vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
+      nBefore: Number.isFinite(Number(fail.nBefore)) ? Number(fail.nBefore) : null,
+      nAfter: Number.isFinite(Number(fail.nAfter)) ? Number(fail.nAfter) : null,
+      hitX: Number.isFinite(Number(fail?.hit?.x)) ? Number(fail.hit.x) : null,
+      hitY: Number.isFinite(Number(fail?.hit?.y)) ? Number(fail.hit.y) : null,
+      vignetted: !!fail.vignetted,
+      tir: !!fail.tir,
+      activeZoomConfig: Number.isFinite(Number(lens?.zoom?.activeConfig)) ? Number(lens.zoom.activeConfig) : null,
+      activeZoomLabel: String(lens?.zemax?.currentConfigLabel || lens?.zemax?.currentConfigIndex || "—"),
+    };
+
+    console.groupCollapsed("[paraxial-debug] EFL/BFL paraxial trace failed");
+    console.table([row]);
+    console.groupEnd();
+  }
+
   function estimateEflBflParaxial(surfaces, wavePreset) {
     const lastVx = lastPhysicalVertexX(surfaces);
     const xStart = (surfaces[0]?.vx ?? 0) - 160;
@@ -2167,11 +2344,29 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const heights = [0.25, 0.5, 0.75, 1.0, 1.25];
     const fVals = [];
     const xCrossVals = [];
+    let firstFail = null;
 
     for (const y0 of heights) {
-      const ray = { p: { x: xStart, y: y0 }, d: normalize({ x: 1, y: 0 }) };
-      const tr = traceRayForward(clone(ray), surfaces, wavePreset, { skipIMS: true });
-      if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
+      const tr = traceParaxialRayDetailed(surfaces, wavePreset, xStart, y0);
+      if (!tr || !tr.ok || !tr.endRay) {
+        if (!firstFail) {
+          firstFail = tr
+            ? { ...tr, y0 }
+            : {
+                ok: false,
+                reason: "unknown",
+                y0,
+                surfaceIndex: null,
+                surface: null,
+                nBefore: null,
+                nAfter: null,
+                hit: null,
+                vignetted: false,
+                tir: false,
+              };
+        }
+        continue;
+      }
 
       const er = tr.endRay;
       const dx = er.d.x, dy = er.d.y;
@@ -2190,7 +2385,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       }
     }
 
-    if (fVals.length < 2) return { efl: null, bfl: null };
+    if (fVals.length < 2) {
+      if (firstFail) maybeLogParaxialFailure(surfaces, wavePreset, xStart, firstFail.y0, firstFail);
+      return { efl: null, bfl: null };
+    }
+
+    _lastParaxialFailSignature = "";
 
     const efl = fVals.reduce((a, b) => a + b, 0) / fVals.length;
 
@@ -7497,6 +7697,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         zmx: {
           surf: s.idx,
           curv: curv,
+          baseCurv: curv,
           disz: t,
           disz_raw: Number(s.DISZ),
           baseDisz: t,
