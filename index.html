@@ -145,6 +145,16 @@
               </label>
             </div>
 
+            <div class="ctrl">
+              <label for="autoFocusMode">Refocus target</label>
+              <select id="autoFocusMode">
+                <option value="chart-center" selected>Center</option>
+                <option value="chart-mid">Mid-field</option>
+                <option value="chart-edge">Edge / corners</option>
+                <option value="chart-grid">Grid average</option>
+              </select>
+            </div>
+
             <div class="ctrl two">
               <label>Active focus shift</label>
               <div id="focusShiftActive" class="hint">0.000 mm • mode manual • mechanism move-lens</div>
@@ -187,6 +197,11 @@
             </div>
 
             <div class="ctrl">
+              <label for="prevObjW">Object width (mm)</label>
+              <input id="prevObjW" type="number" step="1" value="2933" />
+            </div>
+
+            <div class="ctrl">
               <label for="prevRes">Preview res</label>
               <select id="prevRes">
                 <option value="256">256 px (fast)</option>
@@ -219,6 +234,25 @@
                 <option value="draft">Draft (fast)</option>
                 <option value="normal" selected>Normal</option>
                 <option value="hq">High (slow)</option>
+              </select>
+            </div>
+
+            <div class="ctrl">
+              <label for="previewRenderMode">Preview mode</label>
+              <select id="previewRenderMode">
+                <option value="fast" selected>Fast preview (LUT)</option>
+                <option value="quality">Quality preview (raytrace)</option>
+              </select>
+            </div>
+
+            <div class="ctrl">
+              <label for="pupilSamples">Pupil samples</label>
+              <select id="pupilSamples">
+                <option value="8">8</option>
+                <option value="16" selected>16</option>
+                <option value="32">32</option>
+                <option value="64">64</option>
+                <option value="128">128</option>
               </select>
             </div>
 

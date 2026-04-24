@@ -86,10 +86,13 @@
       method: "",
       centerRmsMm: null,
       centerRmsPx: null,
+      centerHitRate: null,
       midRmsMm: null,
       midRmsPx: null,
+      midHitRate: null,
       cornerRmsMm: null,
       cornerRmsPx: null,
+      cornerHitRate: null,
       bestFocusCenterShiftMm: null,
       bestFocusCornerShiftMm: null,
       fieldCurvatureDeltaMm: null,
@@ -142,8 +145,12 @@
     previewAutoFit: $("#previewAutoFit"),
     prevObjDist: $("#prevObjDist"),
     prevObjH: $("#prevObjH"),
+    prevObjW: $("#prevObjW"),
     prevRes: $("#prevRes"),
+    previewRenderMode: $("#previewRenderMode"),
+    pupilSamples: $("#pupilSamples"),
     previewOrientation: $("#previewOrientation"),
+    autoFocusMode: $("#autoFocusMode"),
     btnRenderPreview: $("#btnRenderPreview"),
     btnPreviewFS: $("#btnPreviewFS"),
     btnPreviewRuler: $("#btnPreviewRuler"),
@@ -844,6 +851,8 @@ function warnMissingGlass(name) {
   function sanitizeLens(obj) {
   const rawAutofocusMode = String(obj?.import_options?.autofocus_mode || "").trim().toLowerCase();
   const autofocusMode = (
+    rawAutofocusMode === "chart-mid" ||
+    rawAutofocusMode === "chart-edge" ||
     rawAutofocusMode === "chart-grid" ||
     rawAutofocusMode === "scene-center" ||
     rawAutofocusMode === "chart-center"
@@ -976,6 +985,12 @@ function warnMissingGlass(name) {
     focusRuntime.lastAutoShiftMm = Number(lens?.focus?.shiftMm) || 0;
     if (ui.useZemaxFields) ui.useZemaxFields.checked = !!lens?.import_options?.use_zemax_fields;
     if (ui.verifyMatchZemaxWave) ui.verifyMatchZemaxWave.checked = !!lens?.import_options?.match_zemax_wavelength;
+    if (ui.autoFocusMode) {
+      const autofocusRaw = String(lens?.import_options?.autofocus_mode || "").trim().toLowerCase();
+      ui.autoFocusMode.value = PREVIEW_AUTOFOCUS_MODES.has(autofocusRaw)
+        ? autofocusRaw
+        : PREVIEW_AUTOFOCUS_DEFAULT_MODE;
+    }
     if (ui.focusMode) ui.focusMode.value = sanitizeFocusModeImport(lens?.focus?.mode);
     if (ui.focusMechanism) ui.focusMechanism.value = sanitizeFocusMechanismImport(lens?.focus?.mechanism);
     if (ui.autoRefocusOnDistanceChange) {
@@ -2310,11 +2325,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   function syncFocusStateToLens(shiftOverride = null) {
     if (!lens || typeof lens !== "object") return;
     if (!lens.focus || typeof lens.focus !== "object") lens.focus = {};
+    if (!lens.import_options || typeof lens.import_options !== "object") lens.import_options = {};
     lens.focus.mode = normalizeFocusMode(ui.focusMode?.value || lens.focus.mode || "manual");
     lens.focus.mechanism = normalizeFocusMechanism(ui.focusMechanism?.value || lens.focus.mechanism || "move-lens");
     const shiftVal = Number(shiftOverride);
     lens.focus.shiftMm = Number.isFinite(shiftVal) ? shiftVal : getFocusShiftMm();
     lens.focus.autoRefocusOnDistanceChange = !!ui.autoRefocusOnDistanceChange?.checked;
+    lens.import_options.autofocus_mode = getPreviewAutofocusMode();
   }
 
   function setFocusShiftMm(nextShiftMm, { updateStatus = true } = {}) {
@@ -4216,15 +4233,23 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const cTxt = Number.isFinite(d.centerRmsMm) ? `${d.centerRmsMm.toFixed(4)}mm / ${Number(d.centerRmsPx || 0).toFixed(2)}px` : "—";
     const mTxt = Number.isFinite(d.midRmsMm) ? `${d.midRmsMm.toFixed(4)}mm / ${Number(d.midRmsPx || 0).toFixed(2)}px` : "—";
     const kTxt = Number.isFinite(d.cornerRmsMm) ? `${d.cornerRmsMm.toFixed(4)}mm / ${Number(d.cornerRmsPx || 0).toFixed(2)}px` : "—";
+    const cHitTxt = Number.isFinite(d.centerHitRate) ? `${(d.centerHitRate * 100).toFixed(1)}%` : "—";
+    const mHitTxt = Number.isFinite(d.midHitRate) ? `${(d.midHitRate * 100).toFixed(1)}%` : "—";
+    const kHitTxt = Number.isFinite(d.cornerHitRate) ? `${(d.cornerHitRate * 100).toFixed(1)}%` : "—";
     const curvTxt = Number.isFinite(d.fieldCurvatureDeltaMm)
       ? `${d.fieldCurvatureDeltaMm >= 0 ? "+" : ""}${d.fieldCurvatureDeltaMm.toFixed(3)}mm`
+      : "—";
+    const icTxt = (preview?.usableCircle?.valid && Number.isFinite(Number(preview?.usableCircle?.diameterMm)))
+      ? `Ø${Number(preview.usableCircle.diameterMm).toFixed(2)}mm`
       : "—";
 
     lines.push(focusTxt);
     lines.push(`Spot RMS: ${rmsMmTxt} • ${rmsPxTxt}`);
     lines.push(`Kernel: ${kPxTxt} • Scale: ${mppTxt}`);
     lines.push(`RMS C/M/K: ${cTxt} • ${mTxt} • ${kTxt}`);
+    lines.push(`Valid rays C/M/K: ${cHitTxt} • ${mHitTxt} • ${kHitTxt}`);
     lines.push(`Best focus Δ(center→corner): ${curvTxt}`);
+    lines.push(`Image circle est: ${icTxt}`);
     if (d.method) lines.push(`Method: ${String(d.method)}`);
 
     pctx.save();
@@ -5041,7 +5066,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   const PREVIEW_AUTOFOCUS_DEFAULT_MODE = "chart-center";
-  const PREVIEW_AUTOFOCUS_MODES = new Set(["chart-center", "chart-grid", "scene-center"]);
+  const PREVIEW_AUTOFOCUS_MODES = new Set([
+    "chart-center",
+    "chart-mid",
+    "chart-edge",
+    "chart-grid",
+    "scene-center",
+  ]);
   const PREVIEW_ORIENTATION_SET = new Set(["upright", "sensor-real"]);
 
   const PREVIEW_FOCUS_PUPIL_POINTS = [
@@ -5077,13 +5108,21 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   function getPreviewAutofocusSensorSamples(sensorHv, autofocusMode) {
     const h = Math.max(0, Number(sensorHv) || 0);
+    if (autofocusMode === "chart-mid" && h > 1e-9) {
+      return [{ sy: h * 0.55, sz: 0, w: 1.00, label: "mid" }];
+    }
+    if (autofocusMode === "chart-edge" && h > 1e-9) {
+      return [{ sy: h * 0.80, sz: h * 0.80, w: 1.00, label: "edge" }];
+    }
     if (autofocusMode === "chart-grid" && h > 1e-9) {
       return [
         { sy: 0,         sz: 0,         w: 1.00, label: "center" },
-        { sy: -h * 0.20, sz: 0,         w: 0.60, label: "up" },
-        { sy: h * 0.20,  sz: 0,         w: 0.60, label: "down" },
-        { sy: 0,         sz: -h * 0.20, w: 0.60, label: "left" },
-        { sy: 0,         sz: h * 0.20,  w: 0.60, label: "right" },
+        { sy: -h * 0.45, sz: 0,         w: 0.70, label: "left" },
+        { sy: h * 0.45,  sz: 0,         w: 0.70, label: "right" },
+        { sy: 0,         sz: -h * 0.45, w: 0.70, label: "up" },
+        { sy: 0,         sz: h * 0.45,  w: 0.70, label: "down" },
+        { sy: h * 0.62,  sz: h * 0.62,  w: 0.55, label: "corner+" },
+        { sy: -h * 0.62, sz: h * 0.62,  w: 0.55, label: "corner-" },
       ];
     }
     // chart-center + scene-center default to center-only focus target.
@@ -5483,12 +5522,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const jobId = ++_previewRenderJobId;
   setNoUsableCircle("pending");
 
-  const doDOF = !!document.getElementById("optDOF")?.checked;
   const doCA  = !!document.getElementById("optCA")?.checked;
   const q     = String(document.getElementById("renderQuality")?.value || "normal");
   const previewOrientation = getPreviewOrientation();
-
-  const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;
+  const previewModeRaw = String(ui.previewRenderMode?.value || "").trim().toLowerCase();
+  const previewMode = (previewModeRaw === "quality" || previewModeRaw === "fast")
+    ? previewModeRaw
+    : (document.getElementById("optDOF")?.checked ? "quality" : "fast");
+  const requestedPupilSamples = Math.round(Number(ui.pupilSamples?.value));
+  const sppFallback = (q === "hq" ? 64 : (q === "draft" ? 12 : 28));
+  const spp = previewMode === "quality"
+    ? clamp(Number.isFinite(requestedPupilSamples) ? requestedPupilSamples : sppFallback, 8, 128)
+    : 1;
   const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));
 
   const wavePreset = ui.wavePreset?.value || "d";
@@ -5572,13 +5617,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   preview.debug.spotRmsPx = null;
   preview.debug.kernelPx = null;
   preview.debug.mmPerPx = (H > 0) ? (sensorH / H) : null;
-  preview.debug.method = String(focusInfo?.method || "");
+  preview.debug.method = `${String(focusInfo?.method || "")} • ${previewMode}${previewMode === "quality" ? ` • spp=${spp}` : ""}`;
   preview.debug.centerRmsMm = null;
   preview.debug.centerRmsPx = null;
+  preview.debug.centerHitRate = null;
   preview.debug.midRmsMm = null;
   preview.debug.midRmsPx = null;
+  preview.debug.midHitRate = null;
   preview.debug.cornerRmsMm = null;
   preview.debug.cornerRmsPx = null;
+  preview.debug.cornerHitRate = null;
   preview.debug.bestFocusCenterShiftMm = null;
   preview.debug.bestFocusCornerShiftMm = null;
   preview.debug.fieldCurvatureDeltaMm = null;
@@ -5614,6 +5662,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   const imgAsp = hasImg ? (imgW / imgH) : (16 / 9);
   const objHManual = Number(ui.prevObjH?.value || 1650);
+  const objWManual = Number(ui.prevObjW?.value || (objHManual * imgAsp));
   const autoFitObj = autoFill
     ? estimatePreviewObjectHalfHeightFromChief({
         surfaces: lens.surfaces,
@@ -5629,9 +5678,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const halfObjH = (autoFitObj && Number.isFinite(autoFitObj.halfObjH) && autoFitObj.halfObjH > 1e-6)
     ? autoFitObj.halfObjH
     : Math.max(1e-3, objHManual * 0.5);
-  const halfObjW = halfObjH * imgAsp;
+  const halfObjW = autoFill
+    ? (halfObjH * imgAsp)
+    : Math.max(1e-3, objWManual * 0.5);
   if (autoFill && autoFitObj && Number.isFinite(autoFitObj.halfObjH) && autoFitObj.halfObjH > 1e-6) {
-    setAutoObjectHeightMm(halfObjH * 2);
+    setAutoObjectSizeMm(halfObjW * 2, halfObjH * 2);
   }
 
   function objectMmToUV(xmm, ymm) {
@@ -5775,10 +5826,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     preview.debug.centerRmsMm = Number.isFinite(center?.rmsMm) ? Number(center.rmsMm) : null;
     preview.debug.centerRmsPx = Number.isFinite(preview.debug.centerRmsMm) ? rmsMmToPreviewPx(preview.debug.centerRmsMm) : null;
+    preview.debug.centerHitRate = Number.isFinite(center?.hitRate) ? Number(center.hitRate) : null;
     preview.debug.midRmsMm = Number.isFinite(mid?.rmsMm) ? Number(mid.rmsMm) : null;
     preview.debug.midRmsPx = Number.isFinite(preview.debug.midRmsMm) ? rmsMmToPreviewPx(preview.debug.midRmsMm) : null;
+    preview.debug.midHitRate = Number.isFinite(mid?.hitRate) ? Number(mid.hitRate) : null;
     preview.debug.cornerRmsMm = Number.isFinite(corner?.rmsMm) ? Number(corner.rmsMm) : null;
     preview.debug.cornerRmsPx = Number.isFinite(preview.debug.cornerRmsMm) ? rmsMmToPreviewPx(preview.debug.cornerRmsMm) : null;
+    preview.debug.cornerHitRate = Number.isFinite(corner?.hitRate) ? Number(corner.hitRate) : null;
 
     const centerBest = findBestSensorShiftForSpot({ sy: 0, sz: 0, startShift: sensorShift });
     const cornerBest = findBestSensorShiftForSpot({ sy: cornerSy, sz: cornerSz, startShift: sensorShift });
@@ -5833,10 +5887,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   } else {
     preview.debug.centerRmsMm = null;
     preview.debug.centerRmsPx = null;
+    preview.debug.centerHitRate = null;
     preview.debug.midRmsMm = null;
     preview.debug.midRmsPx = null;
+    preview.debug.midHitRate = null;
     preview.debug.cornerRmsMm = null;
     preview.debug.cornerRmsPx = null;
+    preview.debug.cornerHitRate = null;
     preview.debug.bestFocusCenterShiftMm = null;
     preview.debug.bestFocusCornerShiftMm = null;
     preview.debug.fieldCurvatureDeltaMm = null;
@@ -6208,7 +6265,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   // --- run ---
   preview.worldReady = false;
 
-  if (!doDOF) {
+  if (previewMode === "fast") {
     renderFastLUT();
   } else {
     renderDOFPath();
@@ -6514,22 +6571,35 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   // -------------------- preview source + image load --------------------
   function syncPreviewFitUI() {
-    if (!ui.prevObjH || !ui.previewAutoFit) return;
+    if (!ui.prevObjH || !ui.prevObjW || !ui.previewAutoFit) return;
     const autoFit = !!ui.previewAutoFit.checked;
     ui.prevObjH.disabled = false;
+    ui.prevObjW.disabled = false;
     ui.prevObjH.readOnly = autoFit;
+    ui.prevObjW.readOnly = autoFit;
     ui.prevObjH.title = autoFit
       ? "Auto-filled from current distance/focus/framing"
       : "Manual object height in mm";
+    ui.prevObjW.title = autoFit
+      ? "Auto-filled from current distance/focus/framing"
+      : "Manual object width in mm";
   }
 
-  function setAutoObjectHeightMm(nextHeightMm) {
-    if (!ui.prevObjH) return;
+  function setAutoObjectSizeMm(nextWidthMm, nextHeightMm) {
+    const w = Number(nextWidthMm);
     const h = Number(nextHeightMm);
-    if (!Number.isFinite(h) || h <= 1e-6) return;
-    const prev = Number(ui.prevObjH.value);
-    if (Number.isFinite(prev) && Math.abs(prev - h) < 0.05) return;
-    ui.prevObjH.value = h.toFixed(2);
+    if (ui.prevObjW && Number.isFinite(w) && w > 1e-6) {
+      const prevW = Number(ui.prevObjW.value);
+      if (!Number.isFinite(prevW) || Math.abs(prevW - w) >= 0.05) {
+        ui.prevObjW.value = w.toFixed(2);
+      }
+    }
+    if (ui.prevObjH && Number.isFinite(h) && h > 1e-6) {
+      const prevH = Number(ui.prevObjH.value);
+      if (!Number.isFinite(prevH) || Math.abs(prevH - h) >= 0.05) {
+        ui.prevObjH.value = h.toFixed(2);
+      }
+    }
   }
 
   function getPreviewSourceUrl(modeRaw) {
@@ -7187,7 +7257,8 @@ function wireUI() {
   [
     "fieldAngle","rayCount","wavePreset",
     "focusMode","focusMechanism","lensFocus","focusShiftSlider","autoRefocusOnDistanceChange",
-    "renderScale","prevObjDist","prevObjH","prevRes","previewAutoFit","previewOrientation"
+    "renderScale","prevObjDist","prevObjH","prevObjW","prevRes",
+    "previewAutoFit","previewOrientation","previewRenderMode","pupilSamples"
   ].forEach((id) => {
     const el = ui[id];
     if (!el) return;
@@ -7231,6 +7302,14 @@ function wireUI() {
   if (ui.autoRefocusOnDistanceChange) {
     ui.autoRefocusOnDistanceChange.addEventListener("change", () => {
       syncFocusStateToLens();
+      scheduleRenderAll();
+      scheduleRenderPreview();
+    });
+  }
+  if (ui.autoFocusMode) {
+    ui.autoFocusMode.addEventListener("change", () => {
+      if (!lens.import_options || typeof lens.import_options !== "object") lens.import_options = {};
+      lens.import_options.autofocus_mode = getPreviewAutofocusMode();
       scheduleRenderAll();
       scheduleRenderPreview();
     });
