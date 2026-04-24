@@ -134,6 +134,7 @@
     prevObjDist: $("#prevObjDist"),
     prevObjH: $("#prevObjH"),
     prevRes: $("#prevRes"),
+    previewOrientation: $("#previewOrientation"),
     btnRenderPreview: $("#btnRenderPreview"),
     btnPreviewFS: $("#btnPreviewFS"),
     btnPreviewRuler: $("#btnPreviewRuler"),
@@ -177,8 +178,11 @@
     zmxPasteClose: $("#zmxPasteClose"),
 
     verifyPanel: $("#verifyPanel"),
+    verifyControls: $("#verifyControls"),
+    btnToggleVerifyPanel: $("#btnToggleVerifyPanel"),
     verifySummary: $("#verifySummary"),
     verifyWave: $("#verifyWave"),
+    verifyWaveHelp: $("#verifyWaveHelp"),
     verifyFields: $("#verifyFields"),
     verifyWeights: $("#verifyWeights"),
     verifyVig: $("#verifyVig"),
@@ -957,6 +961,7 @@ function warnMissingGlass(name) {
 
   function loadLens(obj) {
     lens = sanitizeLens(obj);
+    verifyPanelExpanded = false;
     focusRuntime.lastAutoKey = "";
     focusRuntime.lastAutoMetric = null;
     focusRuntime.lastAutoShiftMm = Number(lens?.focus?.shiftMm) || 0;
@@ -967,6 +972,7 @@ function warnMissingGlass(name) {
     if (ui.autoRefocusOnDistanceChange) {
       ui.autoRefocusOnDistanceChange.checked = lens?.focus?.autoRefocusOnDistanceChange !== false;
     }
+    updateZemaxVerifyChrome();
     ensureZemaxPrimaryWaveOption();
     const initialFocusShiftMm = Number(lens?.focus?.shiftMm);
     setFocusShiftMm(Number.isFinite(initialFocusShiftMm) ? initialFocusShiftMm : getFocusShiftMm(), { updateStatus: false });
@@ -3745,15 +3751,52 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return Number.isFinite(nm) ? `${v} (${nm.toFixed(1)}nm)` : v;
   }
 
+  let verifyPanelExpanded = false;
+
+  function hasZemaxLensMeta() {
+    return !!(lens?.zemax && typeof lens.zemax === "object");
+  }
+
+  function updateZemaxVerifyChrome() {
+    const hasZemax = hasZemaxLensMeta();
+    const shouldShowControls = true;
+    if (ui.verifyControls) {
+      ui.verifyControls.classList.toggle("hidden", !shouldShowControls);
+    }
+    if (ui.btnToggleVerifyPanel) {
+      ui.btnToggleVerifyPanel.textContent = verifyPanelExpanded ? "Hide Zemax Verify" : "Show Zemax Verify";
+      ui.btnToggleVerifyPanel.setAttribute("aria-expanded", verifyPanelExpanded ? "true" : "false");
+      ui.btnToggleVerifyPanel.setAttribute("aria-pressed", verifyPanelExpanded ? "true" : "false");
+      ui.btnToggleVerifyPanel.title = hasZemax
+        ? "Toggle Zemax verification details"
+        : "No Zemax metadata loaded. Click to open debug panel.";
+    }
+    if (ui.verifyPanel) {
+      ui.verifyPanel.classList.toggle("hidden", !verifyPanelExpanded);
+    }
+  }
+
   function updateZemaxVerifyPanel({ sensorX = 0 } = {}) {
     if (!ui.verifyPanel) return;
     const z = lens?.zemax;
+    updateZemaxVerifyChrome();
+
     if (!z) {
-      ui.verifyPanel.classList.add("hidden");
+      if (ui.verifySummary) ui.verifySummary.textContent = "No Zemax metadata loaded.";
+      if (ui.verifyWave) ui.verifyWave.textContent = "Load/import a Zemax lens to populate verify details.";
+      if (ui.verifyFields) ui.verifyFields.textContent = "Fields: —";
+      if (ui.verifyWeights) ui.verifyWeights.textContent = "Field weights: —";
+      if (ui.verifyVig) ui.verifyVig.textContent = "Vignetting factors: —";
+      if (ui.verifyPupil) ui.verifyPupil.textContent = "Entrance pupil Ø: —";
+      if (ui.verifyMatchZemaxWave) ui.verifyMatchZemaxWave.disabled = true;
+      if (ui.verifyWaveHelp) {
+        ui.verifyWaveHelp.textContent =
+          "Unchecked: use current dropdown wavelength (normal visible workflow). Checked: verify exactly at Zemax primary wavelength.";
+      }
       return;
     }
 
-    ui.verifyPanel.classList.remove("hidden");
+    if (ui.verifyMatchZemaxWave) ui.verifyMatchZemaxWave.disabled = false;
 
     const preferZemax = !!ui.verifyMatchZemaxWave?.checked;
     if (lens?.import_options) lens.import_options.match_zemax_wavelength = preferZemax;
@@ -3789,6 +3832,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const pwavTxt = Number.isFinite(pwavNm) ? `${pwavNm.toFixed(1)}nm` : "—";
       const modeTxt = preferZemax ? "match Zemax PWAV" : "use dropdown reference";
       ui.verifyWave.textContent = `Preview λ: ${wavePresetSemanticLabel(selectedPreset)} (${lambdaPreviewNm.toFixed(1)}nm) • Verify mode: ${modeTxt} • Zemax PWAV: ${pwavTxt}`;
+    }
+    if (ui.verifyWaveHelp) {
+      ui.verifyWaveHelp.textContent = preferZemax
+        ? "Checked: verify exactly at Zemax primary wavelength. Uncheck to use the current dropdown wavelength."
+        : "Unchecked: use current dropdown wavelength (normal visible workflow). Check to verify exactly at Zemax primary wavelength.";
     }
     if (ui.verifyFields) {
       ui.verifyFields.textContent = `Fields (${fields.length}): ${fieldTxt}`;
@@ -4976,6 +5024,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   const PREVIEW_AUTOFOCUS_DEFAULT_MODE = "chart-center";
   const PREVIEW_AUTOFOCUS_MODES = new Set(["chart-center", "chart-grid", "scene-center"]);
+  const PREVIEW_ORIENTATION_SET = new Set(["upright", "sensor-real"]);
 
   const PREVIEW_FOCUS_PUPIL_POINTS = [
     { y: 0.00, z: 0.00 },
@@ -5001,6 +5050,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       PREVIEW_AUTOFOCUS_DEFAULT_MODE
     ).trim().toLowerCase();
     return PREVIEW_AUTOFOCUS_MODES.has(raw) ? raw : PREVIEW_AUTOFOCUS_DEFAULT_MODE;
+  }
+
+  function getPreviewOrientation() {
+    const raw = String(ui.previewOrientation?.value || "upright").trim().toLowerCase();
+    return PREVIEW_ORIENTATION_SET.has(raw) ? raw : "upright";
   }
 
   function getPreviewAutofocusSensorSamples(sensorHv, autofocusMode) {
@@ -5367,6 +5421,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const doDOF = !!document.getElementById("optDOF")?.checked;
   const doCA  = !!document.getElementById("optCA")?.checked;
   const q     = String(document.getElementById("renderQuality")?.value || "normal");
+  const previewOrientation = getPreviewOrientation();
 
   const spp = doDOF ? (q === "hq" ? 64 : (q === "draft" ? 12 : 28)) : 1;
   const lutPupilSqrt = (q === "hq" ? 16 : (q === "draft" ? 10 : 14));
@@ -5501,11 +5556,24 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     ? autoFitObj.halfObjH
     : Math.max(1e-3, objHManual * 0.5);
   const halfObjW = halfObjH * imgAsp;
+  if (autoFill && autoFitObj && Number.isFinite(autoFitObj.halfObjH) && autoFitObj.halfObjH > 1e-6) {
+    setAutoObjectHeightMm(halfObjH * 2);
+  }
 
   function objectMmToUV(xmm, ymm) {
     const u = 0.5 + (xmm / (2 * halfObjW));
     const v = 0.5 - (ymm / (2 * halfObjH));
     return { u, v };
+  }
+
+  function objectHitToPreviewUV(xmm, ymm) {
+    let x = Number(xmm) || 0;
+    let y = Number(ymm) || 0;
+    if (previewOrientation === "upright") {
+      x = -x;
+      y = -y;
+    }
+    return objectMmToUV(x, y);
   }
 
   function naturalCos4(rS) {
@@ -5656,10 +5724,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const out = wctx.createImageData(W, H);
       const outD = out.data;
 
-      function objXY(L, sx, sy, rS) {
+      function objXYPhysical(L, sx, sy, rS) {
         if (rS <= 1e-9) return { ox: 0, oy: 0 };
         const s = L.rObj / rS;
-        return { ox: sx * s, oy: sy * s };
+        // LUT gives radial magnitude only; reconstruct physical object-plane sign
+        // from sensor coords (sensor-real convention = inverted image).
+        return { ox: -sx * s, oy: -sy * s };
       }
 
       for (let py = 0; py < H; py++) {
@@ -5679,8 +5749,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
               continue;
             }
 
-            const p = objXY(L, sx, sy, rS);
-            const uv0 = objectMmToUV(p.ox, p.oy);
+            const p = objXYPhysical(L, sx, sy, rS);
+            const uv0 = objectHitToPreviewUV(p.ox, p.oy);
 
             const su = (L.sigma * 0.85) / (2 * halfObjW);
             const sv = (L.sigma * 0.85) / (2 * halfObjH);
@@ -5722,8 +5792,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
           }
 
           function chanSample(L, sx, sy, rS, chGain, chIndex){
-            const p = objXY(L, sx, sy, rS);
-            const uv0 = objectMmToUV(p.ox, p.oy);
+            const p = objXYPhysical(L, sx, sy, rS);
+            const uv0 = objectHitToPreviewUV(p.ox, p.oy);
 
             const su = (L.sigma * 0.85) / (2 * halfObjW);
             const sv = (L.sigma * 0.85) / (2 * halfObjH);
@@ -5819,7 +5889,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
               const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
               if (!hitObj) continue;
 
-              const uv = objectMmToUV(hitObj.y, hitObj.z);
+              const uv = objectHitToPreviewUV(hitObj.y, hitObj.z);
               const c  = sample(uv.u, uv.v);
 
               colLin[ch] = srgbToLin(c[ch]);
@@ -6172,7 +6242,21 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   // -------------------- preview source + image load --------------------
   function syncPreviewFitUI() {
     if (!ui.prevObjH || !ui.previewAutoFit) return;
-    ui.prevObjH.disabled = !!ui.previewAutoFit.checked;
+    const autoFit = !!ui.previewAutoFit.checked;
+    ui.prevObjH.disabled = false;
+    ui.prevObjH.readOnly = autoFit;
+    ui.prevObjH.title = autoFit
+      ? "Auto-filled from current distance/focus/framing"
+      : "Manual object height in mm";
+  }
+
+  function setAutoObjectHeightMm(nextHeightMm) {
+    if (!ui.prevObjH) return;
+    const h = Number(nextHeightMm);
+    if (!Number.isFinite(h) || h <= 1e-6) return;
+    const prev = Number(ui.prevObjH.value);
+    if (Number.isFinite(prev) && Math.abs(prev - h) < 0.05) return;
+    ui.prevObjH.value = h.toFixed(2);
   }
 
   function getPreviewSourceUrl(modeRaw) {
@@ -6830,7 +6914,7 @@ function wireUI() {
   [
     "fieldAngle","rayCount","wavePreset",
     "focusMode","focusMechanism","lensFocus","focusShiftSlider","autoRefocusOnDistanceChange",
-    "renderScale","prevObjDist","prevObjH","prevRes","previewAutoFit"
+    "renderScale","prevObjDist","prevObjH","prevRes","previewAutoFit","previewOrientation"
   ].forEach((id) => {
     const el = ui[id];
     if (!el) return;
@@ -6993,6 +7077,13 @@ function wireUI() {
       scheduleRenderAll();
     });
   }
+  if (ui.btnToggleVerifyPanel) {
+    ui.btnToggleVerifyPanel.addEventListener("click", () => {
+      verifyPanelExpanded = !verifyPanelExpanded;
+      updateZemaxVerifyChrome();
+      scheduleRenderAll();
+    });
+  }
   syncPreviewFitUI();
 
   // preview buttons
@@ -7042,6 +7133,7 @@ function wireUI() {
 // -------------------- boot --------------------
 function boot() {
   wireUI();
+  updateZemaxVerifyChrome();
   updateRenderEngineButton();
   updateDebugOverlayButton();
   bindViewControls();

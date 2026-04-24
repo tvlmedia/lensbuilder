@@ -222,6 +222,14 @@
               </select>
             </div>
 
+            <div class="ctrl">
+              <label for="previewOrientation">Preview orientation</label>
+              <select id="previewOrientation">
+                <option value="upright" selected>Upright</option>
+                <option value="sensor-real">Sensor-real (inverted)</option>
+              </select>
+            </div>
+
             <div class="ctrl two">
               <label>&nbsp;</label>
               <button id="btnRenderPreview" class="btn btnPrimary" type="button">Render Preview</button>
@@ -271,12 +279,21 @@
           <div id="footerWarn" class="warn"></div>
         </div>
 
+        <div id="verifyControls" class="verifyControls hidden" aria-label="Zemax verify controls">
+          <button id="btnToggleVerifyPanel" class="btn verifyBtn" type="button" aria-expanded="false">
+            Show Zemax Verify
+          </button>
+        </div>
+
         <div id="verifyPanel" class="verifyPanel hidden" aria-label="Zemax verify panel">
           <div class="verifyTitle">Zemax Verify</div>
           <label class="verifyToggle" for="verifyMatchZemaxWave">
             <input id="verifyMatchZemaxWave" type="checkbox" />
             <span>Match Zemax wavelength</span>
           </label>
+          <div id="verifyWaveHelp" class="verifyHelp">
+            Unchecked: use current dropdown wavelength (normal visible workflow). Checked: verify exactly at Zemax primary wavelength.
+          </div>
           <div id="verifySummary" class="verifyLine">—</div>
           <div id="verifyWave" class="verifyLine">—</div>
           <div id="verifyFields" class="verifyLine">—</div>

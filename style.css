@@ -320,34 +320,60 @@ body{
   word-break:break-word;
 }
 
+.verifyControls{
+  margin-top:10px;
+  display:flex;
+  justify-content:flex-start;
+}
+.verifyBtn{
+  padding:7px 10px;
+  font-size:11px;
+  line-height:1.1;
+  border-radius:10px;
+  background:rgba(255,255,255,.02);
+  border-color:rgba(255,255,255,.12);
+  color:rgba(255,255,255,.68);
+}
+.verifyBtn:hover{
+  background:rgba(255,255,255,.05);
+}
+
 .verifyPanel{
   margin-top:10px;
-  padding:10px 12px;
-  border:1px solid var(--stroke2);
+  padding:9px 11px;
+  border:1px dashed rgba(255,255,255,.18);
   border-radius:14px;
-  background:rgba(0,0,0,.22);
+  background:rgba(0,0,0,.14);
+  opacity:.92;
 }
 .verifyTitle{
-  font-size:12px;
+  font-size:11px;
   font-weight:700;
   letter-spacing:.2px;
-  color:rgba(255,255,255,.90);
+  color:rgba(255,255,255,.72);
   margin-bottom:6px;
+  text-transform:uppercase;
 }
 .verifyToggle{
   display:flex;
   align-items:center;
   gap:8px;
-  font-size:12px;
-  color:rgba(255,255,255,.78);
-  margin-bottom:8px;
+  font-size:11px;
+  color:rgba(255,255,255,.74);
+  margin-bottom:6px;
 }
 .verifyToggle input{
   transform:scale(1.05);
 }
+.verifyHelp{
+  font-size:11px;
+  color:rgba(255,255,255,.56);
+  margin-bottom:8px;
+  line-height:1.35;
+}
 .verifyLine{
-  font-size:12px;
-  color:rgba(255,255,255,.72);
+  font-size:11px;
+  color:rgba(255,255,255,.66);
   line-height:1.35;
   white-space:normal;
   word-break:break-word;
