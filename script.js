@@ -127,6 +127,8 @@
     sensorPreset: $("#sensorPreset"),
     sensorW: $("#sensorW"),
     sensorH: $("#sensorH"),
+    zoomConfigWrap: $("#zoomConfigWrap"),
+    zoomConfigSelect: $("#zoomConfigSelect"),
 
     fieldAngle: $("#fieldAngle"),
     useZemaxFields: $("#useZemaxFields"),
@@ -203,6 +205,7 @@
     verifyWeights: $("#verifyWeights"),
     verifyVig: $("#verifyVig"),
     verifyPupil: $("#verifyPupil"),
+    verifyZoom: $("#verifyZoom"),
     verifyMatchZemaxWave: $("#verifyMatchZemaxWave"),
 
     toastHost: $("#toastHost"),
@@ -834,6 +837,39 @@ function warnMissingGlass(name) {
       ? Math.max(...fields.map((f) => Math.abs(Number(f.angleDeg) || 0)))
       : null;
 
+    const zoomConfigCountRaw = Number(z.zoomConfigCount);
+    const zoomConfigCount = Number.isFinite(zoomConfigCountRaw)
+      ? Math.max(0, Math.trunc(zoomConfigCountRaw))
+      : null;
+    const currentConfigIndexRaw = Number(z.currentConfigIndex);
+    const currentConfigIndex = Number.isFinite(currentConfigIndexRaw)
+      ? Math.max(1, Math.trunc(currentConfigIndexRaw))
+      : null;
+    const currentConfigLabel = (z?.currentConfigLabel != null && String(z.currentConfigLabel).trim() !== "")
+      ? String(z.currentConfigLabel).trim()
+      : null;
+    const configApertureRaw = Number(z.configAperture);
+    const configAperture = Number.isFinite(configApertureRaw) ? configApertureRaw : null;
+    const baseFields = toFiniteList(z.baseFields, (f, idx) => {
+      const angle = Number(f?.angleDeg ?? f?.fieldDeg ?? f);
+      if (!Number.isFinite(angle)) return null;
+      const weightRaw = Number(f?.weight);
+      const weight = Number.isFinite(weightRaw) ? Math.max(0, weightRaw) : 1;
+      const vdx = Number(f?.vdx);
+      const vdy = Number(f?.vdy);
+      const vcx = Number(f?.vcx);
+      const vcy = Number(f?.vcy);
+      return {
+        index: Number.isFinite(Number(f?.index)) ? Number(f.index) : idx,
+        angleDeg: angle,
+        weight,
+        vdx: Number.isFinite(vdx) ? vdx : 0,
+        vdy: Number.isFinite(vdy) ? vdy : 0,
+        vcx: Number.isFinite(vcx) ? vcx : 0,
+        vcy: Number.isFinite(vcy) ? vcy : 0,
+      };
+    });
+
     return {
       source: String(z.source || "zemax"),
       name: (z?.name != null && String(z.name).trim() !== "") ? String(z.name).trim() : null,
@@ -845,7 +881,83 @@ function warnMissingGlass(name) {
       primaryWavelengthNm,
       fields,
       maxFieldAngleDeg,
+      zoomConfigCount,
+      currentConfigIndex,
+      currentConfigLabel,
+      configAperture,
+      baseFields,
     };
+  }
+
+  function sanitizeZoomFieldOverrideMap(src) {
+    const out = {};
+    const obj = (src && typeof src === "object") ? src : {};
+    for (const [k, v] of Object.entries(obj)) {
+      const keyNum = Number(k);
+      const valNum = Number(v);
+      if (!Number.isFinite(keyNum) || !Number.isFinite(valNum)) continue;
+      out[String(Math.max(0, Math.trunc(keyNum)))] = valNum;
+    }
+    return out;
+  }
+
+  function sanitizeZoomModel(z) {
+    if (!z || typeof z !== "object") return null;
+    const rawConfigs = Array.isArray(z.configs) ? z.configs : [];
+    const configs = rawConfigs
+      .map((cfg, idx) => {
+        const indexRaw = Number(cfg?.index);
+        const index = Number.isFinite(indexRaw) ? Math.max(1, Math.trunc(indexRaw)) : (idx + 1);
+        const label = (cfg?.label != null && String(cfg.label).trim() !== "")
+          ? String(cfg.label).trim()
+          : null;
+        const apertureRaw = Number(cfg?.aperture);
+        const aperture = Number.isFinite(apertureRaw) ? apertureRaw : null;
+
+        const thicRaw = (cfg?.thicknessOverrides && typeof cfg.thicknessOverrides === "object")
+          ? cfg.thicknessOverrides
+          : {};
+        const thicknessOverrides = {};
+        for (const [k, v] of Object.entries(thicRaw)) {
+          const surfNo = Number(k);
+          const val = Number(v);
+          if (!Number.isFinite(surfNo) || !Number.isFinite(val)) continue;
+          thicknessOverrides[String(Math.max(0, Math.trunc(surfNo)))] = val;
+        }
+
+        const fov = (cfg?.fieldOverrides && typeof cfg.fieldOverrides === "object")
+          ? cfg.fieldOverrides
+          : {};
+        const fieldOverrides = {
+          vdx: sanitizeZoomFieldOverrideMap(fov.vdx),
+          vdy: sanitizeZoomFieldOverrideMap(fov.vdy),
+          vcx: sanitizeZoomFieldOverrideMap(fov.vcx),
+          vcy: sanitizeZoomFieldOverrideMap(fov.vcy),
+        };
+
+        const overrideSurfaceNumbers = Object.keys(thicknessOverrides)
+          .map((k) => Number(k))
+          .filter((n) => Number.isFinite(n))
+          .sort((a, b) => a - b);
+
+        return {
+          index,
+          label,
+          aperture,
+          thicknessOverrides,
+          fieldOverrides,
+          overrideSurfaceNumbers,
+        };
+      })
+      .sort((a, b) => a.index - b.index);
+
+    if (!configs.length) return null;
+    const activeRaw = Number(z.activeConfig);
+    const activeConfig = configs.some((c) => c.index === activeRaw)
+      ? activeRaw
+      : configs[0].index;
+
+    return { activeConfig, configs };
   }
 
   function sanitizeLens(obj) {
@@ -910,6 +1022,7 @@ function warnMissingGlass(name) {
       ? String(obj.zemaxVersion).trim()
       : null,
     zemax: sanitizeZemaxMeta(obj?.zemax),
+    zoom: sanitizeZoomModel(obj?.zoom),
     focus: {
       mode: focusMode,
       mechanism: focusMechanism,
@@ -957,6 +1070,22 @@ function warnMissingGlass(name) {
       glass_nd: glassNd,
       glass_vd: glassVd,
       stop: Boolean(s?.stop ?? false),
+      zmx: {
+        surf: Number.isFinite(Number(s?.zmx?.surf)) ? Number(s.zmx.surf) : null,
+        curv: Number.isFinite(Number(s?.zmx?.curv)) ? Number(s.zmx.curv) : null,
+        disz: Number.isFinite(Number(s?.zmx?.disz)) ? Number(s.zmx.disz) : null,
+        diam: Number.isFinite(Number(s?.zmx?.diam)) ? Number(s.zmx.diam) : null,
+        glass_name: (s?.zmx?.glass_name != null && String(s.zmx.glass_name).trim() !== "")
+          ? String(s.zmx.glass_name).trim()
+          : originalGlass,
+        nd: glassNd,
+        vd: glassVd,
+        glass_nd: glassNd,
+        glass_vd: glassVd,
+        baseDisz: Number.isFinite(Number(s?.zmx?.baseDisz))
+          ? Number(s.zmx.baseDisz)
+          : (Number.isFinite(Number(s?.t)) ? Number(s.t) : null),
+      },
     };
   });
 
@@ -976,6 +1105,133 @@ function warnMissingGlass(name) {
   }
 
   let lens = sanitizeLens(omit50ConceptV1());
+
+  function zoomRoleForIndex(idx, total) {
+    if (total <= 1) return null;
+    if (idx === 0) return "Wide";
+    if (idx === total - 1) return "Tele";
+    return "Mid";
+  }
+
+  function formatZoomConfigLabel(cfg, idx, total) {
+    const role = zoomRoleForIndex(idx, total);
+    const raw = String(cfg?.label || "").trim();
+    if (raw) {
+      if (role) return `${role} — ${raw}`;
+      return `Config ${cfg?.index ?? (idx + 1)} — ${raw}`;
+    }
+    if (role) return `${role} — Config ${cfg?.index ?? (idx + 1)}`;
+    return `Config ${cfg?.index ?? (idx + 1)}`;
+  }
+
+  function updateZoomConfigUI() {
+    if (!ui.zoomConfigWrap || !ui.zoomConfigSelect) return;
+    const configs = Array.isArray(lens?.zoom?.configs) ? lens.zoom.configs : [];
+    if (configs.length <= 1) {
+      ui.zoomConfigWrap.classList.add("hidden");
+      ui.zoomConfigSelect.innerHTML = "";
+      return;
+    }
+
+    const active = Number(lens?.zoom?.activeConfig);
+    ui.zoomConfigSelect.innerHTML = configs
+      .map((cfg, idx) => {
+        const label = formatZoomConfigLabel(cfg, idx, configs.length);
+        const val = Number(cfg?.index);
+        return `<option value="${Number.isFinite(val) ? val : (idx + 1)}">${label}</option>`;
+      })
+      .join("");
+    const activeCfg = configs.some((cfg) => Number(cfg?.index) === active)
+      ? active
+      : Number(configs[0]?.index || 1);
+    ui.zoomConfigSelect.value = String(activeCfg);
+    ui.zoomConfigWrap.classList.remove("hidden");
+  }
+
+  function applyZoomConfigToLens(configIndex, opts = {}) {
+    const options = {
+      silent: opts?.silent === true,
+      skipBuild: opts?.skipBuild === true,
+      skipRender: opts?.skipRender === true,
+    };
+    if (!lens?.zoom?.configs?.length) return false;
+
+    const target = Number(configIndex);
+    const cfg = lens.zoom.configs.find((c) => Number(c?.index) === target);
+    if (!cfg) return false;
+
+    for (const s of lens.surfaces || []) {
+      if (!s || !isPhysicalSurfaceType(s?.type)) continue;
+      if (!s.zmx || typeof s.zmx !== "object") s.zmx = {};
+      if (!Number.isFinite(Number(s.zmx.baseDisz)) && Number.isFinite(Number(s.t))) {
+        s.zmx.baseDisz = Number(s.t);
+      }
+
+      const surfNo = Number(s?.zmx?.surf);
+      if (!Number.isFinite(surfNo)) continue;
+
+      const key = String(Math.max(0, Math.trunc(surfNo)));
+      const override = Number(cfg?.thicknessOverrides?.[key]);
+      if (Number.isFinite(override)) {
+        s.t = override;
+      } else if (Number.isFinite(Number(s?.zmx?.baseDisz))) {
+        s.t = Number(s.zmx.baseDisz);
+      }
+    }
+
+    const cfgIdx = lens.zoom.configs.findIndex((c) => Number(c?.index) === Number(cfg.index));
+    if (!lens.zemax || typeof lens.zemax !== "object") lens.zemax = {};
+    lens.zemax.zoomConfigCount = Math.max(0, Number(lens.zoom.configs.length) || 0);
+    lens.zemax.currentConfigIndex = Number(cfg.index);
+    lens.zemax.currentConfigLabel = formatZoomConfigLabel(cfg, Math.max(0, cfgIdx), lens.zoom.configs.length);
+    lens.zemax.configAperture = Number.isFinite(Number(cfg?.aperture)) ? Number(cfg.aperture) : null;
+
+    const hasFieldOverrides = !!(
+      cfg?.fieldOverrides &&
+      (Object.keys(cfg.fieldOverrides.vdx || {}).length ||
+       Object.keys(cfg.fieldOverrides.vdy || {}).length ||
+       Object.keys(cfg.fieldOverrides.vcx || {}).length ||
+       Object.keys(cfg.fieldOverrides.vcy || {}).length)
+    );
+    if (Array.isArray(lens?.zemax?.fields)) {
+      if (!Array.isArray(lens.zemax.baseFields) || !lens.zemax.baseFields.length) {
+        lens.zemax.baseFields = clone(lens.zemax.fields);
+      }
+      const baseFields = Array.isArray(lens.zemax.baseFields) ? lens.zemax.baseFields : [];
+      const ov = cfg.fieldOverrides || {};
+      const pick = (mapObj, keys, fallback) => {
+        for (const k of keys) {
+          const v = Number(mapObj?.[k]);
+          if (Number.isFinite(v)) return v;
+        }
+        return fallback;
+      };
+      lens.zemax.fields = baseFields.map((f, i) => {
+        const idx0 = Number.isFinite(Number(f?.index)) ? Number(f.index) : i;
+        const keys = [String(i + 1), String(i), String(idx0), String(idx0 + 1)];
+        return {
+          ...f,
+          vdx: pick(ov.vdx, keys, Number(f?.vdx) || 0),
+          vdy: pick(ov.vdy, keys, Number(f?.vdy) || 0),
+          vcx: pick(ov.vcx, keys, Number(f?.vcx) || 0),
+          vcy: pick(ov.vcy, keys, Number(f?.vcy) || 0),
+        };
+      });
+      lens.zemax.currentFieldOverrideSource = hasFieldOverrides ? `config_${cfg.index}` : "base";
+    }
+
+    lens.zoom.activeConfig = Number(cfg.index);
+    clampAllApertures(lens.surfaces);
+    updateZoomConfigUI();
+
+    if (!options.skipBuild) buildTable();
+    if (!options.skipRender) {
+      renderAll();
+      scheduleRenderPreview();
+    }
+    if (!options.silent) toast(`Zoom config: ${formatZoomConfigLabel(cfg, Math.max(0, cfgIdx), lens.zoom.configs.length)}`);
+    return true;
+  }
 
   function loadLens(obj) {
     lens = sanitizeLens(obj);
@@ -1003,6 +1259,16 @@ function warnMissingGlass(name) {
     syncFocusControlsUI();
     selectedIndex = 0;
     clampAllApertures(lens.surfaces);
+    updateZoomConfigUI();
+    if (Array.isArray(lens?.zoom?.configs) && lens.zoom.configs.length) {
+      const firstIdx = Number(lens.zoom.configs[0]?.index || 1);
+      const desired = Number.isFinite(Number(lens?.zoom?.activeConfig))
+        ? Number(lens.zoom.activeConfig)
+        : firstIdx;
+      if (!applyZoomConfigToLens(desired, { silent: true, skipBuild: true, skipRender: true })) {
+        applyZoomConfigToLens(firstIdx, { silent: true, skipBuild: true, skipRender: true });
+      }
+    }
     buildTable();
     applySensorToIMS();
     renderAll();
@@ -3815,6 +4081,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       if (ui.verifyWeights) ui.verifyWeights.textContent = "Field weights: —";
       if (ui.verifyVig) ui.verifyVig.textContent = "Vignetting factors: —";
       if (ui.verifyPupil) ui.verifyPupil.textContent = "Entrance pupil Ø: —";
+      if (ui.verifyZoom) ui.verifyZoom.textContent = "Zemax zoom configs: —";
       if (ui.verifyMatchZemaxWave) ui.verifyMatchZemaxWave.disabled = true;
       if (ui.verifyWaveHelp) {
         ui.verifyWaveHelp.textContent =
@@ -3878,6 +4145,22 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const epTxt = Number.isFinite(Number(verifyEP?.diameterMm)) ? `${Number(verifyEP.diameterMm).toFixed(4)}mm` : "—";
       const epMethod = String(verifyEP?.method || "n/a");
       ui.verifyPupil.textContent = `Entrance pupil Ø: ${epTxt} • method: ${epMethod} • sensorX=${Number(sensorX || 0).toFixed(4)}mm`;
+    }
+    if (ui.verifyZoom) {
+      const zoomConfigs = Array.isArray(lens?.zoom?.configs) ? lens.zoom.configs : [];
+      const activeIdx = Number(lens?.zoom?.activeConfig);
+      const activeCfg = zoomConfigs.find((c) => Number(c?.index) === activeIdx) || zoomConfigs[0] || null;
+      const activeLabel = activeCfg
+        ? formatZoomConfigLabel(activeCfg, zoomConfigs.findIndex((c) => c === activeCfg), zoomConfigs.length)
+        : "—";
+      const thicList = activeCfg?.overrideSurfaceNumbers?.length
+        ? activeCfg.overrideSurfaceNumbers.join(", ")
+        : "—";
+      const apTxt = Number.isFinite(Number(activeCfg?.aperture))
+        ? Number(activeCfg.aperture).toFixed(4)
+        : "—";
+      ui.verifyZoom.textContent =
+        `Zemax zoom configs: ${zoomConfigs.length || 1} • Active: ${activeLabel} • Overrides: THIC ${thicList} • Imported F/#: ${apTxt}`;
     }
   }
 
@@ -6820,8 +7103,191 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     };
   }
 
+  function extractLikelyZemaxLinesFromText(txt) {
+    const all = String(txt || "").replace(/\r/g, "").split("\n");
+    if (!all.length) return [];
+    const idxVers = all.findIndex((ln) => /^\s*VERS\b/i.test(ln));
+    const idxModeSeq = all.findIndex((ln) => /^\s*MODE\s+SEQ\b/i.test(ln));
+    const idxModeAny = all.findIndex((ln) => /^\s*MODE\b/i.test(ln));
+    const idxSurf = all.findIndex((ln) => /^\s*SURF\s+-?\d+/i.test(ln));
+    let start = -1;
+
+    const preferred = [idxVers, idxModeSeq].filter((n) => n >= 0);
+    if (preferred.length) {
+      start = Math.min(...preferred);
+    } else if (idxModeAny >= 0) {
+      start = idxModeAny;
+    } else if (idxSurf >= 0) {
+      start = idxSurf;
+    }
+
+    if (start < 0) return all;
+    return all.slice(start);
+  }
+
+  function parseZemaxMultiConfigLines(lines, unitScaleDefault = 1) {
+    const out = {
+      count: 1,
+      configsByIndex: new Map(),
+    };
+    if (!Array.isArray(lines) || !lines.length) return out;
+
+    let unitScaleToMm = Number.isFinite(Number(unitScaleDefault)) ? Number(unitScaleDefault) : 1;
+    const ensureConfig = (cfgIndex) => {
+      const idx = Number.isFinite(Number(cfgIndex)) ? Math.max(1, Math.trunc(Number(cfgIndex))) : 1;
+      if (!out.configsByIndex.has(idx)) {
+        out.configsByIndex.set(idx, {
+          index: idx,
+          label: null,
+          aperture: null,
+          thicknessOverrides: {},
+          fieldOverrides: { vdx: {}, vdy: {}, vcx: {}, vcy: {} },
+        });
+      }
+      return out.configsByIndex.get(idx);
+    };
+
+    for (const raw of lines) {
+      const line = String(raw || "").trim();
+      if (!line) continue;
+
+      const mUnit = line.match(/^UNIT\s+([A-Za-z]+)/i);
+      if (mUnit) {
+        unitScaleToMm = unitTokenToMmScale(mUnit[1]);
+        continue;
+      }
+
+      const mNum = line.match(/^MNUM\s+(\d+)/i);
+      if (mNum) {
+        out.count = Math.max(out.count, Math.max(1, Math.trunc(Number(mNum[1]))));
+        continue;
+      }
+
+      const mOffQuoted = line.match(/^MOFF\s+0\s+(\d+)\s+"([^"]*)"/i);
+      if (mOffQuoted) {
+        const cfg = ensureConfig(Number(mOffQuoted[1]));
+        const label = String(mOffQuoted[2] || "").trim();
+        if (label) cfg.label = label;
+        continue;
+      }
+      const mOffBare = line.match(/^MOFF\s+0\s+(\d+)\s+(.+)$/i);
+      if (mOffBare) {
+        const cfg = ensureConfig(Number(mOffBare[1]));
+        const label = stripOptionalQuotes(String(mOffBare[2] || "")).trim();
+        if (label) cfg.label = label;
+        continue;
+      }
+
+      const mAper = line.match(/^APER\s+0\s+(\d+)\s+([-+0-9.Ee]+)/i);
+      if (mAper) {
+        const cfg = ensureConfig(Number(mAper[1]));
+        const val = Number(mAper[2]);
+        if (Number.isFinite(val)) cfg.aperture = val;
+        continue;
+      }
+
+      const mThic = line.match(/^THIC\s+(\d+)\s+(\d+)\s+([-+0-9.Ee]+)/i);
+      if (mThic) {
+        const surfNo = Math.max(0, Math.trunc(Number(mThic[1])));
+        const cfg = ensureConfig(Number(mThic[2]));
+        const val = Number(mThic[3]);
+        if (Number.isFinite(val)) cfg.thicknessOverrides[String(surfNo)] = val * unitScaleToMm;
+        continue;
+      }
+
+      const mFv = line.match(/^FV(DX|DY|CX|CY)\s+(\d+)\s+(\d+)\s+([-+0-9.Ee]+)/i);
+      if (mFv) {
+        const axis = String(mFv[1] || "").toLowerCase();
+        const fieldIndex = Math.max(0, Math.trunc(Number(mFv[2])));
+        const cfg = ensureConfig(Number(mFv[3]));
+        const val = Number(mFv[4]);
+        if (!Number.isFinite(val)) continue;
+        const key = `v${axis}`;
+        if (!cfg.fieldOverrides[key]) cfg.fieldOverrides[key] = {};
+        cfg.fieldOverrides[key][String(fieldIndex)] = val;
+      }
+    }
+
+    for (let i = 1; i <= out.count; i++) ensureConfig(i);
+    return out;
+  }
+
+  function buildZoomConfigsFromMeta(multiConfig, surfaces) {
+    if (!multiConfig || typeof multiConfig !== "object") return [];
+    const map = multiConfig.configsByIndex instanceof Map ? multiConfig.configsByIndex : new Map();
+    if (!map.size && !(Number(multiConfig.count) > 1)) return [];
+
+    const knownSurfNos = new Set(
+      (Array.isArray(surfaces) ? surfaces : [])
+        .map((s) => Number(s?.zmx?.surf))
+        .filter((n) => Number.isFinite(n))
+        .map((n) => Math.max(0, Math.trunc(n)))
+    );
+
+    const count = Math.max(1, Number.isFinite(Number(multiConfig.count)) ? Math.trunc(Number(multiConfig.count)) : 1);
+    for (let i = 1; i <= count; i++) {
+      if (!map.has(i)) {
+        map.set(i, {
+          index: i,
+          label: null,
+          aperture: null,
+          thicknessOverrides: {},
+          fieldOverrides: { vdx: {}, vdy: {}, vcx: {}, vcy: {} },
+        });
+      }
+    }
+
+    const list = Array.from(map.values())
+      .map((cfg, arrIdx) => {
+        const index = Math.max(1, Math.trunc(Number(cfg?.index || (arrIdx + 1))));
+        const label = (cfg?.label != null && String(cfg.label).trim() !== "")
+          ? String(cfg.label).trim()
+          : null;
+        const aperture = Number.isFinite(Number(cfg?.aperture)) ? Number(cfg.aperture) : null;
+
+        const thicknessOverrides = {};
+        for (const [k, v] of Object.entries(cfg?.thicknessOverrides || {})) {
+          const surfNo = Math.max(0, Math.trunc(Number(k)));
+          const val = Number(v);
+          if (!Number.isFinite(surfNo) || !Number.isFinite(val)) continue;
+          // Keep known surface overrides, but also keep unknown keys for diagnostics and round-trip.
+          if (knownSurfNos.size > 0 && !knownSurfNos.has(surfNo)) {
+            thicknessOverrides[String(surfNo)] = val;
+            continue;
+          }
+          thicknessOverrides[String(surfNo)] = val;
+        }
+
+        const fieldOverrides = {
+          vdx: sanitizeZoomFieldOverrideMap(cfg?.fieldOverrides?.vdx),
+          vdy: sanitizeZoomFieldOverrideMap(cfg?.fieldOverrides?.vdy),
+          vcx: sanitizeZoomFieldOverrideMap(cfg?.fieldOverrides?.vcx),
+          vcy: sanitizeZoomFieldOverrideMap(cfg?.fieldOverrides?.vcy),
+        };
+
+        const overrideSurfaceNumbers = Object.keys(thicknessOverrides)
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n))
+          .sort((a, b) => a - b);
+
+        return {
+          index,
+          label,
+          aperture,
+          thicknessOverrides,
+          fieldOverrides,
+          overrideSurfaceNumbers,
+        };
+      })
+      .sort((a, b) => a.index - b.index);
+
+    const hasThic = list.some((cfg) => Object.keys(cfg.thicknessOverrides || {}).length > 0);
+    if (!hasThic && list.length <= 1) return [];
+    return list;
+  }
+
   function parseZemaxSequentialText(txt, sourceName = "Zemax file") {
-    const lines = String(txt || "").replace(/\r/g, "").split("\n");
+    const lines = extractLikelyZemaxLinesFromText(txt);
     if (!lines.length) throw new Error("Empty file");
 
     let unitScaleToMm = 1;
@@ -6844,6 +7310,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         vcx: [],
         vcy: [],
       },
+      multiConfig: parseZemaxMultiConfigLines(lines, unitScaleToMm),
     };
 
     const pushCur = () => {
@@ -7030,7 +7497,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         zmx: {
           surf: s.idx,
           curv: curv,
-          disz: Number(s.DISZ),
+          disz: t,
+          disz_raw: Number(s.DISZ),
+          baseDisz: t,
           diam: Number(s.DIAM),
           glass_name: originalGlass,
           nd: glassNd,
@@ -7078,6 +7547,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       });
     }
 
+    const zoomConfigs = buildZoomConfigsFromMeta(zemaxMeta.multiConfig, surfaces);
+    const zoom = zoomConfigs.length
+      ? { activeConfig: Number(zoomConfigs[0]?.index || 1), configs: zoomConfigs }
+      : null;
+
     const lensName = zemaxMeta.name || sourceNameToLensName(sourceName);
     return {
       name: lensName,
@@ -7105,7 +7579,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         primaryWavelengthIndex,
         primaryWavelengthNm,
         fields,
+        zoomConfigCount: zoomConfigs.length,
+        currentConfigIndex: zoom ? zoom.activeConfig : null,
+        currentConfigLabel: zoom ? (zoom.configs[0]?.label || `Config ${zoom.activeConfig}`) : null,
+        configAperture: zoom ? (Number.isFinite(Number(zoom.configs[0]?.aperture)) ? Number(zoom.configs[0].aperture) : null) : null,
       },
+      ...(zoom ? { zoom } : {}),
       surfaces,
     };
   }
@@ -7114,16 +7593,19 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const text = String(rawText ?? "").trim();
     if (!text) throw new Error("Paste Zemax text first.");
 
-    const hasSurf = /(^|\n)\s*SURF\s+-?\d+/im.test(text);
+    const normalizedBlock = extractLikelyZemaxLinesFromText(text).join("\n").trim();
+    if (!normalizedBlock) throw new Error("Paste Zemax text first.");
+
+    const hasSurf = /(^|\n)\s*SURF\s+-?\d+/im.test(normalizedBlock);
     if (!hasSurf) throw new Error("This does not look like a Zemax sequential file.");
 
-    const hasModeSeq = /(^|\n)\s*MODE\s+SEQ\b/im.test(text);
-    const hasVers = /(^|\n)\s*VERS\b/im.test(text);
-    if (!hasModeSeq && !hasVers && !/(^|\n)\s*CURV\s+/im.test(text)) {
+    const hasModeSeq = /(^|\n)\s*MODE\s+SEQ\b/im.test(normalizedBlock);
+    const hasVers = /(^|\n)\s*VERS\b/im.test(normalizedBlock);
+    if (!hasModeSeq && !hasVers && !/(^|\n)\s*CURV\s+/im.test(normalizedBlock)) {
       throw new Error("This does not look like a Zemax sequential file.");
     }
 
-    const parsed = parseZemaxSequentialText(text, sourceName);
+    const parsed = parseZemaxSequentialText(normalizedBlock, sourceName);
     parsed.importSource = String(opts.importSource || "zmx_text");
     parsed.originalZmxText = text;
     parsed.zemaxName = parsed.zemaxName || parsed.zemax?.name || null;
@@ -7320,6 +7802,12 @@ function wireUI() {
       lens.import_options.autofocus_mode = getPreviewAutofocusMode();
       scheduleRenderAll();
       scheduleRenderPreview();
+    });
+  }
+  if (ui.zoomConfigSelect) {
+    ui.zoomConfigSelect.addEventListener("change", () => {
+      const idx = Number(ui.zoomConfigSelect.value);
+      applyZoomConfigToLens(idx);
     });
   }
 
