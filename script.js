@@ -55,6 +55,11 @@
 
     // overlay
     rulerOn: false,
+    sourceMode: "chart",
+    sourceUrls: {
+      chart: null,
+      custom: null,
+    },
 
     // auto-detected usable image circle (based on vignette falloff)
     usableCircle: {
@@ -97,6 +102,7 @@
     sensorH: $("#sensorH"),
 
     fieldAngle: $("#fieldAngle"),
+    useZemaxFields: $("#useZemaxFields"),
     rayCount: $("#rayCount"),
     wavePreset: $("#wavePreset"),
     sensorOffset: $("#sensorOffset"),
@@ -105,6 +111,8 @@
     renderScale: $("#renderScale"),
 
     prevImg: $("#prevImg"),
+    previewSourceMode: $("#previewSourceMode"),
+    previewAutoFit: $("#previewAutoFit"),
     prevObjDist: $("#prevObjDist"),
     prevObjH: $("#prevObjH"),
     prevRes: $("#prevRes"),
@@ -141,6 +149,14 @@
     nlT: $("#nlT"),
     nlStopPos: $("#nlStopPos"),
     nlName: $("#nlName"),
+
+    verifyPanel: $("#verifyPanel"),
+    verifySummary: $("#verifySummary"),
+    verifyWave: $("#verifyWave"),
+    verifyFields: $("#verifyFields"),
+    verifyWeights: $("#verifyWeights"),
+    verifyVig: $("#verifyVig"),
+    verifyPupil: $("#verifyPupil"),
 
     toastHost: $("#toastHost"),
   };
@@ -187,7 +203,7 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
     return { w, h, halfH: Math.max(0.1, h * 0.5), halfW: Math.max(0.1, w * 0.5) };
   }
 
-  const OV = 1.6; // overscan factor for preview
+  const OV_DEFAULT = 1.0; // 1.0 keeps preview framing sensor-filled
   const USABLE_CIRCLE_THRESHOLD_REL = 0.35; // 35% of center illumination
 
   function updateUsableCircleBadges() {
@@ -206,6 +222,7 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
   // -------------------- default preview chart (GitHub) --------------------
   const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
   const DEFAULT_LENS_URL = "./bijna-goed.json";
+  preview.sourceUrls.chart = DEFAULT_PREVIEW_URL;
 
   function syncIMSCellApertureToUI() {
     if (!ui.tbody || !lens?.surfaces?.length) return;
@@ -440,10 +457,47 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
 
   function wavePresetToLambdaNm(w){
     const ww = String(w || "d");
+    const mNm = ww.match(/^nm:\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)$/i);
+    if (mNm) {
+      const nm = Number(mNm[1]);
+      if (Number.isFinite(nm) && nm > 0) return nm;
+    }
+    const asNum = Number(ww);
+    if (Number.isFinite(asNum) && asNum > 0) return asNum;
     if (ww === "c" || ww === "C") return WL.C;
     if (ww === "F") return WL.F;
     if (ww === "g") return WL.g;
     return WL.d;
+  }
+
+  function ensureWavePresetOptionForNm(nm, labelPrefix = "Custom") {
+    if (!ui.wavePreset) return null;
+    const n = Number(nm);
+    if (!Number.isFinite(n) || n <= 0) return null;
+
+    const value = `nm:${n.toFixed(3)}`;
+    let opt = Array.from(ui.wavePreset.options).find((o) => String(o.value) === value);
+    if (!opt) {
+      opt = document.createElement("option");
+      opt.value = value;
+      ui.wavePreset.appendChild(opt);
+    }
+    opt.textContent = `${labelPrefix} (${n.toFixed(1)}nm)`;
+    return value;
+  }
+
+  function setWavePresetFromNm(nm, labelPrefix = "Custom") {
+    if (!ui.wavePreset) return;
+    const n = Number(nm);
+    if (!Number.isFinite(n) || n <= 0) return;
+
+    if (Math.abs(n - WL.d) < 1.0) { ui.wavePreset.value = "d"; return; }
+    if (Math.abs(n - WL.g) < 1.0) { ui.wavePreset.value = "g"; return; }
+    if (Math.abs(n - WL.C) < 1.0) { ui.wavePreset.value = "c"; return; }
+    if (Math.abs(n - WL.F) < 1.0) { ui.wavePreset.value = "F"; return; }
+
+    const v = ensureWavePresetOptionForNm(n, labelPrefix);
+    if (v) ui.wavePreset.value = v;
   }
 
 function glassN(glassName, wavePresetOrNm = "d") {
@@ -636,12 +690,68 @@ function warnMissingGlass(name) {
     };
   }
 
+  function sanitizeZemaxMeta(z) {
+    if (!z || typeof z !== "object") return null;
+    const toFiniteList = (arr, mapper = (x) => x) =>
+      (Array.isArray(arr) ? arr : [])
+        .map((v, i) => mapper(v, i))
+        .filter((v) => v != null);
+
+    const wavelengthsNm = toFiniteList(z.wavelengthsNm, (v) => {
+      const n = Number(v);
+      return (Number.isFinite(n) && n > 0) ? n : null;
+    });
+    const primaryWavelengthIndex = Number(z.primaryWavelengthIndex);
+    const primaryWavelengthNmRaw = Number(z.primaryWavelengthNm);
+    const primaryWavelengthNm = (Number.isFinite(primaryWavelengthNmRaw) && primaryWavelengthNmRaw > 0)
+      ? primaryWavelengthNmRaw
+      : (Number.isInteger(primaryWavelengthIndex) && primaryWavelengthIndex > 0 && wavelengthsNm[primaryWavelengthIndex - 1] != null
+        ? wavelengthsNm[primaryWavelengthIndex - 1]
+        : null);
+
+    const fields = toFiniteList(z.fields, (f, idx) => {
+      const angle = Number(f?.angleDeg ?? f?.fieldDeg ?? f);
+      if (!Number.isFinite(angle)) return null;
+      const weightRaw = Number(f?.weight);
+      const weight = Number.isFinite(weightRaw) ? Math.max(0, weightRaw) : 1;
+      const vdx = Number(f?.vdx);
+      const vdy = Number(f?.vdy);
+      const vcx = Number(f?.vcx);
+      const vcy = Number(f?.vcy);
+      return {
+        index: Number.isFinite(Number(f?.index)) ? Number(f.index) : idx,
+        angleDeg: angle,
+        weight,
+        vdx: Number.isFinite(vdx) ? vdx : 0,
+        vdy: Number.isFinite(vdy) ? vdy : 0,
+        vcx: Number.isFinite(vcx) ? vcx : 0,
+        vcy: Number.isFinite(vcy) ? vcy : 0,
+      };
+    });
+
+    const maxFieldAngleDeg = fields.length
+      ? Math.max(...fields.map((f) => Math.abs(Number(f.angleDeg) || 0)))
+      : null;
+
+    return {
+      source: String(z.source || "zemax"),
+      fieldType: String(z.fieldType || "angle_deg"),
+      wavelengthsNm,
+      primaryWavelengthIndex: Number.isInteger(primaryWavelengthIndex) ? primaryWavelengthIndex : null,
+      primaryWavelengthNm,
+      fields,
+      maxFieldAngleDeg,
+    };
+  }
+
   function sanitizeLens(obj) {
   const importOptions = {
     use_same_ap_for_optics_and_mechanics:
       obj?.import_options?.use_same_ap_for_optics_and_mechanics !== false,
     preserve_ims_aperture:
       obj?.import_options?.preserve_ims_aperture === true,
+    use_zemax_fields:
+      obj?.import_options?.use_zemax_fields === true,
   };
 
   const safe = {
@@ -649,6 +759,7 @@ function warnMissingGlass(name) {
     notes: Array.isArray(obj?.notes) ? obj.notes.map(String) : [],
     surfaces: Array.isArray(obj?.surfaces) ? obj.surfaces : [],
     import_options: importOptions,
+    zemax: sanitizeZemaxMeta(obj?.zemax),
   };
 
   safe.surfaces = safe.surfaces.map((s) => {
@@ -1450,7 +1561,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   return { pts, vignetted, tir, endRay: ray };
 }
 
-  function traceRayReverse(ray, surfaces, wavePreset) {
+  function traceRayReverse(ray, surfaces, wavePreset, opts = {}) {
+    const ignoreAperture = !!opts.ignoreAperture;
     let pts = [];
     let vignetted = false;
     let tir = false;
@@ -1468,7 +1580,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
       pts.push(hitInfo.hit);
 
-      if (!isIMS && hitInfo.vignetted) { vignetted = true; break; }
+      if (!isIMS && hitInfo.vignetted && !ignoreAperture) { vignetted = true; break; }
 
       if (isIMS || isMECH) {
         ray = { p: hitInfo.hit, d: ray.d };
@@ -1689,7 +1801,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   function estimateStopPointImageParaxial(frontStack, xStop, yStop, wavePreset) {
     const startX = xStop + 1e-4;
-    const slopes = [-0.06, -0.04, -0.025, -0.015, 0.015, 0.025, 0.04, 0.06];
+    const slopes = [-0.012, -0.008, -0.005, -0.003, 0.003, 0.005, 0.008, 0.012];
     const endRays = [];
 
     for (const slope of slopes) {
@@ -1697,7 +1809,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         p: { x: startX, y: yStop },
         d: normalize({ x: -1, y: slope }),
       };
-      const tr = traceRayReverse(clone(ray), frontStack, wavePreset);
+      const tr = traceRayReverse(clone(ray), frontStack, wavePreset, { ignoreAperture: true });
       if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
       endRays.push(tr.endRay);
     }
@@ -1791,7 +1903,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         diameterMm: 2 * hi,
         radiusMm: hi,
         xMm: xStart,
-        method: "on_axis_bundle_unclipped",
+        method: "on_axis_bundle_unclipped_fallback",
       };
     }
 
@@ -1807,7 +1919,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       diameterMm: 2 * radius,
       radiusMm: radius,
       xMm: xStart,
-      method: "on_axis_bundle",
+      method: "on_axis_bundle_fallback",
     };
   }
 
@@ -1829,13 +1941,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       };
     }
 
-    const bundleEP = estimateEntrancePupilFromOnAxisBundle(surfaces, wavePreset);
-    if (bundleEP && Number.isFinite(bundleEP.diameterMm) && bundleEP.diameterMm > 1e-6) {
-      return bundleEP;
-    }
-
     const frontStack = surfaces.slice(0, stopIdx + 1);
-    const yPara = Math.min(1.5, Math.max(0.10, stopAp * 0.03));
+    const yPara = Math.min(1.2, Math.max(0.03, stopAp * 0.015));
     const pPos = estimateStopPointImageParaxial(frontStack, xStop, +yPara, wavePreset);
     const pNeg = estimateStopPointImageParaxial(frontStack, xStop, -yPara, wavePreset);
 
@@ -1938,6 +2045,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     if (!edgeEstimates.length) {
+      // Last resort only: this depends on the chosen launch plane and is not
+      // the true entrance pupil definition. Keep it as a safety fallback.
+      const bundleEP = estimateEntrancePupilFromOnAxisBundle(surfaces, wavePreset);
+      if (bundleEP && Number.isFinite(bundleEP.diameterMm) && bundleEP.diameterMm > 1e-6) {
+        return bundleEP;
+      }
       return {
         diameterMm: 2 * stopAp,
         radiusMm: stopAp,
@@ -4012,7 +4125,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     updateUsableCircleBadges();
   }
 
-  function setUsableCircleFromLUT(transCurve, naturalCurve, rMaxSensorMm) {
+  function setUsableCircleFromLUT(transCurve, naturalCurve, rMaxSensorMm, overscan = OV_DEFAULT) {
     const n = Math.min(transCurve?.length || 0, naturalCurve?.length || 0);
     if (n < 8 || !(rMaxSensorMm > 0)) { setNoUsableCircle("LUT"); return; }
 
@@ -4021,11 +4134,60 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     for (let i = 0; i < n; i++) {
       const a = n > 1 ? (i / (n - 1)) : 0;
       const rSensorMm = a * rMaxSensorMm;
-      // world render spans OV*sensor dimensions; ruler mm is in sensor-mm space
-      rMm[i] = rSensorMm / OV;
+      // world render can span overscan*sensor dimensions; ruler mm is in sensor-mm space
+      rMm[i] = rSensorMm / Math.max(1e-6, overscan);
       gain[i] = Math.max(0, Number(transCurve[i]) * Number(naturalCurve[i]));
     }
     setUsableCircleFromRadialCurve(rMm, gain, "LUT");
+  }
+
+  function estimatePreviewObjectHalfHeightFromChief({
+    surfaces,
+    wavePreset,
+    sensorX,
+    xStop,
+    xObjPlane,
+    sensorWv,
+    sensorHv,
+    imgAsp,
+  }) {
+    if (!Array.isArray(surfaces) || !surfaces.length) return null;
+    if (!(sensorWv > 0) || !(sensorHv > 0) || !(imgAsp > 0)) return null;
+
+    const startX = sensorX + 0.05;
+    const points = [
+      { sx: -sensorWv * 0.5, sy: -sensorHv * 0.5 },
+      { sx: 0,               sy: -sensorHv * 0.5 },
+      { sx: sensorWv * 0.5,  sy: -sensorHv * 0.5 },
+      { sx: -sensorWv * 0.5, sy: 0 },
+      { sx: 0,               sy: 0 },
+      { sx: sensorWv * 0.5,  sy: 0 },
+      { sx: -sensorWv * 0.5, sy: sensorHv * 0.5 },
+      { sx: 0,               sy: sensorHv * 0.5 },
+      { sx: sensorWv * 0.5,  sy: sensorHv * 0.5 },
+    ];
+
+    let maxObjX = 0;
+    let maxObjY = 0;
+    let used = 0;
+
+    for (const pt of points) {
+      const pS = { x: startX, y: pt.sx, z: pt.sy };
+      const dir = normalize3({ x: xStop - startX, y: -pt.sx, z: -pt.sy });
+      const tr = traceRayReverse3D({ p: pS, d: dir }, surfaces, wavePreset);
+      if (!tr || tr.vignetted || tr.tir || !tr.endRay) continue;
+      const hitObj = intersectPlaneX3D(tr.endRay, xObjPlane);
+      if (!hitObj) continue;
+      maxObjX = Math.max(maxObjX, Math.abs(hitObj.y));
+      maxObjY = Math.max(maxObjY, Math.abs(hitObj.z));
+      used++;
+    }
+
+    if (used < 3) return null;
+    const halfObjH = Math.max(maxObjY, maxObjX / imgAsp);
+    if (!(halfObjH > 1e-9)) return null;
+
+    return { halfObjH: halfObjH * 1.03, used };
   }
 
   function setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH) {
@@ -4118,16 +4280,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const objDist   = Number(ui.prevObjDist?.value || 2000);
   const xObjPlane = (lens.surfaces[0]?.vx ?? 0) - objDist;
 
-  const objH      = Number(ui.prevObjH?.value || 1650);
-  const halfObjH  = Math.max(1e-3, objH * 0.5);
-
   const base = Math.max(64, Number(ui.prevRes?.value || 720));
   const aspect = sensorW / sensorH;
   const W = Math.max(64, Math.round(base * aspect));
   const H = Math.max(64, base);
 
-  const sensorWv = sensorW * OV;
-  const sensorHv = sensorH * OV;
+  const previewOverscan = OV_DEFAULT;
+  const sensorWv = sensorW * previewOverscan;
+  const sensorHv = sensorH * previewOverscan;
   const halfWv = sensorWv * 0.5;
   const halfHv = sensorHv * 0.5;
   const rMaxSensor = Math.hypot(halfWv, halfHv);
@@ -4136,10 +4296,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const imgW = preview.imgCanvas.width;
   const imgH = preview.imgCanvas.height;
   const imgData = hasImg ? preview.imgData : null;
+  const autoFill = !!ui.previewAutoFit?.checked;
 
   function sample(u, v) {
     if (!hasImg) return [255, 255, 255, 255];
-    if (u < 0 || u > 1 || v < 0 || v > 1) return [0, 0, 0, 255];
+    if (autoFill) {
+      u = clamp(u, 0, 1);
+      v = clamp(v, 0, 1);
+    } else if (u < 0 || u > 1 || v < 0 || v > 1) {
+      return [0, 0, 0, 255];
+    }
 
     const x = u * (imgW - 1);
     const y = v * (imgH - 1);
@@ -4162,6 +4328,22 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   const imgAsp = hasImg ? (imgW / imgH) : (16 / 9);
+  const objHManual = Number(ui.prevObjH?.value || 1650);
+  const autoFitObj = autoFill
+    ? estimatePreviewObjectHalfHeightFromChief({
+        surfaces: lens.surfaces,
+        wavePreset,
+        sensorX,
+        xStop,
+        xObjPlane,
+        sensorWv,
+        sensorHv,
+        imgAsp,
+      })
+    : null;
+  const halfObjH = (autoFitObj && Number.isFinite(autoFitObj.halfObjH) && autoFitObj.halfObjH > 1e-6)
+    ? autoFitObj.halfObjH
+    : Math.max(1e-3, objHManual * 0.5);
   const halfObjW = halfObjH * imgAsp;
 
   function objectMmToUV(xmm, ymm) {
@@ -4296,7 +4478,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         return;
       }
 
-      setUsableCircleFromLUT(transLUT[1], naturalLUT, rMaxSensor);
+      setUsableCircleFromLUT(transLUT[1], naturalLUT, rMaxSensor, previewOverscan);
 
       // Allocate world canvas AFTER LUT is ready
       preview.worldCanvas.width = W;
@@ -4767,9 +4949,51 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }, 50);
   }
 
-  // -------------------- load default preview image --------------------
-  function loadPreviewImageFromURL(url) {
+  // -------------------- preview source + image load --------------------
+  function syncPreviewFitUI() {
+    if (!ui.prevObjH || !ui.previewAutoFit) return;
+    ui.prevObjH.disabled = !!ui.previewAutoFit.checked;
+  }
+
+  function getPreviewSourceUrl(modeRaw) {
+    const mode = String(modeRaw || "").toLowerCase() === "custom" ? "custom" : "chart";
+    return preview.sourceUrls[mode] || null;
+  }
+
+  async function setPreviewSourceMode(modeRaw) {
+    const mode = String(modeRaw || "").toLowerCase() === "custom" ? "custom" : "chart";
+    const url = getPreviewSourceUrl(mode);
+    if (!url) {
+      if (mode === "custom") {
+        preview.sourceMode = "chart";
+        if (ui.previewSourceMode) ui.previewSourceMode.value = "chart";
+        toast("Load eerst een custom image.");
+      }
+      return false;
+    }
+
+    preview.sourceMode = mode;
+    if (ui.previewSourceMode) ui.previewSourceMode.value = mode;
+    await loadPreviewImageFromURL(url, { announce: false });
+    return true;
+  }
+
+  function loadPreviewImageFromURL(url, opts = {}) {
     return new Promise((resolve, reject) => {
+      const sourceUrl = String(url || "").trim();
+      if (!sourceUrl) {
+        reject(new Error("Empty preview URL"));
+        return;
+      }
+      const announce = opts.announce !== false;
+      const noCacheBust =
+        opts.noCacheBust === true ||
+        /^data:/i.test(sourceUrl) ||
+        /^blob:/i.test(sourceUrl);
+      const imgSrc = noCacheBust
+        ? sourceUrl
+        : sourceUrl + (sourceUrl.includes("?") ? "&" : "?") + "t=" + Date.now();
+
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.onload = () => {
@@ -4787,15 +5011,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         preview.imgData = id.data;
         preview.ready = true;
 
-        if (ui.footerWarn) ui.footerWarn.textContent = `Preview image loaded: ${preview.imgCanvas.width}×${preview.imgCanvas.height}`;
+        if (announce && ui.footerWarn) {
+          ui.footerWarn.textContent =
+            `Preview image loaded: ${preview.imgCanvas.width}×${preview.imgCanvas.height} (${preview.sourceMode})`;
+        }
         scheduleRenderPreview();
         resolve(true);
       };
       img.onerror = (e) => {
-        if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${url}`;
+        if (ui.footerWarn) ui.footerWarn.textContent = `Preview image load failed: ${sourceUrl}`;
         reject(e);
       };
-      img.src = url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
+      img.src = imgSrc;
     });
   }
 
@@ -4804,7 +5031,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const reader = new FileReader();
       reader.onload = () => {
         const url = String(reader.result || "");
-        loadPreviewImageFromURL(url).then(resolve).catch(reject);
+        preview.sourceUrls.custom = url;
+        setPreviewSourceMode("custom").then(resolve).catch(reject);
       };
       reader.onerror = reject;
       reader.readAsDataURL(file);
@@ -5190,7 +5418,7 @@ function wireUI() {
   [
     "fieldAngle","rayCount","wavePreset",
     "sensorOffset","focusMode","lensFocus",
-    "renderScale","prevObjDist","prevObjH","prevRes"
+    "renderScale","prevObjDist","prevObjH","prevRes","previewAutoFit"
   ].forEach((id) => {
     const el = ui[id];
     if (!el) return;
@@ -5254,6 +5482,21 @@ function wireUI() {
     });
   }
 
+  if (ui.previewSourceMode) {
+    ui.previewSourceMode.addEventListener("change", async (e) => {
+      const mode = String(e.target.value || "chart");
+      try { await setPreviewSourceMode(mode); }
+      catch (_) {}
+    });
+  }
+  if (ui.previewAutoFit) {
+    ui.previewAutoFit.addEventListener("change", () => {
+      syncPreviewFitUI();
+      scheduleRenderPreview();
+    });
+  }
+  syncPreviewFitUI();
+
   // preview buttons
   if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => scheduleRenderPreview());
   if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
@@ -5312,7 +5555,10 @@ function boot() {
   renderAll();
 
   // load default assets (non-blocking)
-  loadPreviewImageFromURL(DEFAULT_PREVIEW_URL).catch(() => {});
+  preview.sourceUrls.chart = DEFAULT_PREVIEW_URL;
+  preview.sourceMode = "chart";
+  if (ui.previewSourceMode) ui.previewSourceMode.value = "chart";
+  loadPreviewImageFromURL(DEFAULT_PREVIEW_URL, { announce: false }).catch(() => {});
   loadLensFromURL(DEFAULT_LENS_URL).catch(() => {});
 }
 

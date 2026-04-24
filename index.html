@@ -87,6 +87,14 @@
             </div>
 
             <div class="ctrl">
+              <label for="useZemaxFields">Field source</label>
+              <label class="hint" style="display:flex; gap:10px; align-items:center;">
+                <input id="useZemaxFields" type="checkbox" />
+                <span>Use Zemax fields</span>
+              </label>
+            </div>
+
+            <div class="ctrl">
               <label for="rayCount"># Rays</label>
               <input id="rayCount" type="number" step="1" value="31" min="3" max="101" />
             </div>
@@ -124,8 +132,24 @@
             </div>
 
             <div class="ctrl two">
+              <label for="previewSourceMode">Preview source</label>
+              <select id="previewSourceMode">
+                <option value="chart" selected>Focus chart</option>
+                <option value="custom">Custom image</option>
+              </select>
+            </div>
+
+            <div class="ctrl two">
               <label for="prevImg">Preview image</label>
               <input id="prevImg" type="file" accept="image/*" />
+            </div>
+
+            <div class="ctrl two">
+              <label for="previewAutoFit">Preview fit</label>
+              <label class="hint" style="display:flex; gap:10px; align-items:center;">
+                <input id="previewAutoFit" type="checkbox" checked />
+                <span>Always fill sensor</span>
+              </label>
             </div>
 
             <div class="ctrl">
@@ -221,6 +245,16 @@
         <div class="footerRow">
           <div id="metaInfo" class="meta">sensor —</div>
           <div id="footerWarn" class="warn"></div>
+        </div>
+
+        <div id="verifyPanel" class="verifyPanel hidden" aria-label="Zemax verify panel">
+          <div class="verifyTitle">Zemax Verify</div>
+          <div id="verifySummary" class="verifyLine">—</div>
+          <div id="verifyWave" class="verifyLine">—</div>
+          <div id="verifyFields" class="verifyLine">—</div>
+          <div id="verifyWeights" class="verifyLine">—</div>
+          <div id="verifyVig" class="verifyLine">—</div>
+          <div id="verifyPupil" class="verifyLine">—</div>
         </div>
       </section>
     </aside>
