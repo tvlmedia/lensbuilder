@@ -395,7 +395,109 @@
 
   <!-- MODALS (jouw modals blijven hetzelfde, maar script ondersteunt ze al) -->
   <div id="newLensModal" class="modal hidden" aria-hidden="true"></div>
-  <div id="elementModal" class="modal hidden" aria-hidden="true"></div>
+  <div id="elementModal" class="modal hidden" aria-hidden="true">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="elModalTitle">
+      <div class="modalTop modalHead">
+        <div>
+          <div id="elModalTitle" class="modalTitle">Add optical element</div>
+          <div class="modalSub">Create a singlet, achromat, stop, or air gap after the selected surface.</div>
+        </div>
+        <button id="elClose" class="btn" type="button">Close</button>
+      </div>
+
+      <div class="modalScroll">
+        <div class="modalGrid">
+          <div class="field">
+            <label for="elType">Element type</label>
+            <select id="elType">
+              <option value="singlet">Singlet</option>
+              <option value="achromat_cemented">Cemented achromat</option>
+              <option value="achromat">Air-spaced achromat</option>
+              <option value="stop">Stop</option>
+              <option value="airgap">Air gap</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="elMode">Mode</label>
+            <select id="elMode">
+              <option value="auto">Auto</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="elForm">Form</label>
+            <select id="elForm">
+              <option value="biconvex">Biconvex / biconcave</option>
+              <option value="plano_front">Plano front</option>
+              <option value="plano_rear">Plano rear</option>
+              <option value="meniscus_front">Meniscus front</option>
+              <option value="meniscus_rear">Meniscus rear</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="elF">Power / focal length target (mm)</label>
+            <input id="elF" class="cellInput" type="number" step="0.1" value="50">
+          </div>
+
+          <div class="field">
+            <label for="elAp">Semi-aperture (mm)</label>
+            <input id="elAp" class="cellInput" type="number" step="0.1" value="12">
+          </div>
+
+          <div class="field">
+            <label for="elCt">Center thickness (mm)</label>
+            <input id="elCt" class="cellInput" type="number" step="0.1" value="3">
+          </div>
+
+          <div class="field">
+            <label for="elGap">Internal air gap (mm)</label>
+            <input id="elGap" class="cellInput" type="number" step="0.01" value="0.2">
+          </div>
+
+          <div class="field">
+            <label for="elAir">Rear air after element (mm)</label>
+            <input id="elAir" class="cellInput" type="number" step="0.1" value="1">
+          </div>
+
+          <div class="field">
+            <label for="elGlass1">Glass 1</label>
+            <select id="elGlass1">
+              <option value="N-BK7HT">N-BK7HT</option>
+              <option value="N-SK16">N-SK16</option>
+              <option value="N-LAK9">N-LAK9</option>
+              <option value="N-LAF21">N-LAF21</option>
+              <option value="N-F2">N-F2</option>
+              <option value="N-SF5">N-SF5</option>
+              <option value="N-SF11">N-SF11</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="elGlass2">Glass 2</label>
+            <select id="elGlass2">
+              <option value="N-F2">N-F2</option>
+              <option value="N-SF5">N-SF5</option>
+              <option value="N-SF11">N-SF11</option>
+              <option value="N-LASF9">N-LASF9</option>
+              <option value="N-BK7HT">N-BK7HT</option>
+              <option value="N-SK16">N-SK16</option>
+            </select>
+          </div>
+
+          <div class="field fieldWide fieldFull">
+            <label for="elGlassNote">Note</label>
+            <textarea id="elGlassNote" class="glassNote" readonly rows="4"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="modalBottom modalActions">
+        <button id="elAdd" class="btn btnPrimary" type="button">Insert element</button>
+      </div>
+    </div>
+  </div>
   <div id="zmxPasteModal" class="modal hidden" aria-hidden="true">
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="zmxPasteTitle">
       <div class="modalTop">

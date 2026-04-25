@@ -2255,6 +2255,60 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return rays;
   }
 
+  function buildEntrancePupilLimitedRays(surfaces, count = 31, fieldAngleDeg = 0, wavePreset = "d") {
+    const n = Math.max(3, Math.min(101, count | 0));
+    const theta = (fieldAngleDeg * Math.PI) / 180;
+    const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
+
+    const first = (surfaces || []).find((s) => {
+      const t = String(s?.type || "").toUpperCase();
+      return t !== "OBJ" && t !== "IMS";
+    }) || (surfaces || []).find((s) => String(s?.type || "").toUpperCase() !== "OBJ");
+
+    const xStart = Number(first?.vx || 0) - 20;
+    let epRadiusMm = null;
+    let pupilRadius = 3.0;
+
+    try {
+      const ep = estimateEntrancePupil(surfaces, wavePreset);
+      if (ep && Number.isFinite(ep.radiusMm) && ep.radiusMm > 0.1 && ep.radiusMm < 100) {
+        epRadiusMm = Number(ep.radiusMm);
+        pupilRadius = epRadiusMm * 0.85;
+      }
+    } catch (_) {}
+
+    const isImportedZemax = !!(
+      lens?.originalZmxText ||
+      String(lens?.importSource || "").toLowerCase().includes("zmx") ||
+      String(lens?.zemax?.source || "").toLowerCase() === "zemax"
+    );
+    if (isImportedZemax) pupilRadius = Math.min(pupilRadius, 3.0);
+
+    const stopIdx = findStopSurfaceIndex(surfaces);
+    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : first;
+    const xAim = Number(stopSurf?.vx || 0);
+
+    const rays = [];
+    for (let k = 0; k < n; k++) {
+      const a = (k / (n - 1)) * 2 - 1;
+      const yAtAim = a * pupilRadius;
+      const yStart = yAtAim - (Math.abs(dir.x) < 1e-9 ? 0 : (dir.y / dir.x) * (xAim - xStart));
+      rays.push({
+        p: { x: xStart, y: yStart },
+        d: dir,
+      });
+    }
+
+    return {
+      rays,
+      bundleRadiusMm: pupilRadius,
+      epRadiusMm,
+      xStartMm: xStart,
+      xAimMm: xAim,
+      mode: "entrance_pupil_limited",
+    };
+  }
+
   function buildChiefRay(surfaces, fieldAngleDeg) {
     const theta = (fieldAngleDeg * Math.PI) / 180;
     const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
@@ -2315,7 +2369,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return Number.isFinite(minX) ? minX : (surfaces[0]?.vx ?? 0);
   }
 
-  function traceParaxialRayDetailed(surfaces, wavePreset, xStart, y0) {
+  function traceParaxialRayDetailed(surfaces, wavePreset, xStart, y0, opts = {}) {
+    const ignoreAperture = opts?.ignoreAperture === true;
     let ray = { p: { x: xStart, y: y0 }, d: normalize({ x: 1, y: 0 }) };
     let nBefore = 1.0;
     let lastSurfaceInfo = null;
@@ -2343,7 +2398,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         };
       }
 
-      if (hitInfo.vignetted) {
+      if (hitInfo.vignetted && !ignoreAperture) {
         return {
           ok: false,
           reason: "aperture_clip",
@@ -2447,13 +2502,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const lastVx = lastPhysicalVertexX(surfaces);
     const xStart = (surfaces[0]?.vx ?? 0) - 160;
 
-    const heights = [0.25, 0.5, 0.75, 1.0, 1.25];
+    const heights = [0.02, 0.05, 0.10, 0.20, 0.35];
     const fVals = [];
     const xCrossVals = [];
     let firstFail = null;
 
     for (const y0 of heights) {
-      const tr = traceParaxialRayDetailed(surfaces, wavePreset, xStart, y0);
+      const tr = traceParaxialRayDetailed(surfaces, wavePreset, xStart, y0, { ignoreAperture: true });
       if (!tr || !tr.ok || !tr.endRay) {
         if (!firstFail) {
           firstFail = tr
@@ -4578,14 +4633,21 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     computeVertices(traceSurfaces, lensShift, sensorShift);
     const traceSensorX = getSensorPlaneX(traceSurfaces, sensorShift);
 
-    const useDebugCenterBundle = Math.abs(fieldAngle) < 1e-9;
-    const rays = useDebugCenterBundle
-      ? buildDebugCenterRays(traceSurfaces, rayCount)
-      : buildRays(traceSurfaces, fieldAngle, rayCount);
-    const traces = rays.map((r, ri) => traceRayForward(clone(r), traceSurfaces, wavePreset, { rayIndex: ri, debugTrace: true }));
+    const isImportedZemax = !!(
+      lens?.originalZmxText ||
+      String(lens?.importSource || "").toLowerCase().includes("zmx") ||
+      String(lens?.zemax?.source || "").toLowerCase() === "zemax"
+    );
+    const useZemaxPupilBundle = isImportedZemax && Math.abs(fieldAngle) < 1e-9;
+    const rayBundle = useZemaxPupilBundle
+      ? buildEntrancePupilLimitedRays(traceSurfaces, rayCount, fieldAngle, wavePreset)
+      : { rays: buildRays(traceSurfaces, fieldAngle, rayCount), bundleRadiusMm: null, epRadiusMm: null, mode: "default" };
+    const rays = Array.isArray(rayBundle?.rays) ? rayBundle.rays : [];
+    const traces = rays.map((r, ri) => traceRayForward(clone(r), traceSurfaces, wavePreset, { rayIndex: ri, debugTrace: useZemaxPupilBundle }));
 
     const vCount = traces.filter((t) => t.vignetted).length;
     const tirCount = traces.filter((t) => t.tir).length;
+    const validCount = traces.filter((t) => !t.vignetted && !t.tir).length;
     const vigPct = traces.length ? Math.round((vCount / traces.length) * 100) : 0;
 
     const { efl, bfl } = estimateEflBflParaxial(traceSurfaces, wavePreset);
@@ -4676,6 +4738,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       lenTxt,
       flangeTxt,
       focusTxt,
+      `Rays valid: ${validCount}/${traces.length} • TIR: ${tirCount}`,
+      `EP radius: ${Number.isFinite(Number(rayBundle?.epRadiusMm)) ? Number(rayBundle.epRadiusMm).toFixed(3) + "mm" : "—"} • Bundle radius: ${Number.isFinite(Number(rayBundle?.bundleRadiusMm)) ? Number(rayBundle.bundleRadiusMm).toFixed(3) + "mm" : "—"} (${String(rayBundle?.mode || "default")})`,
     ];
     drawTitleOverlay(titleParts);
     const autoMetricMm = Number(focusCtx?.autoRun?.bestMetricRmsMm);
@@ -5442,7 +5506,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const type = String(elUI.type?.value ?? "achromat").toLowerCase();
     const mode = String(elUI.mode?.value ?? "auto").toLowerCase();
-    const form = String(elUI.form?.value ?? "symmetric").toLowerCase();
+    let form = String(elUI.form?.value ?? "symmetric").toLowerCase();
+    if (form.includes("plano")) form = "plano";
+    else if (form.includes("meniscus")) form = "weakmeniscus";
+    else if (form.includes("biconvex")) form = "symmetric";
 
     const glass1 = String(elUI.g1?.value ?? "BK7");
     const glass2 = String(elUI.g2?.value ?? "F2");
