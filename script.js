@@ -850,6 +850,8 @@ function warnMissingGlass(name) {
       : null;
     const configApertureRaw = Number(z.configAperture);
     const configAperture = Number.isFinite(configApertureRaw) ? configApertureRaw : null;
+    const imsSurfaceNumberRaw = Number(z.imsSurfaceNumber);
+    const imsSurfaceNumber = Number.isFinite(imsSurfaceNumberRaw) ? Math.max(0, Math.trunc(imsSurfaceNumberRaw)) : null;
     const baseFields = toFiniteList(z.baseFields, (f, idx) => {
       const angle = Number(f?.angleDeg ?? f?.fieldDeg ?? f);
       if (!Number.isFinite(angle)) return null;
@@ -885,6 +887,7 @@ function warnMissingGlass(name) {
       currentConfigIndex,
       currentConfigLabel,
       configAperture,
+      imsSurfaceNumber,
       baseFields,
     };
   }
@@ -1109,6 +1112,7 @@ function warnMissingGlass(name) {
 
   let lens = sanitizeLens(omit50ConceptV1());
   let _lastParaxialFailSignature = "";
+  let _lastZemaxTraceDebugSignature = "";
 
   function zoomRoleForIndex(idx, total) {
     if (total <= 1) return null;
@@ -1150,6 +1154,13 @@ function warnMissingGlass(name) {
       : Number(configs[0]?.index || 1);
     ui.zoomConfigSelect.value = String(activeCfg);
     ui.zoomConfigWrap.classList.remove("hidden");
+  }
+
+  function syncActiveZoomConfigFromUI() {
+    if (!ui.zoomConfigSelect) return false;
+    const cfgIdx = Number(ui.zoomConfigSelect.value);
+    if (!Number.isFinite(cfgIdx)) return false;
+    return applyZoomConfigToLens(cfgIdx, { silent: true, skipBuild: true, skipRender: true });
   }
 
   function applyZoomConfigToLens(configIndex, opts = {}) {
@@ -1195,6 +1206,10 @@ function warnMissingGlass(name) {
     lens.zemax.currentConfigIndex = Number(cfg.index);
     lens.zemax.currentConfigLabel = formatZoomConfigLabel(cfg, Math.max(0, cfgIdx), lens.zoom.configs.length);
     lens.zemax.configAperture = Number.isFinite(Number(cfg?.aperture)) ? Number(cfg.aperture) : null;
+    const imsIdxMeta = (lens.surfaces || []).findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
+    lens.zemax.imsSurfaceNumber = imsIdxMeta >= 0 && Number.isFinite(Number(lens?.surfaces?.[imsIdxMeta]?.zmx?.surf))
+      ? Number(lens.surfaces[imsIdxMeta].zmx.surf)
+      : null;
 
     const hasFieldOverrides = !!(
       cfg?.fieldOverrides &&
@@ -1235,43 +1250,49 @@ function warnMissingGlass(name) {
     computeVertices(lens.surfaces, 0, 0);
     updateZoomConfigUI();
 
-    try {
-      const availableSurfNos = (lens.surfaces || [])
-        .map((s) => Number(s?.zmx?.surf))
-        .filter((n) => Number.isFinite(n))
-        .map((n) => String(Math.max(0, Math.trunc(n))));
-      const unmatchedOverrides = overrideKeys.filter((k) => !matchedOverrideKeys.has(k));
-      const rows = (lens.surfaces || []).map((s, i) => {
-        const zmxSurfNum = Number(s?.zmx?.surf);
-        const zmxSurfKey = Number.isFinite(zmxSurfNum) ? String(Math.max(0, Math.trunc(zmxSurfNum))) : null;
-        const overrideRaw = zmxSurfKey != null ? cfg?.thicknessOverrides?.[zmxSurfKey] : null;
-        const override = Number(overrideRaw);
-        return {
-          row: i,
-          type: String(s?.type || ""),
-          zmxSurf: Number.isFinite(zmxSurfNum) ? zmxSurfNum : null,
-          R: Number(s?.R),
-          t: Number(s?.t),
-          baseDisz: Number.isFinite(Number(s?.zmx?.baseDisz)) ? Number(s.zmx.baseDisz) : null,
-          override: Number.isFinite(override) ? override : null,
-          glass: String(s?.glass || "AIR"),
-          nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
-          vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
-          ap: Number(s?.ap),
-          stop: !!s?.stop,
-        };
-      });
-      console.groupCollapsed(`[zoom-config] Applied ${formatZoomConfigLabel(cfg, Math.max(0, cfgIdx), lens.zoom.configs.length)}`);
-      console.table(rows);
-      console.log("[zoom-config] thicknessOverrides", cfg?.thicknessOverrides || {});
-      console.log("[zoom-config] matchedOverrideKeys", Array.from(matchedOverrideKeys).sort((a, b) => Number(a) - Number(b)));
-      if (unmatchedOverrides.length) {
-        console.warn("[zoom-config] Unmatched THIC overrides (zmx surface numbers not found):", unmatchedOverrides, {
-          availableSurfNos,
+    if (!options.silent) {
+      try {
+        const availableSurfNos = (lens.surfaces || [])
+          .map((s) => Number(s?.zmx?.surf))
+          .filter((n) => Number.isFinite(n))
+          .map((n) => String(Math.max(0, Math.trunc(n))));
+        const unmatchedOverrides = overrideKeys.filter((k) => !matchedOverrideKeys.has(k));
+        const rows = (lens.surfaces || []).map((s, i) => {
+          const zmxSurfNum = Number(s?.zmx?.surf);
+          const zmxSurfKey = Number.isFinite(zmxSurfNum) ? String(Math.max(0, Math.trunc(zmxSurfNum))) : null;
+          const overrideRaw = zmxSurfKey != null ? cfg?.thicknessOverrides?.[zmxSurfKey] : null;
+          const override = Number(overrideRaw);
+          return {
+            row: i,
+            type: String(s?.type || ""),
+            zmxSurf: Number.isFinite(zmxSurfNum) ? zmxSurfNum : null,
+            R: Number(s?.R),
+            t: Number(s?.t),
+            vx: Number.isFinite(Number(s?.vx)) ? Number(s.vx) : null,
+            baseDisz: Number.isFinite(Number(s?.zmx?.baseDisz)) ? Number(s.zmx.baseDisz) : null,
+            override: Number.isFinite(override) ? override : null,
+            glass: String(s?.glass || "AIR"),
+            nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+            vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
+            ap: Number(s?.ap),
+            stop: !!s?.stop,
+          };
         });
-      }
-      console.groupEnd();
-    } catch (_) {}
+        const imsIndex = (lens.surfaces || []).findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
+        const imsSurfNo = imsIndex >= 0 ? Number(lens?.surfaces?.[imsIndex]?.zmx?.surf) : null;
+        console.groupCollapsed(`[zoom-config] Applied ${formatZoomConfigLabel(cfg, Math.max(0, cfgIdx), lens.zoom.configs.length)}`);
+        console.table(rows);
+        console.log("[zoom-config] thicknessOverrides", cfg?.thicknessOverrides || {});
+        console.log("[zoom-config] matchedOverrideKeys", Array.from(matchedOverrideKeys).sort((a, b) => Number(a) - Number(b)));
+        console.log("[zoom-config] imsIndex", imsIndex, "imsZmxSurf", Number.isFinite(imsSurfNo) ? imsSurfNo : null);
+        if (unmatchedOverrides.length) {
+          console.warn("[zoom-config] Unmatched THIC overrides (zmx surface numbers not found):", unmatchedOverrides, {
+            availableSurfNos,
+          });
+        }
+        console.groupEnd();
+      } catch (_) {}
+    }
 
     if (!options.skipBuild) buildTable();
     if (!options.skipRender) {
@@ -1596,8 +1617,9 @@ function onCellCommit(e) {
     if (Math.abs(R) < 1e-9) {
       if (Math.abs(ray.d.x) < 1e-12) return null;
 
-      const t = (vx - ray.p.x) / ray.d.x;
-      if (!Number.isFinite(t) || t <= HIT_T_EPS) return null;
+      const tRaw = (vx - ray.p.x) / ray.d.x;
+      if (!Number.isFinite(tRaw) || tRaw <= -HIT_T_EPS) return null;
+      const t = tRaw < 0 ? 0 : tRaw;
 
       const hit = add(ray.p, mul(ray.d, t));
       const vignetted = Math.abs(hit.y) > ap + HIT_T_EPS;
@@ -1635,9 +1657,10 @@ function onCellCommit(e) {
       const inside = rad * rad - hit.y * hit.y;
       const xExpected = cx - signR * Math.sqrt(Math.max(0, inside));
       const branchError = Math.abs(hit.x - xExpected);
-      const positive = t > HIT_T_EPS;
-      const branchOk = positive && inside >= -SURFACE_BRANCH_EPS && branchError <= SURFACE_BRANCH_EPS;
-      return { t, positive, inside, hit, xExpected, branchError, branchOk };
+      const nonNegative = t >= -HIT_T_EPS;
+      const branchOk = nonNegative && inside >= -SURFACE_BRANCH_EPS && branchError <= SURFACE_BRANCH_EPS;
+      const tClamped = t < 0 ? 0 : t;
+      return { t: tClamped, nonNegative, inside, hit, xExpected, branchError, branchOk };
     };
 
     const roots = [evalRoot(t1), evalRoot(t2)];
@@ -1645,6 +1668,13 @@ function onCellCommit(e) {
     for (const r of roots) {
       if (!r.branchOk) continue;
       if (!chosen || r.t < chosen.t) chosen = r;
+    }
+    if (!chosen) {
+      const fallback = roots
+        .filter((r) => r.nonNegative && r.inside >= -SURFACE_BRANCH_EPS && Number.isFinite(r.branchError))
+        .sort((a, b) => a.branchError - b.branchError)[0] || null;
+      const fallbackTol = Math.max(SURFACE_BRANCH_EPS * 50, 1e-4);
+      if (fallback && fallback.branchError <= fallbackTol) chosen = fallback;
     }
 
     maybeLogNegativeSurfaceBranch2D(surf, roots, chosen);
@@ -1726,8 +1756,9 @@ function onCellCommit(e) {
 
     if (isPlane){
       if (Math.abs(ray.d.x) < 1e-12) return null;
-      const t = (vx - ray.p.x) / ray.d.x;
-      if (!Number.isFinite(t) || t <= HIT_T_EPS) return null;
+      const tRaw = (vx - ray.p.x) / ray.d.x;
+      if (!Number.isFinite(tRaw) || tRaw <= -HIT_T_EPS) return null;
+      const t = tRaw < 0 ? 0 : tRaw;
 
       const hit = add3(ray.p, mul3(ray.d, t));
       const r = Math.hypot(hit.y, hit.z);
@@ -1769,9 +1800,10 @@ function onCellCommit(e) {
       const inside = rad * rad - r2;
       const xExpected = cx - signR * Math.sqrt(Math.max(0, inside));
       const branchError = Math.abs(hit.x - xExpected);
-      const positive = t > HIT_T_EPS;
-      const branchOk = positive && inside >= -SURFACE_BRANCH_EPS && branchError <= SURFACE_BRANCH_EPS;
-      return { t, positive, r2, inside, hit, xExpected, branchError, branchOk };
+      const nonNegative = t >= -HIT_T_EPS;
+      const branchOk = nonNegative && inside >= -SURFACE_BRANCH_EPS && branchError <= SURFACE_BRANCH_EPS;
+      const tClamped = t < 0 ? 0 : t;
+      return { t: tClamped, nonNegative, r2, inside, hit, xExpected, branchError, branchOk };
     };
 
     const roots = [evalRoot(t1), evalRoot(t2)];
@@ -1779,6 +1811,13 @@ function onCellCommit(e) {
     for (const r of roots) {
       if (!r.branchOk) continue;
       if (!chosen || r.t < chosen.t) chosen = r;
+    }
+    if (!chosen) {
+      const fallback = roots
+        .filter((r) => r.nonNegative && r.inside >= -SURFACE_BRANCH_EPS && Number.isFinite(r.branchError))
+        .sort((a, b) => a.branchError - b.branchError)[0] || null;
+      const fallbackTol = Math.max(SURFACE_BRANCH_EPS * 50, 1e-4);
+      if (fallback && fallback.branchError <= fallbackTol) chosen = fallback;
     }
 
     maybeLogNegativeSurfaceBranch3D(surf, roots, chosen);
@@ -2016,6 +2055,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   let pts = [];
   let vignetted = false;
   let tir = false;
+  let reachedIMS = false;
+  let failReason = null;
+  let failSurfaceIndex = null;
+  let failSurface = null;
 
   // ✅ teken altijd vanaf ray start
   pts.push({ x: ray.p.x, y: ray.p.y });
@@ -2083,12 +2126,21 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       });
       logTraceFailDetailed("no_hit", i, s, null, nAfter);
       vignetted = true;
+      failReason = "no_hit";
+      failSurfaceIndex = i;
+      failSurface = s;
       break;
     }
 
     pts.push(hitInfo.hit);
 
-    if (!isIMS && hitInfo.vignetted) {
+    if (isIMS) {
+      reachedIMS = true;
+      ray = { p: hitInfo.hit, d: ray.d };
+      continue;
+    }
+
+    if (hitInfo.vignetted) {
       const nAfter = !isMECH ? surfaceN(s, wavePreset) : null;
       maybeLogTraceFail("forward_aperture_clip", {
         surfaceIndex: i,
@@ -2107,10 +2159,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       });
       logTraceFailDetailed("aperture_clip", i, s, hitInfo, nAfter);
       vignetted = true;
+      failReason = "aperture_clip";
+      failSurfaceIndex = i;
+      failSurface = s;
       break;
     }
 
-    if (isIMS || isMECH) {
+    if (isMECH) {
       ray = { p: hitInfo.hit, d: ray.d };
       continue;
     }
@@ -2142,6 +2197,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       });
       logTraceFailDetailed("tir", i, s, hitInfo, nAfter);
       tir = true;
+      failReason = "tir";
+      failSurfaceIndex = i;
+      failSurface = s;
       break;
     }
 
@@ -2149,7 +2207,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     nBefore = nAfter;
   }
 
-  return { pts, vignetted, tir, endRay: ray };
+  if (!reachedIMS && !vignetted && !tir) {
+    failReason = "no_ims";
+  }
+  return { pts, vignetted, tir, reachedIMS, failReason, failSurfaceIndex, failSurface, endRay: ray };
 }
 
   function traceRayReverse(ray, surfaces, wavePreset, opts = {}) {
@@ -2242,7 +2303,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const t = String(s?.type || "").toUpperCase();
       return t !== "OBJ" && t !== "IMS";
     }) || (surfaces || []).find((s) => String(s?.type || "").toUpperCase() !== "OBJ");
-    const firstAp = Math.max(0.5, getSurfaceOpticalAp(first) * 0.65);
+    const stopIdx = findStopSurfaceIndex(surfaces || []);
+    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : first;
+    const stopAp = Math.max(0.25, Number(getSurfaceOpticalAp(stopSurf)) || 0.25);
+    const firstAp = Math.max(0.25, Math.min(stopAp * 0.55, 3.0));
     const xStart = Number(first?.vx || 0) - 20;
     const rays = [];
     for (let k = 0; k < n; k++) {
@@ -4520,8 +4584,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const apTxt = Number.isFinite(Number(activeCfg?.aperture))
         ? Number(activeCfg.aperture).toFixed(4)
         : "—";
+      const imsSurfTxt = Number.isFinite(Number(z?.imsSurfaceNumber))
+        ? Number(z.imsSurfaceNumber)
+        : "—";
       ui.verifyZoom.textContent =
-        `Zemax zoom configs: ${zoomConfigs.length || 1} • Active: ${activeLabel} • Overrides: THIC ${thicList} • Imported F/#: ${apTxt}`;
+        `Zemax zoom configs: ${zoomConfigs.length || 1} • Active: ${activeLabel} • Overrides: THIC ${thicList} • Imported F/#: ${apTxt} • IMS surf: ${imsSurfTxt}`;
     }
   }
 
@@ -4605,6 +4672,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   function renderAll() {
     if (!canvas || !ctx) return;
     if (ui.footerWarn) ui.footerWarn.textContent = "";
+    syncActiveZoomConfigFromUI();
 
     const fieldAngle = Number(ui.fieldAngle?.value || 0);
     const rayCount   = Number(ui.rayCount?.value || 31);
@@ -4632,6 +4700,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const traceSurfaces = clone(lens.surfaces);
     computeVertices(traceSurfaces, lensShift, sensorShift);
     const traceSensorX = getSensorPlaneX(traceSurfaces, sensorShift);
+    // Keep a nominal optical clone as fallback when focused pose tracing collapses.
+    const nominalTraceSurfaces = clone(lens.surfaces);
+    computeVertices(nominalTraceSurfaces, 0, 0);
+    const nominalTraceSensorX = getSensorPlaneX(nominalTraceSurfaces, 0);
+    let activeTraceSurfaces = traceSurfaces;
+    let activeTraceSensorX = traceSensorX;
 
     const isImportedZemax = !!(
       lens?.originalZmxText ||
@@ -4639,26 +4713,97 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       String(lens?.zemax?.source || "").toLowerCase() === "zemax"
     );
     const useZemaxPupilBundle = isImportedZemax && Math.abs(fieldAngle) < 1e-9;
-    const rayBundle = useZemaxPupilBundle
+    let rayBundle = useZemaxPupilBundle
       ? buildEntrancePupilLimitedRays(traceSurfaces, rayCount, fieldAngle, wavePreset)
       : { rays: buildRays(traceSurfaces, fieldAngle, rayCount), bundleRadiusMm: null, epRadiusMm: null, mode: "default" };
-    const rays = Array.isArray(rayBundle?.rays) ? rayBundle.rays : [];
-    const traces = rays.map((r, ri) => traceRayForward(clone(r), traceSurfaces, wavePreset, { rayIndex: ri, debugTrace: useZemaxPupilBundle }));
+    let rays = Array.isArray(rayBundle?.rays) ? rayBundle.rays : [];
+    let traces = rays.map((r, ri) => traceRayForward(clone(r), traceSurfaces, wavePreset, { rayIndex: ri, debugTrace: useZemaxPupilBundle }));
+
+    if (useZemaxPupilBundle && traces.length && traces.every((t) => t?.vignetted || t?.tir)) {
+      rays = buildDebugCenterRays(traceSurfaces, rayCount);
+      rayBundle = {
+        rays,
+        bundleRadiusMm: null,
+        epRadiusMm: Number.isFinite(Number(rayBundle?.epRadiusMm)) ? Number(rayBundle.epRadiusMm) : null,
+        xStartMm: Number.isFinite(Number(rayBundle?.xStartMm)) ? Number(rayBundle.xStartMm) : null,
+        xAimMm: Number.isFinite(Number(rayBundle?.xAimMm)) ? Number(rayBundle.xAimMm) : null,
+        mode: "debug_center_fallback",
+      };
+      traces = rays.map((r, ri) => traceRayForward(clone(r), traceSurfaces, wavePreset, { rayIndex: ri, debugTrace: true }));
+      console.warn("[ray-bundle] Fallback to debug center bundle (all rays failed in entrance-pupil-limited bundle).");
+    }
+
+    // If focused-pose tracing yields no IMS hits, retry once in nominal pose.
+    let reachedIMSCount = traces.filter((t) => t.reachedIMS).length;
+    if (isImportedZemax && reachedIMSCount === 0) {
+      let nominalBundle = useZemaxPupilBundle
+        ? buildEntrancePupilLimitedRays(nominalTraceSurfaces, rayCount, fieldAngle, wavePreset)
+        : { rays: buildRays(nominalTraceSurfaces, fieldAngle, rayCount), bundleRadiusMm: null, epRadiusMm: null, mode: "nominal_default" };
+      let nominalRays = Array.isArray(nominalBundle?.rays) ? nominalBundle.rays : [];
+      let nominalTraces = nominalRays.map((r, ri) => traceRayForward(clone(r), nominalTraceSurfaces, wavePreset, { rayIndex: ri, debugTrace: false }));
+      let nominalReachedIMS = nominalTraces.filter((t) => t.reachedIMS).length;
+      if (nominalReachedIMS === 0 && useZemaxPupilBundle) {
+        nominalRays = buildDebugCenterRays(nominalTraceSurfaces, rayCount);
+        nominalBundle = {
+          rays: nominalRays,
+          bundleRadiusMm: null,
+          epRadiusMm: Number.isFinite(Number(nominalBundle?.epRadiusMm)) ? Number(nominalBundle.epRadiusMm) : null,
+          xStartMm: Number.isFinite(Number(nominalBundle?.xStartMm)) ? Number(nominalBundle.xStartMm) : null,
+          xAimMm: Number.isFinite(Number(nominalBundle?.xAimMm)) ? Number(nominalBundle.xAimMm) : null,
+          mode: "nominal_debug_center_fallback",
+        };
+        nominalTraces = nominalRays.map((r, ri) => traceRayForward(clone(r), nominalTraceSurfaces, wavePreset, { rayIndex: ri, debugTrace: false }));
+        nominalReachedIMS = nominalTraces.filter((t) => t.reachedIMS).length;
+      }
+      if (nominalReachedIMS > reachedIMSCount) {
+        activeTraceSurfaces = nominalTraceSurfaces;
+        activeTraceSensorX = nominalTraceSensorX;
+        rayBundle = nominalBundle;
+        rays = nominalRays;
+        traces = nominalTraces;
+        reachedIMSCount = nominalReachedIMS;
+        console.warn("[ray-bundle] Fallback to nominal-pose tracing (focused pose produced zero IMS hits).", {
+          activeZoomConfig: Number.isFinite(Number(lens?.zoom?.activeConfig)) ? Number(lens.zoom.activeConfig) : null,
+          activeZoomLabel: String(lens?.zemax?.currentConfigLabel || "—"),
+        });
+      }
+    }
 
     const vCount = traces.filter((t) => t.vignetted).length;
     const tirCount = traces.filter((t) => t.tir).length;
     const validCount = traces.filter((t) => !t.vignetted && !t.tir).length;
+    reachedIMSCount = traces.filter((t) => t.reachedIMS).length;
+    const failReasonCounts = traces.reduce((acc, t) => {
+      const key = String(t?.failReason || (t?.reachedIMS ? "ok" : "unknown"));
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
     const vigPct = traces.length ? Math.round((vCount / traces.length) * 100) : 0;
 
-    const { efl, bfl } = estimateEflBflParaxial(traceSurfaces, wavePreset);
-    const T = estimateTStopApprox(efl, traceSurfaces, wavePreset);
+    let paraxialSource = "focused";
+    let { efl, bfl } = estimateEflBflParaxial(activeTraceSurfaces, wavePreset);
+    let tStopSurfaceRef = activeTraceSurfaces;
+    if (!Number.isFinite(Number(efl))) {
+      const nominalParax = estimateEflBflParaxial(nominalTraceSurfaces, wavePreset);
+      if (Number.isFinite(Number(nominalParax?.efl))) {
+        efl = Number(nominalParax.efl);
+        bfl = Number.isFinite(Number(nominalParax?.bfl)) ? Number(nominalParax.bfl) : null;
+        tStopSurfaceRef = nominalTraceSurfaces;
+        paraxialSource = "nominal_fallback";
+      }
+    }
+    let T = estimateTStopApprox(efl, tStopSurfaceRef, wavePreset);
+    if (!Number.isFinite(Number(T))) {
+      const importedConfigFno = Number(lens?.zemax?.configAperture);
+      if (Number.isFinite(importedConfigFno) && importedConfigFno > 0) T = importedConfigFno;
+    }
 
     const fov = computeFovDeg(efl, sensorW, sensorH);
     const fovTxt = !fov
       ? "FOV: —"
       : `FOV: H ${fov.hfov.toFixed(1)}° • V ${fov.vfov.toFixed(1)}° • D ${fov.dfov.toFixed(1)}°`;
 
-    const maxField = coverageTestMaxFieldDeg(traceSurfaces, wavePreset, traceSensorX, halfH);
+    const maxField = coverageTestMaxFieldDeg(activeTraceSurfaces, wavePreset, activeTraceSensorX, halfH);
     const covMode = "v";
     const { ok: coversGeom, req } = coversSensorYesNo({ fov, maxField, mode: covMode, marginDeg: 0.5 });
     const sensorDiagMm = Math.hypot(sensorW, sensorH);
@@ -4695,11 +4840,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     if (ui.fovTop) ui.fovTop.textContent = fovTxt;
     if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-    if (tirCount > 0 && ui.footerWarn) ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+    if (reachedIMSCount === 0 && ui.footerWarn) {
+      const reasonTxt = Object.entries(failReasonCounts)
+        .map(([k, v]) => `${k}:${v}`)
+        .join(", ");
+      ui.footerWarn.textContent = `No rays reached IMS (${reasonTxt || "unknown"}).`;
+    } else if (tirCount > 0 && ui.footerWarn) {
+      ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
+    }
 
     if (ui.status) {
       ui.status.textContent =
-        `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • ${covTxt}`;
+        `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • IMS hits ${reachedIMSCount} • ${covTxt}`;
     }
     if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
     updateZemaxVerifyPanel({ sensorX: nominalSensorX });
@@ -4718,7 +4870,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     drawPLFlange(world, plX);
     drawLens(world, lens.surfaces);
     drawStop(world, lens.surfaces);
-    drawRays(world, traces, traceSensorX);
+    drawRays(world, traces, activeTraceSensorX);
     drawPLMountCutout(world, plX);
     drawSensor(world, nominalSensorX, halfH);
 
@@ -4738,10 +4890,67 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       lenTxt,
       flangeTxt,
       focusTxt,
-      `Rays valid: ${validCount}/${traces.length} • TIR: ${tirCount}`,
+      `Paraxial source: ${paraxialSource}`,
+      `Rays valid: ${validCount}/${traces.length} • IMS: ${reachedIMSCount}/${traces.length} • TIR: ${tirCount}`,
       `EP radius: ${Number.isFinite(Number(rayBundle?.epRadiusMm)) ? Number(rayBundle.epRadiusMm).toFixed(3) + "mm" : "—"} • Bundle radius: ${Number.isFinite(Number(rayBundle?.bundleRadiusMm)) ? Number(rayBundle.bundleRadiusMm).toFixed(3) + "mm" : "—"} (${String(rayBundle?.mode || "default")})`,
     ];
     drawTitleOverlay(titleParts);
+    if (isImportedZemax) {
+      const zoomConfigs = Array.isArray(lens?.zoom?.configs) ? lens.zoom.configs : [];
+      const activeIdx = Number(lens?.zoom?.activeConfig);
+      const activeCfg = zoomConfigs.find((c) => Number(c?.index) === activeIdx) || null;
+      const activeCfgLabel = activeCfg
+        ? formatZoomConfigLabel(activeCfg, Math.max(0, zoomConfigs.findIndex((c) => c === activeCfg)), zoomConfigs.length)
+        : "—";
+      const imsSurfaceIndex = activeTraceSurfaces.findIndex((s) => String(s?.type || "").toUpperCase() === "IMS");
+      const sig = [
+        String(activeIdx),
+        activeCfgLabel,
+        Number.isFinite(Number(efl)) ? Number(efl).toFixed(6) : "null",
+        Number.isFinite(Number(bfl)) ? Number(bfl).toFixed(6) : "null",
+        String(reachedIMSCount),
+        String(vCount),
+        String(tirCount),
+        JSON.stringify(failReasonCounts),
+      ].join("|");
+      if (sig !== _lastZemaxTraceDebugSignature) {
+        _lastZemaxTraceDebugSignature = sig;
+        console.groupCollapsed("[zemax-trace-debug] renderAll");
+        console.log("selectedConfig", {
+          index: activeIdx,
+          label: activeCfgLabel,
+          thicknessOverrides: activeCfg?.thicknessOverrides || {},
+        });
+        console.log("imsDetection", {
+          imsSurfaceIndex,
+          imsZmxSurf: imsSurfaceIndex >= 0 ? Number(activeTraceSurfaces?.[imsSurfaceIndex]?.zmx?.surf) : null,
+          imsVx: imsSurfaceIndex >= 0 ? Number(activeTraceSurfaces?.[imsSurfaceIndex]?.vx) : null,
+        });
+        console.log("rayStats", {
+          traced: traces.length,
+          reachedIMS: reachedIMSCount,
+          vignetted: vCount,
+          tir: tirCount,
+          failReasonCounts,
+          paraxialSource,
+          activeTracePose: activeTraceSurfaces === traceSurfaces ? "focused" : "nominal",
+        });
+        console.table(activeTraceSurfaces.map((s, i) => ({
+          row: i,
+          type: String(s?.type || ""),
+          zmxSurf: Number.isFinite(Number(s?.zmx?.surf)) ? Number(s.zmx.surf) : null,
+          vx: Number.isFinite(Number(s?.vx)) ? Number(s.vx) : null,
+          t: Number.isFinite(Number(s?.t)) ? Number(s.t) : null,
+          R: Number.isFinite(Number(s?.R)) ? Number(s.R) : null,
+          ap: Number.isFinite(Number(getSurfaceOpticalAp(s))) ? Number(getSurfaceOpticalAp(s)) : null,
+          glass: String(s?.glass || "AIR"),
+          nd: Number.isFinite(Number(s?.nd)) ? Number(s.nd) : null,
+          vd: Number.isFinite(Number(s?.vd)) ? Number(s.vd) : null,
+          stop: !!s?.stop,
+        })));
+        console.groupEnd();
+      }
+    }
     const autoMetricMm = Number(focusCtx?.autoRun?.bestMetricRmsMm);
     updateFocusShiftStatus(
       focusCtx.autoRun?.ok
@@ -6185,6 +6394,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return;
   }
   if (!pctx || !previewCanvasEl) return;
+  syncActiveZoomConfigFromUI();
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
   const jobId = ++_previewRenderJobId;
   setNoUsableCircle("pending");
@@ -6225,7 +6435,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   let xObjPlane = (lens.surfaces[0]?.vx ?? 0) - focusChartDistanceMm;
 
-  const previewParax = estimateEflBflParaxial(lens.surfaces, wavePreset);
+  const previewParaxFocused = estimateEflBflParaxial(lens.surfaces, wavePreset);
+  let previewParax = previewParaxFocused;
+  let previewParaxSource = "focused";
+  if (!Number.isFinite(Number(previewParax?.efl))) {
+    const nominalForParax = clone(lens.surfaces);
+    computeVertices(nominalForParax, 0, 0);
+    const previewParaxNominal = estimateEflBflParaxial(nominalForParax, wavePreset);
+    if (Number.isFinite(Number(previewParaxNominal?.efl))) {
+      previewParax = previewParaxNominal;
+      previewParaxSource = "nominal_fallback";
+    }
+  }
   if (!Number.isFinite(Number(previewParax?.efl))) {
     resizePreviewCanvasToCSS();
     const rc = previewCanvasEl.getBoundingClientRect();
@@ -6237,6 +6458,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     pctx.textAlign = "center";
     pctx.textBaseline = "middle";
     pctx.fillText("No valid optical trace yet", rc.width * 0.5, rc.height * 0.5);
+    console.warn("[preview-black]", {
+      reason: "no_valid_optical_trace",
+      efl: previewParax?.efl ?? null,
+      bfl: previewParax?.bfl ?? null,
+      paraxialSource: previewParaxSource,
+      lensShift,
+      sensorShift,
+      activeZoomConfig: Number.isFinite(Number(lens?.zoom?.activeConfig)) ? Number(lens.zoom.activeConfig) : null,
+      activeZoomLabel: String(lens?.zemax?.currentConfigLabel || "—"),
+    });
     hidePreviewProgress();
     return;
   }
@@ -6720,6 +6951,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
       const out = wctx.createImageData(W, H);
       const outD = out.data;
+      let litPixels = 0;
 
       function objXYPhysical(L, sx, sy, rS) {
         if (rS <= 1e-9) return { ox: 0, oy: 0 };
@@ -6763,6 +6995,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
               outD[idx + 1] = clamp(c[1] * gain, 0, 255);
               outD[idx + 2] = clamp(c[2] * gain, 0, 255);
               outD[idx + 3] = 255;
+              if (outD[idx] > 0 || outD[idx + 1] > 0 || outD[idx + 2] > 0) litPixels++;
             } else {
               let r = 0, g = 0, b = 0;
               for (let t = 0; t < taps.length; t++) {
@@ -6778,6 +7011,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
               outD[idx + 1] = clamp(g * inv * gain, 0, 255);
               outD[idx + 2] = clamp(b * inv * gain, 0, 255);
               outD[idx + 3] = 255;
+              if (outD[idx] > 0 || outD[idx + 1] > 0 || outD[idx + 2] > 0) litPixels++;
             }
             continue;
           }
@@ -6829,6 +7063,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
           outD[idx + 1] = chanSample(Lg, sx, sy, rS, gg, 1);
           outD[idx + 2] = chanSample(Lb, sx, sy, rS, gb, 2);
           outD[idx + 3] = 255;
+          if (outD[idx] > 0 || outD[idx + 1] > 0 || outD[idx + 2] > 0) litPixels++;
         }
       }
 
@@ -6836,6 +7071,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
       wctx.putImageData(out, 0, 0);
       preview.worldReady = true;
+      if (litPixels <= 0) {
+        console.warn("[preview-black]", {
+          reason: "all_pixels_black_fast_lut",
+          mode: "fast",
+          activeZoomConfig: Number.isFinite(Number(lens?.zoom?.activeConfig)) ? Number(lens.zoom.activeConfig) : null,
+          activeZoomLabel: String(lens?.zemax?.currentConfigLabel || "—"),
+        });
+      }
       hidePreviewProgress();
       drawPreviewViewport();
     }
@@ -6852,6 +7095,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     const out  = wctx.createImageData(W, H);
     const outD = out.data;
+    let litPixels = 0;
 
     const epsX   = 0.05;
     const startX = sensorX + epsX;
@@ -6926,6 +7170,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
             outD[idx + 1] = linToSrgb(accG / wSum);
             outD[idx + 2] = linToSrgb(accB / wSum);
             outD[idx + 3] = 255;
+            if (outD[idx] > 0 || outD[idx + 1] > 0 || outD[idx + 2] > 0) litPixels++;
           }
         }
       }
@@ -6937,6 +7182,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       if (row < H) requestAnimationFrame(step);
       else {
         setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
+        if (litPixels <= 0) {
+          console.warn("[preview-black]", {
+            reason: "all_pixels_black_quality_dof",
+            mode: "quality",
+            activeZoomConfig: Number.isFinite(Number(lens?.zoom?.activeConfig)) ? Number(lens.zoom.activeConfig) : null,
+            activeZoomLabel: String(lens?.zemax?.currentConfigLabel || "—"),
+          });
+        }
         hidePreviewProgress();
         drawPreviewViewport();
       }
@@ -7740,7 +7993,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         const nums = parseZemaxNumberList(line.replace(/^WAVM\b/i, ""));
         if (nums.length) {
           let idx = 0;
-          let lam = nums[nums.length - 1];
+          // Zemax WAVM format is typically: WAVM <idx> <lambda_um> <weight>
+          // Use the wavelength slot (2nd numeric token), not the weight token.
+          let lam = (nums.length >= 2) ? nums[1] : nums[nums.length - 1];
           if (nums.length >= 2) idx = Math.round(nums[0]);
           if (!Number.isFinite(idx) || idx <= 0) idx = zemaxMeta.wavelengthsByIndex.size + 1;
           if (Number.isFinite(lam) && lam > 0) {
@@ -7766,20 +8021,20 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         zemaxMeta.fieldsRaw.fwgn = parseZemaxNumberList(line.replace(/^FWGN\b/i, ""));
         continue;
       }
-      if (/^VDX\b/i.test(line)) {
-        zemaxMeta.fieldsRaw.vdx = parseZemaxNumberList(line.replace(/^VDX\b/i, ""));
+      if (/^VDXN?\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vdx = parseZemaxNumberList(line.replace(/^VDXN?\b/i, ""));
         continue;
       }
-      if (/^VDY\b/i.test(line)) {
-        zemaxMeta.fieldsRaw.vdy = parseZemaxNumberList(line.replace(/^VDY\b/i, ""));
+      if (/^VDYN?\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vdy = parseZemaxNumberList(line.replace(/^VDYN?\b/i, ""));
         continue;
       }
-      if (/^VCX\b/i.test(line)) {
-        zemaxMeta.fieldsRaw.vcx = parseZemaxNumberList(line.replace(/^VCX\b/i, ""));
+      if (/^VCXN?\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vcx = parseZemaxNumberList(line.replace(/^VCXN?\b/i, ""));
         continue;
       }
-      if (/^VCY\b/i.test(line)) {
-        zemaxMeta.fieldsRaw.vcy = parseZemaxNumberList(line.replace(/^VCY\b/i, ""));
+      if (/^VCYN?\b/i.test(line)) {
+        zemaxMeta.fieldsRaw.vcy = parseZemaxNumberList(line.replace(/^VCYN?\b/i, ""));
         continue;
       }
 
@@ -7852,6 +8107,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     parsed.sort((a, b) => a.idx - b.idx);
     const surfaces = parsed.map((s, i) => {
+      const isFirst = i === 0;
+      const isLast = i === parsed.length - 1;
       const curv = Number(s.CURV || 0);
       const R = Math.abs(curv) < 1e-12 ? 0 : (1 / curv) * unitScaleToMm;
       const t = Number.isFinite(Number(s.DISZ)) ? Number(s.DISZ) * unitScaleToMm : 0;
@@ -7868,7 +8125,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         : null;
 
       return {
-        type: String(i),
+        type: isFirst ? "OBJ" : (isLast ? "IMS" : String(i)),
         R,
         t,
         ap: apSemi,
@@ -7885,7 +8142,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         vd: glassVd,
         glass_nd: glassNd,
         glass_vd: glassVd,
-        stop: !!s.STOP,
+        stop: isLast ? false : !!s.STOP,
         zmx: {
           surf: s.idx,
           curv: curv,
@@ -7944,6 +8201,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const zoom = zoomConfigs.length
       ? { activeConfig: Number(zoomConfigs[0]?.index || 1), configs: zoomConfigs }
       : null;
+    const imsSurfaceNumber = Number(surfaces?.[surfaces.length - 1]?.zmx?.surf);
 
     const lensName = zemaxMeta.name || sourceNameToLensName(sourceName);
     return {
@@ -7976,6 +8234,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         currentConfigIndex: zoom ? zoom.activeConfig : null,
         currentConfigLabel: zoom ? (zoom.configs[0]?.label || `Config ${zoom.activeConfig}`) : null,
         configAperture: zoom ? (Number.isFinite(Number(zoom.configs[0]?.aperture)) ? Number(zoom.configs[0].aperture) : null) : null,
+        imsSurfaceNumber: Number.isFinite(imsSurfaceNumber) ? imsSurfaceNumber : null,
       },
       ...(zoom ? { zoom } : {}),
       surfaces,
