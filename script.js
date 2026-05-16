@@ -1175,6 +1175,31 @@ function warnMissingGlass(name) {
     }
   }
 
+  function normalizeInitialAnchorScroll() {
+    if (typeof window === "undefined") return;
+    if (String(window.location.hash || "") !== "#appMain") return;
+
+    try {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    } catch (_) {}
+
+    const resetScroll = () => {
+      try {
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      } catch (_) {
+        window.scrollTo(0, 0);
+      }
+      try {
+        const scroller = document.scrollingElement;
+        if (scroller) scroller.scrollTop = 0;
+      } catch (_) {}
+    };
+
+    resetScroll();
+    requestAnimationFrame(resetScroll);
+    setTimeout(resetScroll, 0);
+  }
+
   function zoomRoleForIndex(idx, total) {
     if (total <= 1) return null;
     if (idx === 0) return "Wide";
@@ -8701,6 +8726,7 @@ function wireUI() {
 
 // -------------------- boot --------------------
 function boot() {
+  normalizeInitialAnchorScroll();
   wireUI();
   updateZemaxVerifyChrome();
   updateRenderEngineButton();
