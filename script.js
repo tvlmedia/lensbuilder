@@ -239,12 +239,20 @@ const SENSOR_PRESETS = {
   "65mm Analoog (5-perf)": { w: 52.15, h: 23.07 },
   "ARRI ALEXA 265": { w: 54.12, h: 25.58 },
 };
+  const DEFAULT_SENSOR_PRESET = "ARRI Alexa Mini LF (LF)";
 
   function populateSensorPresetsSelect() {
     if (!ui.sensorPreset) return;
+    const prev = String(ui.sensorPreset.value || "").trim();
     const keys = Object.keys(SENSOR_PRESETS);
     ui.sensorPreset.innerHTML = keys.map((k) => `<option value="${k}">${k}</option>`).join("");
-if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa Mini LF (LF)";
+    if (SENSOR_PRESETS[prev]) {
+      ui.sensorPreset.value = prev;
+    } else if (SENSOR_PRESETS[DEFAULT_SENSOR_PRESET]) {
+      ui.sensorPreset.value = DEFAULT_SENSOR_PRESET;
+    } else if (keys.length) {
+      ui.sensorPreset.value = keys[0];
+    }
   }
 
   function getSensorWH() {
@@ -301,7 +309,7 @@ if (!SENSOR_PRESETS[ui.sensorPreset.value]) ui.sensorPreset.value = "ARRI Alexa 
   }
 
   function applyPreset(name) {
-    const p = SENSOR_PRESETS[name] || SENSOR_PRESETS["ARRI Alexa Mini LF (LF)"];
+    const p = SENSOR_PRESETS[name] || SENSOR_PRESETS[DEFAULT_SENSOR_PRESET];
     if (ui.sensorW) ui.sensorW.value = p.w.toFixed(2);
     if (ui.sensorH) ui.sensorH.value = p.h.toFixed(2);
     applySensorToIMS();
@@ -757,7 +765,7 @@ function warnMissingGlass(name) {
   }
 
   function sanitizeFocusModeImport(raw) {
-    return enumOr(raw, FOCUS_MODE_IMPORT_SET, "manual");
+    return enumOr(raw, FOCUS_MODE_IMPORT_SET, "auto");
   }
 
   function sanitizeFocusMechanismImport(raw) {
@@ -2330,8 +2338,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }) || (surfaces || []).find((s) => String(s?.type || "").toUpperCase() !== "OBJ");
 
     const xStart = Number(first?.vx || 0) - 20;
+    const stopIdx = findStopSurfaceIndex(surfaces);
+    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : first;
+    const xAim = Number(stopSurf?.vx || 0);
+    const stopAp = Math.max(0.25, Number(getSurfaceOpticalAp(stopSurf)) || 0.25);
+
     let epRadiusMm = null;
-    let pupilRadius = 3.0;
+    // Start from stop aperture scale so on-axis bundles are not visually collapsed.
+    let pupilRadius = stopAp * 0.95;
 
     try {
       const ep = estimateEntrancePupil(surfaces, wavePreset);
@@ -2341,16 +2355,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       }
     } catch (_) {}
 
-    const isImportedZemax = !!(
-      lens?.originalZmxText ||
-      String(lens?.importSource || "").toLowerCase().includes("zmx") ||
-      String(lens?.zemax?.source || "").toLowerCase() === "zemax"
-    );
-    if (isImportedZemax) pupilRadius = Math.min(pupilRadius, 3.0);
-
-    const stopIdx = findStopSurfaceIndex(surfaces);
-    const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : first;
-    const xAim = Number(stopSurf?.vx || 0);
+    // Keep bundle tied to the active stop aperture instead of a tiny fixed cap.
+    pupilRadius = Math.max(stopAp * 0.75, Math.min(pupilRadius, stopAp * 0.98));
 
     const rays = [];
     for (let k = 0; k < n; k++) {
@@ -2999,8 +3005,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   };
 
   function normalizeFocusMode(raw) {
-    const m = String(raw || "manual").trim().toLowerCase();
-    return FOCUS_MODE_SET.has(m) ? m : "manual";
+    const m = String(raw || "auto").trim().toLowerCase();
+    return FOCUS_MODE_SET.has(m) ? m : "auto";
   }
 
   function normalizeFocusMechanism(raw) {
@@ -3017,7 +3023,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     if (!lens || typeof lens !== "object") return;
     if (!lens.focus || typeof lens.focus !== "object") lens.focus = {};
     if (!lens.import_options || typeof lens.import_options !== "object") lens.import_options = {};
-    lens.focus.mode = normalizeFocusMode(ui.focusMode?.value || lens.focus.mode || "manual");
+    lens.focus.mode = normalizeFocusMode(ui.focusMode?.value || lens.focus.mode || "auto");
     lens.focus.mechanism = normalizeFocusMechanism(ui.focusMechanism?.value || lens.focus.mechanism || "move-lens");
     const shiftVal = Number(shiftOverride);
     lens.focus.shiftMm = Number.isFinite(shiftVal) ? shiftVal : getFocusShiftMm();
@@ -3069,7 +3075,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function getFocusContext({ objectDistanceMm = null, wavePreset = "d", allowAutoRefocus = false } = {}) {
-    const focusMode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const focusMode = normalizeFocusMode(ui.focusMode?.value || "auto");
     const focusMechanism = normalizeFocusMechanism(ui.focusMechanism?.value || "move-lens");
     const autoRefocusOnDistanceChange = !!ui.autoRefocusOnDistanceChange?.checked;
     const targetDist = Number.isFinite(Number(objectDistanceMm)) ? Number(objectDistanceMm) : null;
@@ -3126,7 +3132,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
   function updateFocusShiftStatus(extra = "") {
     if (!ui.focusShiftActive) return;
-    const mode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const mode = normalizeFocusMode(ui.focusMode?.value || "auto");
     const mechanism = normalizeFocusMechanism(ui.focusMechanism?.value || "move-lens");
     const shift = getFocusShiftMm();
     const suffix = extra ? ` • ${extra}` : "";
@@ -3134,7 +3140,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function syncFocusControlsUI() {
-    const mode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const mode = normalizeFocusMode(ui.focusMode?.value || "auto");
     const disableShift = mode === "auto";
     if (ui.lensFocus) ui.lensFocus.disabled = disableShift;
     if (ui.focusShiftSlider) ui.focusShiftSlider.disabled = disableShift;
@@ -3524,7 +3530,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function autoFocus() {
-    const focusMode = normalizeFocusMode(ui.focusMode?.value || "manual");
+    const focusMode = normalizeFocusMode(ui.focusMode?.value || "auto");
     const focusMechanism = normalizeFocusMechanism(ui.focusMechanism?.value || "move-lens");
     const wavePreset = ui.wavePreset?.value || "d";
     const targetDistance = getFocusChartDistanceMm();
@@ -8672,7 +8678,7 @@ function boot() {
 
   // default sensor preset -> use current select or Mini LF
   if (ui.sensorPreset && SENSOR_PRESETS?.[ui.sensorPreset.value]) applyPreset(ui.sensorPreset.value);
-  else applyPreset("ARRI Alexa Mini LF (LF)");
+  else applyPreset(DEFAULT_SENSOR_PRESET);
 
   // initial table + draw
   clampAllApertures(lens.surfaces);

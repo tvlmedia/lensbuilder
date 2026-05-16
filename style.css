@@ -25,6 +25,7 @@
 
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
+html{ scroll-padding-top:var(--topbarH); }
 
 body{
   margin:0;
@@ -164,6 +165,9 @@ body{
   gap:12px;
   padding:12px;
 }
+
+/* keep hash navigation (#appMain) visible below sticky topbar */
+#appMain{ scroll-margin-top:var(--topbarH); }
 
 /* cards */
 .panel{
