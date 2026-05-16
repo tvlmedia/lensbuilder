@@ -4776,10 +4776,9 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const sensorShift = focusCtx.sensorX;
     const lensShift = focusCtx.lensShift;
 
-    // Keep mechanical/layout view fixed at nominal import pose.
+    // Keep base lens data at nominal pose; focused clones are used for tracing/display.
     computeVertices(lens.surfaces, 0, 0);
     const nominalSensorX = getSensorPlaneX(lens.surfaces, 0);
-    const plX = nominalSensorX - PL_FFD;
 
     // Use a focused optical clone for tracing only.
     const traceSurfaces = clone(lens.surfaces);
@@ -4854,6 +4853,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       }
     }
 
+    const displaySurfaces = activeTraceSurfaces;
+    const displaySensorX = activeTraceSensorX;
+    const plX = displaySensorX - PL_FFD;
+
     const vCount = traces.filter((t) => t.vignetted).length;
     const tirCount = traces.filter((t) => t.tir).length;
     const validCount = traces.filter((t) => !t.vignetted && !t.tir).length;
@@ -4899,13 +4902,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       ? "COV(V): —"
       : `COV(V): ±${maxField.toFixed(1)}° • REQ(V): ${(req ?? 0).toFixed(1)}° • ${covers ? "COVERS ✅" : "NO ❌"}`;
 
-    const rearVx = lastPhysicalVertexX(lens.surfaces);
+    const rearVx = lastPhysicalVertexX(displaySurfaces);
     const intrusion = rearVx - plX;
     const rearTxt = (intrusion > 0)
-      ? `REAR INTRUSION (nominal): +${intrusion.toFixed(2)}mm ❌`
-      : `REAR CLEAR (nominal): ${Math.abs(intrusion).toFixed(2)}mm ✅`;
+      ? `REAR INTRUSION: +${intrusion.toFixed(2)}mm ❌`
+      : `REAR CLEAR: ${Math.abs(intrusion).toFixed(2)}mm ✅`;
 
-    const frontVx = firstPhysicalVertexX(lens.surfaces);
+    const frontVx = firstPhysicalVertexX(displaySurfaces);
     const lenToFlange = plX - frontVx;
     const totalLen = lenToFlange + PL_LENS_LIP;
     const lenTxt = (Number.isFinite(totalLen) && totalLen > 0)
@@ -4939,7 +4942,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         `Selected: ${selectedIndex} • Traced ${traces.length} rays • field ${fieldAngle.toFixed(2)}° • vignetted ${vCount} • IMS hits ${reachedIMSCount} • ${covTxt}`;
     }
     if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
-    updateZemaxVerifyPanel({ sensorX: nominalSensorX });
+    updateZemaxVerifyPanel({ sensorX: displaySensorX });
 
     resizeCanvasToCSS();
     const r = canvas.getBoundingClientRect();
@@ -4953,16 +4956,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     drawRulerFrom(world, plX, xMinPL, null, "", +12);
 
     drawPLFlange(world, plX);
-    drawLens(world, lens.surfaces);
-    drawStop(world, lens.surfaces);
-    drawRays(world, traces, activeTraceSensorX);
+    drawLens(world, displaySurfaces);
+    drawStop(world, displaySurfaces);
+    drawRays(world, traces, displaySensorX);
     drawPLMountCutout(world, plX);
-    drawSensor(world, nominalSensorX, halfH);
+    drawSensor(world, displaySensorX, halfH);
 
     const eflTxt = efl == null ? "—" : `${efl.toFixed(2)}mm`;
     const tTxt   = T == null ? "—" : `T${T.toFixed(2)}`;
-    const focusTxt = `Focus shift: ${focusCtx.focusShiftMm.toFixed(2)}mm (${focusMode}/${focusMechanism}, preview-only optics)`;
-    const flangeTxt = `Nominal flange: fixed 52.00mm from sensor`;
+    const focusTxt = `Focus shift: ${focusCtx.focusShiftMm.toFixed(2)}mm (${focusMode}/${focusMechanism}, optical pose)`;
+    const flangeTxt = `Flange reference: 52.00mm from displayed sensor plane`;
 
     const titleParts = [
       lens?.name || "Lens",
