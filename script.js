@@ -173,6 +173,7 @@
     btnMoveDown: $("#btnMoveDown"),
     btnRemove: $("#btnRemove"),
     btnSave: $("#btnSave"),
+    btnCopyJson: $("#btnCopyJson"),
     btnPasteZmx: $("#btnPasteZmx"),
     fileLoad: $("#fileLoad"),
     btnAutoFocus: $("#btnAutoFocus"),
@@ -9392,10 +9393,111 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   });
 }
 
-  // -------------------- save lens JSON --------------------
+  // -------------------- lens JSON export/copy --------------------
+  function syncActiveTableEditForJson() {
+    const el = document.activeElement;
+    if (!el || !ui.tbody || !ui.tbody.contains(el)) return;
+    const i = Number(el.dataset?.i);
+    const k = el.dataset?.k;
+    if (!Number.isFinite(i) || !k) return;
+    const s = lens?.surfaces?.[i];
+    if (!s) return;
+
+    if (k === "stop") {
+      s.stop = !!el.checked;
+      enforceSingleStop(i);
+    } else if (k === "glass") {
+      s.glass = normalizeGlassInput(el.value);
+      s.originalGlass = s.glass;
+      s.nd = null;
+      s.vd = null;
+      s.glass_nd = null;
+      s.glass_vd = null;
+    } else if (k === "surfaceLabel") {
+      s.surfaceLabel = String(el.value ?? "").trim();
+      s.surfaceLabelAuto = false;
+    } else if (k === "type") {
+      s.type = String(el.value ?? "");
+    } else if (k === "ap") {
+      const ap = num(el.value, s.ap ?? 0);
+      s.ap = ap;
+      s.ap_optical = ap;
+      if (isIMSSurface(s, i, lens.surfaces)) {
+        if (!lens.import_options || typeof lens.import_options !== "object") lens.import_options = {};
+        lens.import_options.preserve_ims_aperture = true;
+        syncIMSApertureFields(s, ap);
+      }
+    } else if (k === "R" || k === "t") {
+      s[k] = num(el.value, s[k] ?? 0);
+    }
+
+    if (i === 0) {
+      s.type = "OBJ";
+      s.t = 0.0;
+      s.stop = false;
+      s.surfaceLabel = "OBJ";
+      s.surfaceLabelAuto = true;
+    }
+    if (i === lens.surfaces.length - 1) syncIMSApertureFields(s);
+    generateSurfaceLabels(lens.surfaces);
+  }
+
+  function buildLensJson() {
+    syncFocusStateToLens();
+    syncActiveTableEditForJson();
+    syncAllIMSApertures(lens.surfaces);
+    generateSurfaceLabels(lens.surfaces);
+    return clone(lens);
+  }
+
+  function openManualJsonCopyModal(jsonText) {
+    let modal = document.querySelector("#manualJsonCopyModal");
+    if (!modal) {
+      modal = document.createElement("div");
+      modal.id = "manualJsonCopyModal";
+      modal.className = "modal hidden";
+      modal.setAttribute("aria-hidden", "true");
+      modal.innerHTML = `
+        <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="manualJsonCopyTitle">
+          <div class="modalTop">
+            <div>
+              <div id="manualJsonCopyTitle" class="modalTitle">Copy JSON manually</div>
+              <div class="modalSub">Clipboard copy failed. Copy manually with Cmd+C.</div>
+            </div>
+            <button id="manualJsonCopyClose" class="modalX" type="button" aria-label="Close">×</button>
+          </div>
+          <div class="modalScroll">
+            <textarea id="manualJsonCopyText" class="zmxPasteArea" spellcheck="false"></textarea>
+          </div>
+          <div class="modalBottom">
+            <button id="manualJsonCopyDone" class="btn btnPrimary" type="button">Done</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      const close = () => {
+        modal.classList.add("hidden");
+        modal.setAttribute("aria-hidden", "true");
+      };
+      modal.querySelector("#manualJsonCopyClose")?.addEventListener("click", close);
+      modal.querySelector("#manualJsonCopyDone")?.addEventListener("click", close);
+      modal.addEventListener("mousedown", (e) => { if (e.target === modal) close(); });
+    }
+    const ta = modal.querySelector("#manualJsonCopyText");
+    if (ta) {
+      ta.value = jsonText;
+      setTimeout(() => {
+        ta.focus();
+        ta.select();
+      }, 0);
+    }
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
   function saveLensToFile() {
     try {
-      const out = clone(lens);
+      const out = buildLensJson();
       if (out?.originalZmxText) {
         const keep = window.confirm("Include original ZMX text in saved JSON? (larger file)");
         if (!keep) delete out.originalZmxText;
@@ -9415,6 +9517,25 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       toast("Saved lens JSON");
     } catch (e) {
       if (ui.footerWarn) ui.footerWarn.textContent = `Save failed: ${e?.message || e}`;
+    }
+  }
+
+  async function copyLensJsonToClipboard() {
+    let jsonText = "";
+    try {
+      const out = buildLensJson();
+      jsonText = JSON.stringify(out, null, 2);
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(jsonText);
+      toast("JSON copied to clipboard");
+      if (ui.footerWarn) ui.footerWarn.textContent = "JSON copied to clipboard";
+    } catch (e) {
+      try {
+        if (!jsonText) jsonText = JSON.stringify(buildLensJson(), null, 2);
+      } catch (_) {}
+      if (jsonText) openManualJsonCopyModal(jsonText);
+      toast("Clipboard copy failed — JSON opened for manual copy");
+      if (ui.footerWarn) ui.footerWarn.textContent = `Clipboard copy failed — JSON opened for manual copy`;
     }
   }
 
@@ -9547,6 +9668,7 @@ function wireUI() {
   on("#btnDebugOverlay", "click", toggleDebugOverlay);
 
   on("#btnSave", "click", saveLensToFile);
+  on("#btnCopyJson", "click", copyLensJsonToClipboard);
 
   // lens JSON file picker
   if (ui.fileLoad) {
