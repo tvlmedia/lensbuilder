@@ -974,6 +974,128 @@ function warnMissingGlass(name) {
     return { activeConfig, configs };
   }
 
+  function isAirSurfaceMedium(surface) {
+    return String(surface?.glass ?? "AIR").trim().toUpperCase() === "AIR";
+  }
+
+  function isReservedSurfaceType(typeRaw) {
+    const t = String(typeRaw || "").trim().toUpperCase();
+    return t === "OBJ" || t === "IMS" || t === "STOP" || t === "MECH" || t === "BAFFLE" || t === "HOUSING";
+  }
+
+  function isAutoSurfaceLabelCandidate(surface) {
+    const label = String(surface?.surfaceLabel ?? surface?.label ?? "").trim();
+    const type = String(surface?.type ?? "").trim();
+    if (!label) return true;
+    if (surface?.surfaceLabelAuto) return true;
+    if (/^\d+$/.test(label) || /^S\d+$/i.test(label)) return true;
+    if (/^L\d+[A-Z]?(?:\/L\d+[A-Z]?)?\s+(?:FRONT|REAR|CEMENT)$/i.test(label)) return true;
+    return /^\d+$/.test(type) && label === type;
+  }
+
+  function setSurfaceAutoLabel(surface, label, force = false) {
+    if (!surface || typeof surface !== "object") return;
+    const clean = String(label || "").trim();
+    if (!clean) return;
+    if (force || isAutoSurfaceLabelCandidate(surface)) {
+      surface.surfaceLabel = clean;
+      surface.surfaceLabelAuto = true;
+    }
+  }
+
+  function assignElementGroupLabels(surfaces, startIdx, endIdx, elementNo, force = false) {
+    const count = endIdx - startIdx + 1;
+    if (count <= 0) return;
+    if (count === 1) {
+      setSurfaceAutoLabel(surfaces[startIdx], `L${elementNo} S1`, force);
+      return;
+    }
+    if (count === 2) {
+      setSurfaceAutoLabel(surfaces[startIdx], `L${elementNo} FRONT`, force);
+      setSurfaceAutoLabel(surfaces[endIdx], `L${elementNo} REAR`, force);
+      return;
+    }
+    for (let i = startIdx; i <= endIdx; i++) {
+      const offset = i - startIdx;
+      const letter = String.fromCharCode(65 + Math.min(offset, 25));
+      if (i === startIdx) {
+        setSurfaceAutoLabel(surfaces[i], `L${elementNo}${letter} FRONT`, force);
+      } else if (i === endIdx) {
+        const rearLetter = String.fromCharCode(65 + Math.min(offset - 1, 25));
+        setSurfaceAutoLabel(surfaces[i], `L${elementNo}${rearLetter} REAR`, force);
+      } else {
+        const prevLetter = String.fromCharCode(65 + Math.min(offset - 1, 25));
+        setSurfaceAutoLabel(surfaces[i], `L${elementNo}${prevLetter}/L${elementNo}${letter} CEMENT`, force);
+      }
+    }
+  }
+
+  function generateSurfaceLabels(surfaces, options = {}) {
+    if (!Array.isArray(surfaces)) return surfaces;
+    const force = !!options.force;
+    let elementNo = 0;
+    let fallbackNo = 1;
+
+    for (let i = 0; i < surfaces.length; i++) {
+      const s = surfaces[i];
+      if (!s || typeof s !== "object") continue;
+
+      const type = String(s.type || "").trim().toUpperCase();
+      if (i === 0 || type === "OBJ") {
+        setSurfaceAutoLabel(s, "OBJ", true);
+        continue;
+      }
+      if (i === surfaces.length - 1 || type === "IMS") {
+        setSurfaceAutoLabel(s, "IMS", true);
+        continue;
+      }
+      if (s.stop || type === "STOP") {
+        setSurfaceAutoLabel(s, "STOP", true);
+        continue;
+      }
+      if (isReservedSurfaceType(type)) {
+        setSurfaceAutoLabel(s, type, force);
+        continue;
+      }
+
+      const mediumBeforeIsAir = i === 0 || isAirSurfaceMedium(surfaces[i - 1]);
+      const mediumAfterIsAir = isAirSurfaceMedium(s);
+      if (mediumBeforeIsAir && !mediumAfterIsAir) {
+        let endIdx = i;
+        for (let j = i + 1; j < surfaces.length; j++) {
+          const next = surfaces[j];
+          const nextType = String(next?.type || "").trim().toUpperCase();
+          if (!next || next.stop || nextType === "STOP" || nextType === "IMS" || nextType === "OBJ") break;
+          endIdx = j;
+          if (isAirSurfaceMedium(next)) break;
+        }
+        elementNo += 1;
+        assignElementGroupLabels(surfaces, i, endIdx, elementNo, force);
+        i = endIdx;
+        continue;
+      }
+
+      setSurfaceAutoLabel(s, `S${fallbackNo++}`, force);
+    }
+    return surfaces;
+  }
+
+  function getSurfaceDisplayLabel(surface, index = 0) {
+    const label = String(surface?.surfaceLabel ?? surface?.label ?? "").trim();
+    if (label) return label;
+    const type = String(surface?.type ?? "").trim();
+    if (type) return type;
+    return `S${index}`;
+  }
+
+  function escapeAttr(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
   function sanitizeLens(obj) {
   const rawAutofocusMode = String(obj?.import_options?.autofocus_mode || "").trim().toLowerCase();
   const autofocusMode = (
@@ -1063,6 +1185,8 @@ function warnMissingGlass(name) {
     })();
     return {
       type: String(s?.type ?? ""),
+      surfaceLabel: String(s?.surfaceLabel ?? s?.label ?? "").trim(),
+      surfaceLabelAuto: Boolean(s?.surfaceLabelAuto ?? false),
       R: Number(s?.R ?? 0),
       t: Number(s?.t ?? 0),
       ap: aps.ap,
@@ -1109,14 +1233,13 @@ function warnMissingGlass(name) {
     const firstStop = safe.surfaces.findIndex((s) => s.stop);
     if (firstStop >= 0) safe.surfaces.forEach((s, i) => { if (i !== firstStop) s.stop = false; });
 
-    safe.surfaces.forEach((s, i) => { if (!s.type || !s.type.trim()) s.type = String(i); });
-
     if (safe.surfaces.length >= 1) {
     safe.surfaces[0].type = "OBJ";
     // ✅ hard lock
     safe.surfaces[0].t = 0.0;
   }
     if (safe.surfaces.length >= 1) safe.surfaces[safe.surfaces.length - 1].type = "IMS";
+    generateSurfaceLabels(safe.surfaces);
 
     return safe;
   }
@@ -1575,6 +1698,7 @@ function warnMissingGlass(name) {
   function buildTable() {
     clampSelected();
     if (!ui.tbody) return;
+    generateSurfaceLabels(lens.surfaces);
     const glassOptionNames = getGlassOptionNames(lens.surfaces);
 
     rememberTableFocus();
@@ -1601,7 +1725,7 @@ function warnMissingGlass(name) {
 
 tr.innerHTML = `
   <td style="width:34px; font-family:var(--mono)">${idx}</td>
-  <td style="width:72px"><input class="cellInput" data-k="type" data-i="${idx}" value="${s.type}"></td>
+  <td style="width:72px"><input class="cellInput" data-k="surfaceLabel" data-i="${idx}" value="${escapeAttr(getSurfaceDisplayLabel(s, idx))}"></td>
   <td style="width:92px"><input class="cellInput" data-k="R" data-i="${idx}" type="number" step="0.01" value="${s.R}"></td>
 
   <td style="width:92px">
@@ -1667,7 +1791,10 @@ tr.innerHTML = `
     return;
   }
 
-  if (k === "type") s.type = el.value;
+  if (k === "surfaceLabel") {
+    s.surfaceLabel = String(el.value ?? "");
+    s.surfaceLabelAuto = false;
+  } else if (k === "type") s.type = el.value;
   else if (k === "ap") {
     const ap = num(el.value, s.ap ?? 0);
     if (ap <= 0) setStatusWarning(`Raytrace stopped: invalid surface ${i} ap <= 0`);
@@ -1716,6 +1843,22 @@ function onCellCommit(e) {
     s.vd = null;
     s.glass_nd = null;
     s.glass_vd = null;
+  } else if (k === "surfaceLabel") {
+    const label = String(el.value ?? "").trim();
+    const upperLabel = label.toUpperCase();
+    s.surfaceLabel = label;
+    s.surfaceLabelAuto = false;
+    if (upperLabel === "STOP") {
+      s.type = "STOP";
+      s.stop = true;
+      s.surfaceLabelAuto = true;
+      enforceSingleStop(i);
+    } else if (upperLabel === "MECH" || upperLabel === "BAFFLE" || upperLabel === "HOUSING") {
+      s.type = upperLabel;
+    } else if (!label) {
+      s.surfaceLabelAuto = true;
+      generateSurfaceLabels(lens.surfaces, { force: true });
+    }
   } else if (k === "type") {
     s.type = String(el.value ?? "");
     if (String(s.type).toUpperCase() === "STOP") {
@@ -1735,16 +1878,21 @@ function onCellCommit(e) {
 
   if (i === 0) {
     s.type = "OBJ";
+    s.surfaceLabel = "OBJ";
+    s.surfaceLabelAuto = true;
     s.t = 0.0;
     s.stop = false;
   }
   if (i === lens.surfaces.length - 1) {
     s.type = "IMS";
+    s.surfaceLabel = "IMS";
+    s.surfaceLabelAuto = true;
     s.stop = false;
   }
 
   applySensorToIMS();
   clampAllApertures(lens.surfaces);
+  generateSurfaceLabels(lens.surfaces);
   buildTable();
   scheduleRenderAll();
   scheduleRenderPreview();
