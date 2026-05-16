@@ -8063,37 +8063,66 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   // -------------------- toolbar actions: Scale → FL, Set T --------------------
-  function scaleSurfaceDimensions(s, k) {
+  function scaleSurfaceDimensions(s, k, options = {}) {
     if (!s || !Number.isFinite(k) || k <= 0) return;
 
     const t = String(s.type || "").toUpperCase();
-    if (t !== "OBJ" && t !== "IMS") s.t = Number(s.t || 0) * k;
-    if (Math.abs(Number(s.R || 0)) > 1e-9) s.R = Number(s.R) * k;
+    const isOBJ = t === "OBJ";
+    const isIMS = t === "IMS";
+    const isMechanical = t === "MECH" || t === "BAFFLE" || t === "HOUSING";
+    const isStop = !!s.stop || t === "STOP";
+    const scaleAirGaps = options.scaleAirGaps !== false;
+    const scaleClearApertures = !!options.scaleClearApertures;
+    const scaleStopAperture = options.scaleStopAperture !== false;
+    const scaleSensorAperture = !!options.scaleSensorAperture;
 
-    const ap = Number(s.ap);
-    if (Number.isFinite(ap)) s.ap = Math.max(AP_MIN, ap * k);
+    if (!isOBJ && !isIMS && !isMechanical && Math.abs(Number(s.R || 0)) > 1e-9) {
+      s.R = Number(s.R) * k;
+    }
 
-    const apOpt = Number(s.ap_optical);
-    if (Number.isFinite(apOpt)) s.ap_optical = Math.max(AP_MIN, apOpt * k);
+    if (!isOBJ && !isIMS) {
+      const isAirGap = isAirMediumName(s.glass);
+      if (scaleAirGaps || !isAirGap) s.t = Number(s.t || 0) * k;
+    }
 
-    if (s.ap_mech != null && String(s.ap_mech).trim() !== "") {
+    const shouldScaleAperture = (!isOBJ && !isIMS && scaleClearApertures) || (isStop && scaleStopAperture) || (isIMS && scaleSensorAperture);
+    if (shouldScaleAperture) {
+      const ap = Number(s.ap);
+      if (Number.isFinite(ap)) s.ap = Math.max(AP_MIN, ap * k);
+
+      const apOpt = Number(s.ap_optical);
+      if (Number.isFinite(apOpt)) s.ap_optical = Math.max(AP_MIN, apOpt * k);
+    }
+
+    if (scaleClearApertures && !isOBJ && !isIMS && s.ap_mech != null && String(s.ap_mech).trim() !== "") {
       const apMech = Number(s.ap_mech);
       if (Number.isFinite(apMech)) s.ap_mech = Math.max(AP_MIN, apMech * k);
     }
 
     const shoulder = Number(s.shoulder_depth);
-    if (Number.isFinite(shoulder)) s.shoulder_depth = Math.max(0, shoulder * k);
+    if (!isOBJ && !isIMS && Number.isFinite(shoulder)) s.shoulder_depth = Math.max(0, shoulder * k);
 
     const bevel = Number(s.bevel);
-    if (Number.isFinite(bevel)) s.bevel = Math.max(0, bevel * k);
+    if (!isOBJ && !isIMS && Number.isFinite(bevel)) s.bevel = Math.max(0, bevel * k);
 
-    if (String(s.edge_thickness_mode || "").toLowerCase() === "explicit") {
+    if (!isOBJ && !isIMS && String(s.edge_thickness_mode || "").toLowerCase() === "explicit") {
       const et = Number(s.edge_thickness);
       if (Number.isFinite(et)) s.edge_thickness = Math.max(0, et * k);
     }
   }
 
-  function scaleToTargetFocal() {
+  function formatScaleFlStatus({ cur, target, k, scaleAirGaps, scaleClearApertures, scaleStopAperture }) {
+    const parts = [
+      `Scale → FL complete: EFL ${cur.toFixed(2)} → ${target.toFixed(2)}mm, k=${k.toFixed(4)}.`,
+      scaleAirGaps ? "R/t and air gaps scaled." : "R and glass thicknesses scaled; air gaps preserved.",
+      scaleClearApertures ? "Warning: clear apertures were scaled. This may reduce image circle / full-frame coverage." : "Clear apertures preserved.",
+      "IMS preserved.",
+      scaleStopAperture ? "Stop aperture scaled to preserve T/F-stop." : "Stop aperture preserved; T/F-stop may change.",
+    ];
+    return parts.join(" ");
+  }
+
+  function scaleToTargetFocal(options = {}) {
     const wavePreset = ui.wavePreset?.value || "d";
     const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
     if (!Number.isFinite(cur) || cur <= 0) {
@@ -8101,22 +8130,147 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       return;
     }
 
-    const target = num(prompt("Target focal length (mm)?", String(Math.round(cur))), cur);
+    const target = num(
+      options.targetFocalMm ?? prompt("Target focal length (mm)?", String(Math.round(cur))),
+      cur
+    );
     if (!Number.isFinite(target) || target <= 0) return;
 
     const k = target / cur;
+    const scaleAirGaps = options.scaleAirGaps !== false;
+    const scaleClearApertures = !!options.scaleClearApertures;
+    const scaleStopAperture = options.scaleStopAperture !== false;
+    const preservedApertures = lens.surfaces.map((s) => {
+      const type = String(s?.type || "").toUpperCase();
+      const isStop = !!s?.stop || type === "STOP";
+      const shouldPreserve = type === "OBJ" || type === "IMS" || (!scaleClearApertures && !isStop) || (isStop && !scaleStopAperture);
+      if (!shouldPreserve) return null;
+      return {
+        ap: s?.ap,
+        ap_optical: s?.ap_optical,
+        ap_mech: s?.ap_mech,
+      };
+    });
 
     for (let i = 0; i < lens.surfaces.length; i++) {
-      scaleSurfaceDimensions(lens.surfaces[i], k);
+      scaleSurfaceDimensions(lens.surfaces[i], k, {
+        scaleAirGaps,
+        scaleClearApertures,
+        scaleStopAperture,
+        scaleSensorAperture: false,
+      });
     }
 
     computeVertices(lens.surfaces, 0, 0);
     clampAllApertures(lens.surfaces);
+    preservedApertures.forEach((saved, i) => {
+      if (!saved || !lens.surfaces[i]) return;
+      lens.surfaces[i].ap = saved.ap;
+      lens.surfaces[i].ap_optical = saved.ap_optical;
+      lens.surfaces[i].ap_mech = saved.ap_mech;
+    });
+    generateSurfaceLabels(lens.surfaces);
     buildTable();
     renderAll();
     scheduleRenderPreview();
 
-    if (ui.footerWarn) ui.footerWarn.textContent = `Scale→FL: EFL ${cur.toFixed(2)} → target ${target.toFixed(2)} (k=${k.toFixed(4)}).`;
+    if (ui.footerWarn) {
+      ui.footerWarn.textContent = formatScaleFlStatus({
+        cur,
+        target,
+        k,
+        scaleAirGaps,
+        scaleClearApertures,
+        scaleStopAperture,
+      });
+    }
+  }
+
+  function ensureScaleToFocalModal() {
+    let modal = document.querySelector("#scaleToFocalModal");
+    if (modal) return modal;
+    modal = document.createElement("div");
+    modal.id = "scaleToFocalModal";
+    modal.className = "modal hidden";
+    modal.setAttribute("aria-hidden", "true");
+    modal.innerHTML = `
+      <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="scaleFlTitle">
+        <div class="modalTop">
+          <div>
+            <div id="scaleFlTitle" class="modalTitle">Scale → FL</div>
+            <div class="modalSub">Scale focal length without shrinking sensor coverage or user clear apertures.</div>
+          </div>
+          <button id="scaleFlClose" class="modalX" type="button" aria-label="Close">×</button>
+        </div>
+        <div class="modalScroll">
+          <div class="modalGrid">
+            <div class="field">
+              <label for="scaleFlTarget">Target focal length (mm)</label>
+              <input id="scaleFlTarget" type="number" step="0.01" min="0.01" />
+            </div>
+            <div class="field">
+              <label>Current EFL</label>
+              <input id="scaleFlCurrent" type="text" disabled />
+            </div>
+            <div class="fieldFull">
+              <label><input id="scaleFlRt" type="checkbox" checked disabled /> Scale radii and thicknesses</label>
+              <label><input id="scaleFlAir" type="checkbox" checked /> Scale air gaps</label>
+              <label><input id="scaleFlClearAp" type="checkbox" /> Scale clear apertures</label>
+              <label><input id="scaleFlStopAp" type="checkbox" checked /> Scale STOP aperture to preserve T/F-stop</label>
+              <label><input id="scaleFlSensorAp" type="checkbox" disabled /> Scale IMS/sensor aperture</label>
+            </div>
+            <div class="fieldFull">
+              <div class="hint">IMS/sensor aperture is preserved by default so full-frame coverage and image-circle checks stay valid.</div>
+            </div>
+          </div>
+        </div>
+        <div class="modalBottom">
+          <button id="scaleFlCancel" class="btn" type="button">Cancel</button>
+          <button id="scaleFlApply" class="btn btnPrimary" type="button">Scale</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector("#scaleFlClose")?.addEventListener("click", closeScaleToFocalModal);
+    modal.querySelector("#scaleFlCancel")?.addEventListener("click", closeScaleToFocalModal);
+    modal.querySelector("#scaleFlApply")?.addEventListener("click", () => {
+      const wavePreset = ui.wavePreset?.value || "d";
+      const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
+      scaleToTargetFocal({
+        targetFocalMm: num(modal.querySelector("#scaleFlTarget")?.value, cur),
+        scaleAirGaps: !!modal.querySelector("#scaleFlAir")?.checked,
+        scaleClearApertures: !!modal.querySelector("#scaleFlClearAp")?.checked,
+        scaleStopAperture: !!modal.querySelector("#scaleFlStopAp")?.checked,
+      });
+      closeScaleToFocalModal();
+    });
+    modal.addEventListener("mousedown", (e) => {
+      if (e.target === modal) closeScaleToFocalModal();
+    });
+    return modal;
+  }
+
+  function closeScaleToFocalModal() {
+    const modal = document.querySelector("#scaleToFocalModal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function openScaleToFocalModal() {
+    const modal = ensureScaleToFocalModal();
+    const wavePreset = ui.wavePreset?.value || "d";
+    const cur = estimateEflBflParaxial(lens.surfaces, wavePreset).efl;
+    const currentEl = modal.querySelector("#scaleFlCurrent");
+    const targetEl = modal.querySelector("#scaleFlTarget");
+    if (currentEl) currentEl.value = Number.isFinite(cur) && cur > 0 ? `${cur.toFixed(2)} mm` : "not solvable";
+    if (targetEl) {
+      targetEl.value = Number.isFinite(cur) && cur > 0 ? String(Math.round(cur)) : "50";
+      setTimeout(() => { targetEl.focus(); targetEl.select(); }, 0);
+    }
+
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
   }
 
   function setTargetTStop() {
@@ -9348,7 +9502,7 @@ function wireUI() {
   on("#btnMoveDown", "click", () => moveSelected(+1));
   on("#btnRemove", "click", removeSelected);
 
-  on("#btnScaleToFocal", "click", scaleToTargetFocal);
+  on("#btnScaleToFocal", "click", openScaleToFocalModal);
   on("#btnSetTStop", "click", setTargetTStop);
   on("#btnAutoFocus", "click", autoFocus);
   on("#btnRenderEngine", "click", toggleRenderEngine);
