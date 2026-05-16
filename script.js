@@ -280,6 +280,7 @@ const SENSOR_PRESETS = {
   // -------------------- default preview chart (GitHub) --------------------
   const DEFAULT_PREVIEW_URL = "./TVL_Focus_Distortion_Chart_3x2_6000x4000.png";
   const DEFAULT_LENS_URL = "./bijna-goed.json";
+  const LAST_LENS_STORAGE_KEY = "tvl_lensbuilder:last_lens:v1";
   preview.sourceUrls.chart = DEFAULT_PREVIEW_URL;
 
   function syncIMSCellApertureToUI() {
@@ -1122,6 +1123,58 @@ function warnMissingGlass(name) {
   let _lastParaxialFailSignature = "";
   let _lastZemaxTraceDebugSignature = "";
 
+  function getSafeLocalStorage() {
+    try {
+      if (typeof window === "undefined" || !window.localStorage) return null;
+      return window.localStorage;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function buildPersistableLensPayload() {
+    if (!lens || typeof lens !== "object") return null;
+    const snapshot = clone(lens);
+    // Keep storage footprint predictable; this source text can be large.
+    if (snapshot && typeof snapshot === "object" && "originalZmxText" in snapshot) {
+      delete snapshot.originalZmxText;
+    }
+    return {
+      version: 1,
+      savedAt: Date.now(),
+      lens: snapshot,
+    };
+  }
+
+  function persistLensSession() {
+    const storage = getSafeLocalStorage();
+    if (!storage) return false;
+    try {
+      const payload = buildPersistableLensPayload();
+      if (!payload) return false;
+      storage.setItem(LAST_LENS_STORAGE_KEY, JSON.stringify(payload));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function restoreLensSession() {
+    const storage = getSafeLocalStorage();
+    if (!storage) return false;
+    try {
+      const raw = storage.getItem(LAST_LENS_STORAGE_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      const savedLens = parsed?.lens ?? parsed;
+      if (!savedLens || !Array.isArray(savedLens?.surfaces) || !savedLens.surfaces.length) return false;
+      loadLens(savedLens);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function zoomRoleForIndex(idx, total) {
     if (total <= 1) return null;
     if (idx === 0) return "Wide";
@@ -1351,6 +1404,7 @@ function warnMissingGlass(name) {
     applySensorToIMS();
     renderAll();
     if (preview.ready) scheduleRenderPreview();
+    persistLensSession();
   }
 
   // -------------------- table helpers --------------------
@@ -8636,6 +8690,13 @@ function wireUI() {
     renderAll();
     if (preview.ready) scheduleRenderPreview();
   });
+
+  window.addEventListener("pagehide", () => {
+    persistLensSession();
+  });
+  window.addEventListener("beforeunload", () => {
+    persistLensSession();
+  });
 }
 
 // -------------------- boot --------------------
@@ -8691,7 +8752,13 @@ function boot() {
   preview.sourceMode = "chart";
   if (ui.previewSourceMode) ui.previewSourceMode.value = "chart";
   loadPreviewImageFromURL(DEFAULT_PREVIEW_URL, { announce: false }).catch(() => {});
-  loadLensFromURL(DEFAULT_LENS_URL).catch(() => {});
+
+  const restoredSession = restoreLensSession();
+  if (!restoredSession) {
+    loadLensFromURL(DEFAULT_LENS_URL).catch(() => {});
+  } else {
+    toast("Laatste lens hersteld");
+  }
 }
 
 boot();
