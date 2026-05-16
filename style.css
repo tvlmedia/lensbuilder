@@ -67,13 +67,15 @@ body{
   gap:14px;
   padding:12px 14px;
 
-  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,0));
+  /* Opaque topbar so underlying panel text never bleeds through */
+  background:var(--bg);
   border-bottom:1px solid var(--stroke);
 
   position:sticky;
   top:0;
   z-index:5000;
-  backdrop-filter: blur(10px);
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
 }
 
 /* links: alleen dot */

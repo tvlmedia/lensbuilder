@@ -1177,10 +1177,17 @@ function warnMissingGlass(name) {
 
   function normalizeInitialAnchorScroll() {
     if (typeof window === "undefined") return;
-    if (String(window.location.hash || "") !== "#appMain") return;
+    const hasAppMainHash = String(window.location.hash || "") === "#appMain";
 
+    if (hasAppMainHash) {
+      try {
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      } catch (_) {}
+    }
     try {
-      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      if (window.history && "scrollRestoration" in window.history) {
+        window.history.scrollRestoration = "manual";
+      }
     } catch (_) {}
 
     const resetScroll = () => {
