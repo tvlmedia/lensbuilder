@@ -298,15 +298,44 @@ const SENSOR_PRESETS = {
     return !!(lens?.import_options?.preserve_ims_aperture);
   }
 
+  function isIMSSurface(surface, index = null, surfaces = null) {
+    if (!surface || typeof surface !== "object") return false;
+    const type = String(surface.type || "").trim().toUpperCase();
+    const label = String(surface.surfaceLabel ?? surface.label ?? "").trim().toUpperCase();
+    const isLast = Array.isArray(surfaces) && Number.isFinite(Number(index)) && Number(index) === surfaces.length - 1;
+    return type === "IMS" || label === "IMS" || isLast;
+  }
+
+  function syncIMSApertureFields(surface, apertureValue = null) {
+    if (!surface || typeof surface !== "object") return;
+    const imsApMin = 0.01;
+    const ap = Number(apertureValue ?? surface.ap ?? surface.ap_optical ?? surface.ap_mech ?? imsApMin);
+    const cleanAp = Number.isFinite(ap) ? Math.max(imsApMin, ap) : imsApMin;
+    surface.type = "IMS";
+    surface.surfaceLabel = "IMS";
+    surface.surfaceLabelAuto = true;
+    surface.R = 0.0;
+    surface.t = 0.0;
+    surface.ap = cleanAp;
+    surface.ap_optical = cleanAp;
+    surface.ap_mech = cleanAp;
+    surface.stop = false;
+  }
+
+  function syncAllIMSApertures(surfaces) {
+    if (!Array.isArray(surfaces)) return;
+    surfaces.forEach((s, i) => {
+      if (isIMSSurface(s, i, surfaces)) syncIMSApertureFields(s);
+    });
+  }
+
   function applySensorToIMS(opts = {}) {
     const force = !!opts.force;
     if (!force && shouldPreserveIMSAperture()) return;
     const { halfH } = getSensorWH();
     const ims = lens?.surfaces?.[lens.surfaces.length - 1];
     if (ims && String(ims.type).toUpperCase() === "IMS") {
-      ims.ap = halfH;
-      ims.ap_optical = halfH;
-      if (ims.ap_mech == null) ims.ap_mech = halfH;
+      syncIMSApertureFields(ims, halfH);
       syncIMSCellApertureToUI();
     }
   }
@@ -1239,6 +1268,7 @@ function warnMissingGlass(name) {
     safe.surfaces[0].t = 0.0;
   }
     if (safe.surfaces.length >= 1) safe.surfaces[safe.surfaces.length - 1].type = "IMS";
+    syncAllIMSApertures(safe.surfaces);
     generateSurfaceLabels(safe.surfaces);
 
     return safe;
@@ -1800,6 +1830,11 @@ tr.innerHTML = `
     if (ap <= 0) setStatusWarning(`Raytrace stopped: invalid surface ${i} ap <= 0`);
     s.ap = ap;
     s.ap_optical = ap;
+    if (isIMSSurface(s, i, lens.surfaces)) {
+      if (!lens.import_options || typeof lens.import_options !== "object") lens.import_options = {};
+      lens.import_options.preserve_ims_aperture = true;
+      syncIMSApertureFields(s, ap);
+    }
   } else if (k === "R" || k === "t") s[k] = num(el.value, s[k] ?? 0);
   else s[k] = num(el.value, s[k] ?? 0);
 
@@ -1870,6 +1905,11 @@ function onCellCommit(e) {
     if (ap <= 0) setStatusWarning(`Raytrace stopped: invalid surface ${i} ap <= 0`);
     s.ap = ap;
     s.ap_optical = ap;
+    if (isIMSSurface(s, i, lens.surfaces)) {
+      if (!lens.import_options || typeof lens.import_options !== "object") lens.import_options = {};
+      lens.import_options.preserve_ims_aperture = true;
+      syncIMSApertureFields(s, ap);
+    }
   } else if (k === "R" || k === "t") {
     s[k] = num(el.value, s[k] ?? 0);
   } else {
@@ -1884,10 +1924,7 @@ function onCellCommit(e) {
     s.stop = false;
   }
   if (i === lens.surfaces.length - 1) {
-    s.type = "IMS";
-    s.surfaceLabel = "IMS";
-    s.surfaceLabelAuto = true;
-    s.stop = false;
+    syncIMSApertureFields(s);
   }
 
   applySensorToIMS();
@@ -8169,6 +8206,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       lens.surfaces[i].ap_optical = saved.ap_optical;
       lens.surfaces[i].ap_mech = saved.ap_mech;
     });
+    syncAllIMSApertures(lens.surfaces);
     generateSurfaceLabels(lens.surfaces);
     buildTable();
     renderAll();
