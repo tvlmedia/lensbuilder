@@ -2363,13 +2363,35 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return { xRef: s.vx, apRef: Math.max(1e-3, getSurfaceOpticalAp(s) * 0.98), refIdx };
   }
 
-  function buildRays(surfaces, fieldAngleDeg, count) {
+  function finiteFieldObjectPoint(surfaces, fieldAngleDeg, objectDistanceMm = null) {
+    const dist = Number(objectDistanceMm);
+    if (!Number.isFinite(dist) || dist <= 0.1 || dist >= 1e8) return null;
+    const xObj = (Number(surfaces?.[0]?.vx) || 0) - dist;
+    const theta = (fieldAngleDeg * Math.PI) / 180;
+    const yObj = Math.tan(theta) * dist;
+    if (!Number.isFinite(xObj) || !Number.isFinite(yObj)) return null;
+    return { xObj, yObj, distMm: dist };
+  }
+
+  function projectRayThroughAimFromObject(xObj, yObj, xAim, yAim, xStart) {
+    const den = xAim - xObj;
+    if (!Number.isFinite(den) || Math.abs(den) < 1e-9) return null;
+    const t = (xStart - xObj) / den;
+    const yStart = yObj + (yAim - yObj) * t;
+    if (!Number.isFinite(yStart)) return null;
+    const dir = normalize({ x: xAim - xStart, y: yAim - yStart });
+    if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y)) return null;
+    return { p: { x: xStart, y: yStart }, d: dir };
+  }
+
+  function buildRays(surfaces, fieldAngleDeg, count, objectDistanceMm = null) {
     const n = Math.max(3, Math.min(101, count | 0));
     const theta = (fieldAngleDeg * Math.PI) / 180;
     const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
 
     const xStart = (surfaces[0]?.vx ?? 0) - 80;
     const { xRef, apRef } = getRayReferencePlane(surfaces);
+    const objPoint = finiteFieldObjectPoint(surfaces, fieldAngleDeg, objectDistanceMm);
 
     const hMax = apRef * 0.98;
     const rays = [];
@@ -2378,6 +2400,19 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     for (let k = 0; k < n; k++) {
       const a = (k / (n - 1)) * 2 - 1;
       const yAtRef = a * hMax;
+      if (objPoint) {
+        const finiteRay = projectRayThroughAimFromObject(
+          objPoint.xObj,
+          objPoint.yObj,
+          xRef,
+          yAtRef,
+          xStart
+        );
+        if (finiteRay) {
+          rays.push(finiteRay);
+          continue;
+        }
+      }
       const y0 = yAtRef - tanT * (xRef - xStart);
       rays.push({ p: { x: xStart, y: y0 }, d: dir });
     }
@@ -2406,7 +2441,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     return rays;
   }
 
-  function buildEntrancePupilLimitedRays(surfaces, count = 31, fieldAngleDeg = 0, wavePreset = "d") {
+  function buildEntrancePupilLimitedRays(surfaces, count = 31, fieldAngleDeg = 0, wavePreset = "d", objectDistanceMm = null) {
     const n = Math.max(3, Math.min(101, count | 0));
     const theta = (fieldAngleDeg * Math.PI) / 180;
     const dir = normalize({ x: Math.cos(theta), y: Math.sin(theta) });
@@ -2420,6 +2455,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const stopIdx = findStopSurfaceIndex(surfaces);
     const stopSurf = stopIdx >= 0 ? surfaces[stopIdx] : first;
     const xAim = Number(stopSurf?.vx || 0);
+    const objPoint = finiteFieldObjectPoint(surfaces, fieldAngleDeg, objectDistanceMm);
     const stopAp = Math.max(0.25, Number(getSurfaceOpticalAp(stopSurf)) || 0.25);
 
     let epRadiusMm = null;
@@ -2441,6 +2477,19 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     for (let k = 0; k < n; k++) {
       const a = (k / (n - 1)) * 2 - 1;
       const yAtAim = a * pupilRadius;
+      if (objPoint) {
+        const finiteRay = projectRayThroughAimFromObject(
+          objPoint.xObj,
+          objPoint.yObj,
+          xAim,
+          yAtAim,
+          xStart
+        );
+        if (finiteRay) {
+          rays.push(finiteRay);
+          continue;
+        }
+      }
       const yStart = yAtAim - (Math.abs(dir.x) < 1e-9 ? 0 : (dir.y / dir.x) * (xAim - xStart));
       rays.push({
         p: { x: xStart, y: yStart },
@@ -2454,7 +2503,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       epRadiusMm,
       xStartMm: xStart,
       xAimMm: xAim,
-      mode: "entrance_pupil_limited",
+      mode: objPoint ? "entrance_pupil_limited_finite_object" : "entrance_pupil_limited",
     };
   }
 
@@ -4798,8 +4847,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     );
     const useZemaxPupilBundle = isImportedZemax && Math.abs(fieldAngle) < 1e-9;
     let rayBundle = useZemaxPupilBundle
-      ? buildEntrancePupilLimitedRays(traceSurfaces, rayCount, fieldAngle, wavePreset)
-      : { rays: buildRays(traceSurfaces, fieldAngle, rayCount), bundleRadiusMm: null, epRadiusMm: null, mode: "default" };
+      ? buildEntrancePupilLimitedRays(traceSurfaces, rayCount, fieldAngle, wavePreset, objectDistanceMm)
+      : { rays: buildRays(traceSurfaces, fieldAngle, rayCount, objectDistanceMm), bundleRadiusMm: null, epRadiusMm: null, mode: "default" };
     let rays = Array.isArray(rayBundle?.rays) ? rayBundle.rays : [];
     let traces = rays.map((r, ri) => traceRayForward(clone(r), traceSurfaces, wavePreset, { rayIndex: ri, debugTrace: useZemaxPupilBundle }));
 
@@ -4821,8 +4870,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     let reachedIMSCount = traces.filter((t) => t.reachedIMS).length;
     if (isImportedZemax && reachedIMSCount === 0) {
       let nominalBundle = useZemaxPupilBundle
-        ? buildEntrancePupilLimitedRays(nominalTraceSurfaces, rayCount, fieldAngle, wavePreset)
-        : { rays: buildRays(nominalTraceSurfaces, fieldAngle, rayCount), bundleRadiusMm: null, epRadiusMm: null, mode: "nominal_default" };
+        ? buildEntrancePupilLimitedRays(nominalTraceSurfaces, rayCount, fieldAngle, wavePreset, objectDistanceMm)
+        : { rays: buildRays(nominalTraceSurfaces, fieldAngle, rayCount, objectDistanceMm), bundleRadiusMm: null, epRadiusMm: null, mode: "nominal_default" };
       let nominalRays = Array.isArray(nominalBundle?.rays) ? nominalBundle.rays : [];
       let nominalTraces = nominalRays.map((r, ri) => traceRayForward(clone(r), nominalTraceSurfaces, wavePreset, { rayIndex: ri, debugTrace: false }));
       let nominalReachedIMS = nominalTraces.filter((t) => t.reachedIMS).length;
