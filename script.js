@@ -256,8 +256,10 @@ const SENSOR_PRESETS = {
   }
 
   function getSensorWH() {
-    const w = Number(ui.sensorW?.value || 36.7);
-    const h = Number(ui.sensorH?.value || 25.54);
+    const wRaw = Number(ui.sensorW?.value || 36.7);
+    const hRaw = Number(ui.sensorH?.value || 25.54);
+    const w = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : 36.7;
+    const h = Number.isFinite(hRaw) && hRaw > 0 ? hRaw : 25.54;
     return { w, h, halfH: Math.max(0.1, h * 0.5), halfW: Math.max(0.1, w * 0.5) };
   }
 
@@ -1122,6 +1124,14 @@ function warnMissingGlass(name) {
   let lens = sanitizeLens(omit50ConceptV1());
   let _lastParaxialFailSignature = "";
   let _lastZemaxTraceDebugSignature = "";
+  const HEAVY_RENDER_DEBOUNCE_MS = 180;
+  const MAX_AUTOFOCUS_ITERATIONS = 20;
+  const MAX_FOCUS_SHIFT_MM = 100;
+  const MAX_RAY_STEPS = 200;
+  const RUNTIME_BUSY_STORAGE_KEY = "tvl_lensbuilder:runtime_busy:v1";
+  let isAutofocusing = false;
+  let _safeModeActive = false;
+  let _lastStatusWarning = "";
 
   function getSafeLocalStorage() {
     try {
@@ -1130,6 +1140,86 @@ function warnMissingGlass(name) {
     } catch (_) {
       return null;
     }
+  }
+
+  function setStatusWarning(message, { append = false, force = false } = {}) {
+    const text = String(message || "").trim();
+    if (!text) return;
+    if (!force && text === _lastStatusWarning) return;
+    _lastStatusWarning = text;
+    if (ui.footerWarn) {
+      ui.footerWarn.textContent = append && ui.footerWarn.textContent
+        ? `${ui.footerWarn.textContent} • ${text}`
+        : text;
+    }
+    console.warn(text);
+  }
+
+  function clearStatusWarning() {
+    _lastStatusWarning = "";
+    if (ui.footerWarn) ui.footerWarn.textContent = "";
+  }
+
+  function markRuntimeBusy(reason) {
+    const storage = getSafeLocalStorage();
+    if (!storage) return;
+    try {
+      storage.setItem(RUNTIME_BUSY_STORAGE_KEY, JSON.stringify({
+        reason: String(reason || "render"),
+        at: Date.now(),
+      }));
+    } catch (_) {}
+  }
+
+  function clearRuntimeBusy() {
+    const storage = getSafeLocalStorage();
+    if (!storage) return;
+    try { storage.removeItem(RUNTIME_BUSY_STORAGE_KEY); } catch (_) {}
+  }
+
+  function readRuntimeBusyMarker() {
+    const storage = getSafeLocalStorage();
+    if (!storage) return null;
+    try {
+      const raw = storage.getItem(RUNTIME_BUSY_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isSafeFocusShift(shiftMm) {
+    const n = Number(shiftMm);
+    return Number.isFinite(n) && Math.abs(n) <= MAX_FOCUS_SHIFT_MM;
+  }
+
+  function enterSafeMode(reason = "runtime guard") {
+    _safeModeActive = true;
+    if (ui.focusMode) ui.focusMode.value = "manual";
+    if (ui.autoRefocusOnDistanceChange) ui.autoRefocusOnDistanceChange.checked = false;
+    if (ui.rayCount) ui.rayCount.value = "7";
+    focusRuntime.lastAutoKey = "";
+    focusRuntime.lastAutoMetric = null;
+    focusRuntime.lastAutoShiftMm = getFocusShiftMm();
+    try { setRenderEngineEnabled(false); } catch (_) { renderEngineEnabled = false; }
+    try { syncFocusControlsUI(); } catch (_) {}
+    try { persistLensSession(); } catch (_) {}
+    setStatusWarning(`Safe Mode: ${reason}. Preview OFF, focus manual, rays 7.`, { force: true });
+  }
+
+  function handleRuntimeError(prefix, error) {
+    const msg = error?.message || String(error || "unknown error");
+    console.error(prefix, error);
+    enterSafeMode(`${prefix}: ${msg}`);
+  }
+
+  function handleRaytraceGuard(message) {
+    const text = String(message || "Raytrace stopped.");
+    if (_safeModeActive) {
+      setStatusWarning(text);
+      return;
+    }
+    enterSafeMode(text);
   }
 
   function buildPersistableLensPayload() {
@@ -1389,7 +1479,7 @@ function warnMissingGlass(name) {
 
     if (!options.skipBuild) buildTable();
     if (!options.skipRender) {
-      renderAll();
+      scheduleRenderAll();
       scheduleRenderPreview();
     }
     if (!options.silent) toast(`Zoom config: ${formatZoomConfigLabel(cfg, Math.max(0, cfgIdx), lens.zoom.configs.length)}`);
@@ -1415,6 +1505,15 @@ function warnMissingGlass(name) {
     if (ui.autoRefocusOnDistanceChange) {
       ui.autoRefocusOnDistanceChange.checked = lens?.focus?.autoRefocusOnDistanceChange !== false;
     }
+    if (_safeModeActive) {
+      if (ui.focusMode) ui.focusMode.value = "manual";
+      if (ui.autoRefocusOnDistanceChange) ui.autoRefocusOnDistanceChange.checked = false;
+      if (ui.rayCount) ui.rayCount.value = "7";
+      if (lens.focus) {
+        lens.focus.mode = "manual";
+        lens.focus.autoRefocusOnDistanceChange = false;
+      }
+    }
     updateZemaxVerifyChrome();
     ensureZemaxPrimaryWaveOption();
     const initialFocusShiftMm = Number(lens?.focus?.shiftMm);
@@ -1434,7 +1533,7 @@ function warnMissingGlass(name) {
     }
     buildTable();
     applySensorToIMS();
-    renderAll();
+    scheduleRenderAll();
     if (preview.ready) scheduleRenderPreview();
     persistLensSession();
   }
@@ -1563,9 +1662,15 @@ tr.innerHTML = `
     return;
   }
 
+  if ((k === "R" || k === "t" || k === "ap") && String(el.value ?? "").trim() === "") {
+    setStatusWarning(`Invalid number in surface ${i}`);
+    return;
+  }
+
   if (k === "type") s.type = el.value;
   else if (k === "ap") {
     const ap = num(el.value, s.ap ?? 0);
+    if (ap <= 0) setStatusWarning(`Raytrace stopped: invalid surface ${i} ap <= 0`);
     s.ap = ap;
     s.ap_optical = ap;
   } else if (k === "R" || k === "t") s[k] = num(el.value, s[k] ?? 0);
@@ -1594,6 +1699,13 @@ function onCellCommit(e) {
     el.value = "0";
   }
 
+  if ((k === "R" || k === "t" || k === "ap") && String(el.value ?? "").trim() === "") {
+    setStatusWarning(`Invalid number in surface ${i}`);
+    buildTable();
+    scheduleRenderAll();
+    return;
+  }
+
   if (k === "stop") {
     s.stop = !!el.checked;
     enforceSingleStop(i);
@@ -1612,6 +1724,7 @@ function onCellCommit(e) {
     }
   } else if (k === "ap") {
     const ap = num(el.value, s.ap ?? 0);
+    if (ap <= 0) setStatusWarning(`Raytrace stopped: invalid surface ${i} ap <= 0`);
     s.ap = ap;
     s.ap_optical = ap;
   } else if (k === "R" || k === "t") {
@@ -1633,7 +1746,7 @@ function onCellCommit(e) {
   applySensorToIMS();
   clampAllApertures(lens.surfaces);
   buildTable();
-  renderAll();
+  scheduleRenderAll();
   scheduleRenderPreview();
 }
 
@@ -1704,9 +1817,11 @@ function onCellCommit(e) {
   }
 
   function intersectSurface(ray, surf) {
-    const vx = surf.vx;
-    const R = Number(surf.R || 0);
+    if (!validateRayForTrace(ray)) return null;
+    const vx = Number(surf?.vx);
+    const R = Number(surf?.R ?? 0);
     const ap = getSurfaceOpticalAp(surf);
+    if (!Number.isFinite(vx) || !Number.isFinite(R) || !Number.isFinite(ap) || ap <= 0) return null;
 
     if (Math.abs(R) < 1e-9) {
       if (Math.abs(ray.d.x) < 1e-12) return null;
@@ -1781,11 +1896,30 @@ function onCellCommit(e) {
     return { hit, t, vignetted, normal: Nout };
   }
 
+  const _surfacePositionCache = new WeakMap();
+
   function computeVertices(surfaces, lensShift = 0, sensorShift = 0) {
+    if (!Array.isArray(surfaces)) return 0;
+    const key = [
+      Number(lensShift).toFixed(6),
+      Number(sensorShift).toFixed(6),
+      surfaces.length,
+      ...surfaces.map((s) => `${String(s?.type || "")}:${Number(s?.t ?? 0).toFixed(6)}`),
+    ].join("|");
+    const cached = _surfacePositionCache.get(surfaces);
+    if (cached?.key === key && Array.isArray(cached.vx) && cached.vx.length === surfaces.length) {
+      for (let i = 0; i < surfaces.length; i++) surfaces[i].vx = cached.vx[i];
+      return cached.total;
+    }
     let x = 0;
     for (let i = 0; i < surfaces.length; i++) {
       surfaces[i].vx = x;
-      x += Number(surfaces[i].t || 0);
+      const dt = Number(surfaces[i].t ?? 0);
+      if (!Number.isFinite(dt)) {
+        handleRaytraceGuard(`Raytrace stopped: invalid surface ${i} t`);
+        continue;
+      }
+      x += dt;
     }
 
     if (Number.isFinite(lensShift) && Math.abs(lensShift) > 1e-12) {
@@ -1800,6 +1934,11 @@ function onCellCommit(e) {
       surfaces[imsIdx].vx += sensorShift;
     }
 
+    _surfacePositionCache.set(surfaces, {
+      key,
+      total: x,
+      vx: surfaces.map((s) => Number(s?.vx) || 0),
+    });
     return x;
   }
 
@@ -1842,9 +1981,11 @@ function onCellCommit(e) {
   }
 
   function intersectSurface3D(ray, surf){
-    const vx = surf.vx;
-    const R = Number(surf.R || 0);
+    if (!validateRay3DForTrace(ray)) return null;
+    const vx = Number(surf?.vx);
+    const R = Number(surf?.R ?? 0);
     const ap = getSurfaceOpticalAp(surf);
+    if (!Number.isFinite(vx) || !Number.isFinite(R) || !Number.isFinite(ap) || ap <= 0) return null;
 
     const isPlane = Math.abs(R) < 1e-9;
 
@@ -1929,8 +2070,22 @@ function onCellCommit(e) {
   function traceRayReverse3D(ray, surfaces, wavePreset){
     let vignetted = false;
     let tir = false;
+    let failReason = null;
+    let failSurfaceIndex = null;
 
+  if (!validateRay3DForTrace(ray)) {
+    handleRaytraceGuard("Raytrace stopped: invalid 3D ray input.");
+    return { pts: [], vignetted: true, tir: false, failReason: "invalid_ray", failSurfaceIndex: null, endRay: ray };
+  }
+
+  let raySteps = 0;
   for (let i = surfaces.length - 1; i >= 0; i--){
+    if (++raySteps > MAX_RAY_STEPS) {
+      handleRaytraceGuard("Raytrace stopped: max ray steps reached.");
+      vignetted = true;
+      failReason = "max_ray_steps";
+      break;
+    }
     const s = surfaces[i];
     const type = String(s?.type || "").toUpperCase();
     const isOBJ  = type === "OBJ";
@@ -1940,9 +2095,17 @@ function onCellCommit(e) {
     if (isOBJ){
       continue;
     }
+    const surfaceGuard = validateSurfaceForRaytrace(s, i);
+    if (!surfaceGuard.ok) {
+      handleRaytraceGuard(surfaceGuard.message);
+      vignetted = true;
+      failReason = surfaceGuard.reason;
+      failSurfaceIndex = i;
+      break;
+    }
 
     const hitInfo = intersectSurface3D(ray, s);
-      if (!hitInfo){ vignetted = true; break; }
+      if (!hitInfo){ vignetted = true; failReason = "no_hit"; failSurfaceIndex = i; break; }
 
       if (!isIMS && hitInfo.vignetted){ vignetted = true; break; }
 
@@ -1953,6 +2116,13 @@ function onCellCommit(e) {
 
       const nRight = surfaceN(s, wavePreset);
       const nLeft  = (i === 0) ? 1.0 : surfaceN(surfaces[i - 1], wavePreset);
+      if (!Number.isFinite(Number(nRight)) || !Number.isFinite(Number(nLeft)) || Number(nRight) <= 0 || Number(nLeft) <= 0) {
+        handleRaytraceGuard(`Raytrace stopped: invalid refractive index at surface ${i}`);
+        vignetted = true;
+        failReason = "invalid_refractive_index";
+        failSurfaceIndex = i;
+        break;
+      }
 
       if (Math.abs(nLeft - nRight) < 1e-9){
         ray = { p: hitInfo.hit, d: ray.d };
@@ -1960,12 +2130,19 @@ function onCellCommit(e) {
       }
 
       const newDir = refract3(ray.d, hitInfo.normal, nRight, nLeft);
-      if (!newDir){ tir = true; break; }
+      if (!newDir){ tir = true; failReason = "tir"; failSurfaceIndex = i; break; }
+      if (!Number.isFinite(Number(newDir.x)) || !Number.isFinite(Number(newDir.y)) || !Number.isFinite(Number(newDir.z))) {
+        handleRaytraceGuard(`Raytrace stopped: numerical overflow at surface ${i}`);
+        vignetted = true;
+        failReason = "numerical_overflow";
+        failSurfaceIndex = i;
+        break;
+      }
 
       ray = { p: hitInfo.hit, d: newDir };
     }
 
-    return { vignetted, tir, endRay: ray };
+    return { vignetted, tir, failReason, failSurfaceIndex, endRay: ray };
   }
 
   function intersectPlaneX3D(ray, xPlane){
@@ -2009,6 +2186,51 @@ function onCellCommit(e) {
   function isPhysicalSurfaceType(typeRaw) {
     const t = String(typeRaw || "").toUpperCase();
     return t !== "OBJ" && t !== "IMS" && t !== "MECH" && t !== "BAFFLE" && t !== "HOUSING";
+  }
+
+  function getRawSurfaceOpticalAp(s) {
+    return Number(s?.ap_optical ?? s?.ap);
+  }
+
+  function validateSurfaceForRaytrace(s, surfaceIndex = null) {
+    const label = Number.isFinite(Number(surfaceIndex)) ? `surface ${Number(surfaceIndex)}` : "surface";
+    const type = String(s?.type || "").toUpperCase();
+    if (!s || typeof s !== "object") return { ok: false, reason: "missing_surface", message: `Raytrace stopped: missing ${label}` };
+    const R = Number(s.R ?? 0);
+    const t = Number(s.t ?? 0);
+    const apRaw = getRawSurfaceOpticalAp(s);
+    if (!Number.isFinite(R)) return { ok: false, reason: "invalid_R", message: `Raytrace stopped: invalid ${label} R` };
+    if (!Number.isFinite(t)) return { ok: false, reason: "invalid_t", message: `Raytrace stopped: invalid ${label} t` };
+    if (!Number.isFinite(apRaw)) return { ok: false, reason: "invalid_ap", message: `Raytrace stopped: invalid ${label} ap` };
+    if (apRaw <= 0 && type !== "OBJ") return { ok: false, reason: "invalid_ap", message: `Raytrace stopped: invalid ${label} ap <= 0` };
+
+    const hasNd = s.nd != null && String(s.nd).trim() !== "";
+    const hasVd = s.vd != null && String(s.vd).trim() !== "";
+    if (hasNd && !Number.isFinite(Number(s.nd))) return { ok: false, reason: "invalid_nd", message: `Raytrace stopped: invalid ${label} nd` };
+    if (hasVd && !Number.isFinite(Number(s.vd))) return { ok: false, reason: "invalid_vd", message: `Raytrace stopped: invalid ${label} vd` };
+    return { ok: true };
+  }
+
+  function validateRayForTrace(ray) {
+    return !!(
+      ray &&
+      Number.isFinite(Number(ray?.p?.x)) &&
+      Number.isFinite(Number(ray?.p?.y)) &&
+      Number.isFinite(Number(ray?.d?.x)) &&
+      Number.isFinite(Number(ray?.d?.y))
+    );
+  }
+
+  function validateRay3DForTrace(ray) {
+    return !!(
+      ray &&
+      Number.isFinite(Number(ray?.p?.x)) &&
+      Number.isFinite(Number(ray?.p?.y)) &&
+      Number.isFinite(Number(ray?.p?.z)) &&
+      Number.isFinite(Number(ray?.d?.x)) &&
+      Number.isFinite(Number(ray?.d?.y)) &&
+      Number.isFinite(Number(ray?.d?.z))
+    );
   }
 
   function getSurfaceOpticalAp(s) {
@@ -2154,6 +2376,20 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   let failSurfaceIndex = null;
   let failSurface = null;
 
+  if (!validateRayForTrace(ray)) {
+    handleRaytraceGuard("Raytrace stopped: invalid ray input.");
+    return {
+      pts: [],
+      vignetted: true,
+      tir: false,
+      reachedIMS: false,
+      failReason: "invalid_ray",
+      failSurfaceIndex: null,
+      failSurface: null,
+      endRay: ray,
+    };
+  }
+
   // ✅ teken altijd vanaf ray start
   pts.push({ x: ray.p.x, y: ray.p.y });
 
@@ -2183,7 +2419,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     });
   };
 
+  let raySteps = 0;
   for (let i = 0; i < surfaces.length; i++) {
+    if (++raySteps > MAX_RAY_STEPS) {
+      handleRaytraceGuard("Raytrace stopped: max ray steps reached.");
+      vignetted = true;
+      failReason = "max_ray_steps";
+      break;
+    }
     const s = surfaces[i];
     const type = String(s?.type || "").toUpperCase();
     const isOBJ = type === "OBJ";
@@ -2192,6 +2435,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     if (isOBJ) continue;
     if (skipIMS && isIMS) continue;
+    const surfaceGuard = validateSurfaceForRaytrace(s, i);
+    if (!surfaceGuard.ok) {
+      handleRaytraceGuard(surfaceGuard.message);
+      vignetted = true;
+      failReason = surfaceGuard.reason;
+      failSurfaceIndex = i;
+      failSurface = s;
+      break;
+    }
 
     const hitInfo = intersectSurface(ray, s);
     if (!hitInfo) {
@@ -2265,6 +2517,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     const nAfter = surfaceN(s, wavePreset);
+    if (!Number.isFinite(Number(nAfter)) || Number(nAfter) <= 0) {
+      handleRaytraceGuard(`Raytrace stopped: invalid refractive index at surface ${i}`);
+      vignetted = true;
+      failReason = "invalid_refractive_index";
+      failSurfaceIndex = i;
+      failSurface = s;
+      break;
+    }
 
     if (Math.abs(nAfter - nBefore) < 1e-9) {
       ray = { p: hitInfo.hit, d: ray.d };
@@ -2296,6 +2556,14 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       failSurface = s;
       break;
     }
+    if (!Number.isFinite(Number(newDir.x)) || !Number.isFinite(Number(newDir.y))) {
+      handleRaytraceGuard(`Raytrace stopped: numerical overflow at surface ${i}`);
+      vignetted = true;
+      failReason = "numerical_overflow";
+      failSurfaceIndex = i;
+      failSurface = s;
+      break;
+    }
 
     ray = { p: hitInfo.hit, d: newDir };
     nBefore = nAfter;
@@ -2312,8 +2580,22 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     let pts = [];
     let vignetted = false;
     let tir = false;
+    let failReason = null;
+    let failSurfaceIndex = null;
 
+    if (!validateRayForTrace(ray)) {
+      handleRaytraceGuard("Raytrace stopped: invalid reverse ray input.");
+      return { pts, vignetted: true, tir: false, failReason: "invalid_ray", failSurfaceIndex: null, endRay: ray };
+    }
+
+    let raySteps = 0;
     for (let i = surfaces.length - 1; i >= 0; i--) {
+      if (++raySteps > MAX_RAY_STEPS) {
+        handleRaytraceGuard("Raytrace stopped: max ray steps reached.");
+        vignetted = true;
+        failReason = "max_ray_steps";
+        break;
+      }
       const s = surfaces[i];
       const type = String(s?.type || "").toUpperCase();
       const isOBJ = type === "OBJ";
@@ -2321,8 +2603,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const isMECH = type === "MECH" || type === "BAFFLE" || type === "HOUSING";
 
       if (isOBJ) continue;
+      const surfaceGuard = validateSurfaceForRaytrace(s, i);
+      if (!surfaceGuard.ok) {
+        handleRaytraceGuard(surfaceGuard.message);
+        vignetted = true;
+        failReason = surfaceGuard.reason;
+        failSurfaceIndex = i;
+        break;
+      }
       const hitInfo = intersectSurface(ray, s);
-      if (!hitInfo) { vignetted = true; break; }
+      if (!hitInfo) { vignetted = true; failReason = "no_hit"; failSurfaceIndex = i; break; }
 
       pts.push(hitInfo.hit);
 
@@ -2335,6 +2625,13 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
       const nRight = surfaceN(s, wavePreset);
       const nLeft  = (i === 0) ? 1.0 : surfaceN(surfaces[i - 1], wavePreset);
+      if (!Number.isFinite(Number(nRight)) || !Number.isFinite(Number(nLeft)) || Number(nRight) <= 0 || Number(nLeft) <= 0) {
+        handleRaytraceGuard(`Raytrace stopped: invalid refractive index at surface ${i}`);
+        vignetted = true;
+        failReason = "invalid_refractive_index";
+        failSurfaceIndex = i;
+        break;
+      }
 
       if (Math.abs(nLeft - nRight) < 1e-9) {
         ray = { p: hitInfo.hit, d: ray.d };
@@ -2342,12 +2639,19 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       }
 
       const newDir = refract(ray.d, hitInfo.normal, nRight, nLeft);
-      if (!newDir) { tir = true; break; }
+      if (!newDir) { tir = true; failReason = "tir"; failSurfaceIndex = i; break; }
+      if (!Number.isFinite(Number(newDir.x)) || !Number.isFinite(Number(newDir.y))) {
+        handleRaytraceGuard(`Raytrace stopped: numerical overflow at surface ${i}`);
+        vignetted = true;
+        failReason = "numerical_overflow";
+        failSurfaceIndex = i;
+        break;
+      }
 
       ray = { p: hitInfo.hit, d: newDir };
     }
 
-    return { pts, vignetted, tir, endRay: ray };
+    return { pts, vignetted, tir, failReason, failSurfaceIndex, endRay: ray };
   }
 
   function intersectPlaneX(ray, xPlane) {
@@ -3167,7 +3471,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   function setFocusShiftMm(nextShiftMm, { updateStatus = true } = {}) {
-    const shift = Number.isFinite(Number(nextShiftMm)) ? Number(nextShiftMm) : FOCUS_SHIFT_FALLBACK_MM;
+    const raw = Number(nextShiftMm);
+    if (!Number.isFinite(raw)) {
+      setStatusWarning("Invalid focus shift: not a finite number.");
+      return getFocusShiftMm();
+    }
+    if (Math.abs(raw) > MAX_FOCUS_SHIFT_MM) {
+      enterSafeMode(`Autofocus stopped: focus shift ${raw.toFixed(2)}mm exceeds ${MAX_FOCUS_SHIFT_MM}mm`);
+      return getFocusShiftMm();
+    }
+    const shift = raw;
     if (ui.lensFocus) ui.lensFocus.value = shift.toFixed(4);
     if (ui.focusShiftSlider) ui.focusShiftSlider.value = String(shift);
     syncFocusStateToLens(shift);
@@ -3218,7 +3531,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     let focusShiftMm = getFocusShiftMm();
     let autoRun = null;
 
-    if (focusMode === "auto" && allowAutoRefocus && Number.isFinite(targetDist) && targetDist > 0.1) {
+    if (focusMode === "auto" && allowAutoRefocus && !isAutofocusing && Number.isFinite(targetDist) && targetDist > 0.1) {
       const autoKey = [
         focusMechanism,
         String(wavePreset || "d"),
@@ -3236,18 +3549,37 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         shouldRun = nonDistChanged || shiftChanged || (autoRefocusOnDistanceChange && distChanged);
       }
       if (shouldRun) {
-        autoRun = runAutofocusForShift({
-          objectDistanceMm: targetDist,
-          wavePreset,
-          focusMechanism,
-          currentShiftMm: focusShiftMm,
-          autofocusMode: getPreviewAutofocusMode(),
-        });
-        if (autoRun?.ok && Number.isFinite(autoRun.focusShiftMm)) {
+        isAutofocusing = true;
+        markRuntimeBusy("autofocus:auto-refocus");
+        try {
+          autoRun = runAutofocusForShift({
+            objectDistanceMm: targetDist,
+            wavePreset,
+            focusMechanism,
+            currentShiftMm: focusShiftMm,
+            autofocusMode: getPreviewAutofocusMode(),
+          });
+        } catch (e) {
+          autoRun = { ok: false, reason: "exception", error: e?.message || String(e) };
+          handleRuntimeError("Autofocus stopped", e);
+        } finally {
+          isAutofocusing = false;
+          clearRuntimeBusy();
+        }
+        if (autoRun?.stoppedByMaxIterations) {
+          setStatusWarning("Autofocus stopped: max iterations reached.");
+        }
+        if (autoRun?.ok && isSafeFocusShift(autoRun.focusShiftMm)) {
           focusShiftMm = setFocusShiftMm(autoRun.focusShiftMm, { updateStatus: false });
           focusRuntime.lastAutoKey = autoKey;
           focusRuntime.lastAutoMetric = Number.isFinite(autoRun.bestMetricRmsMm) ? autoRun.bestMetricRmsMm : null;
           focusRuntime.lastAutoShiftMm = focusShiftMm;
+        } else if (autoRun?.ok) {
+          enterSafeMode(`Autofocus stopped: invalid focus shift ${Number(autoRun.focusShiftMm).toFixed(2)}mm`);
+          autoRun.ok = false;
+          autoRun.reason = "unsafe_focus_shift";
+        } else if (autoRun?.reason) {
+          setStatusWarning(`Autofocus stopped: ${String(autoRun.reason).replaceAll("_", " ")}.`);
         }
       }
     }
@@ -3314,13 +3646,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         sensorHv,
         autofocusMode,
       });
-      const ok = Number.isFinite(best?.sensorX);
+      const ok = isSafeFocusShift(best?.sensorX);
       return {
         ok,
         focusShiftMm: ok ? Number(best.sensorX) : startShift,
         bestMetricRmsMm: Number.isFinite(best?.rmsMm) ? Number(best.rmsMm) : null,
         raysUsed: Number.isFinite(best?.raysUsed) ? Number(best.raysUsed) : 0,
         method: "move-ims",
+        stoppedByMaxIterations: best?.stoppedByMaxIterations === true,
+        reason: ok ? null : "invalid_focus_shift",
       };
     }
 
@@ -3333,13 +3667,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       sensorHv,
       autofocusMode,
     });
-    const ok = Number.isFinite(best?.lensShift);
+    const ok = isSafeFocusShift(best?.lensShift);
     return {
       ok,
       focusShiftMm: ok ? Number(best.lensShift) : startShift,
       bestMetricRmsMm: Number.isFinite(best?.rmsMm) ? Number(best.rmsMm) : null,
       raysUsed: Number.isFinite(best?.raysUsed) ? Number(best.raysUsed) : 0,
       method: mech === "move-focus-group" ? "move-focus-group (placeholder→lens)" : "move-lens",
+      stoppedByMaxIterations: best?.stoppedByMaxIterations === true,
+      reason: ok ? null : "invalid_focus_shift",
     };
   }
 
@@ -3611,27 +3947,44 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const coarseStep = Math.max(0.25, range / 12);
     const fineStep = Math.max(0.04, coarseStep / 6);
 
-    let bestShift = lensShift;
-    let best = evaluatePreviewFocusAtSensorX({
-      surfaces,
-      wavePreset,
-      lensShift: bestShift,
-      sensorX,
-      objDist,
-      sensorHv,
-      autofocusMode,
-    });
-
-    for (let sh = lensShift - range; sh <= lensShift + range + 1e-9; sh += coarseStep) {
-      const ev = evaluatePreviewFocusAtSensorX({
+    let iterations = 0;
+    let stoppedByMaxIterations = false;
+    const evaluateAtShift = (shiftMm) => {
+      if (iterations >= MAX_AUTOFOCUS_ITERATIONS) {
+        stoppedByMaxIterations = true;
+        return null;
+      }
+      iterations++;
+      return evaluatePreviewFocusAtSensorX({
         surfaces,
         wavePreset,
-        lensShift: sh,
+        lensShift: shiftMm,
         sensorX,
         objDist,
         sensorHv,
         autofocusMode,
       });
+    };
+
+    let bestShift = Number.isFinite(Number(lensShift)) ? Number(lensShift) : 0;
+    let best = evaluateAtShift(bestShift);
+    if (!best || !Number.isFinite(Number(best.score))) {
+      return {
+        lensShift: bestShift,
+        deltaMm: 0,
+        rmsMm: null,
+        hitRate: null,
+        raysUsed: 0,
+        method: "preview_af_lens_shift",
+        iterations,
+        stoppedByMaxIterations,
+      };
+    }
+
+    const searchCenter = bestShift;
+    for (let sh = searchCenter - range; sh <= searchCenter + range + 1e-9; sh += coarseStep) {
+      const ev = evaluateAtShift(sh);
+      if (!ev) break;
       if (ev.score < best.score) {
         best = ev;
         bestShift = sh;
@@ -3639,15 +3992,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     for (let sh = bestShift - coarseStep; sh <= bestShift + coarseStep + 1e-9; sh += fineStep) {
-      const ev = evaluatePreviewFocusAtSensorX({
-        surfaces,
-        wavePreset,
-        lensShift: sh,
-        sensorX,
-        objDist,
-        sensorHv,
-        autofocusMode,
-      });
+      const ev = evaluateAtShift(sh);
+      if (!ev) break;
       if (ev.score < best.score) {
         best = ev;
         bestShift = sh;
@@ -3661,10 +4007,19 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       hitRate: best.hitRate,
       raysUsed: best.raysUsed,
       method: "preview_af_lens_shift",
+      iterations,
+      stoppedByMaxIterations,
     };
   }
 
   function autoFocus() {
+    if (isAutofocusing) {
+      setStatusWarning("Autofocus already running; skipped nested refocus.");
+      return;
+    }
+    isAutofocusing = true;
+    markRuntimeBusy("autofocus:manual");
+    try {
     const focusMode = normalizeFocusMode(ui.focusMode?.value || "auto");
     const focusMechanism = normalizeFocusMechanism(ui.focusMechanism?.value || "move-lens");
     const wavePreset = ui.wavePreset?.value || "d";
@@ -3672,7 +4027,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const autofocusMode = getPreviewAutofocusMode();
 
     if (!(targetDistance > 0.1)) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Auto focus failed: set a valid focus chart distance first.";
+      setStatusWarning("Auto focus failed: set a valid focus chart distance first.");
       return;
     }
 
@@ -3686,8 +4041,15 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     });
 
     if (!af?.ok) {
-      if (ui.footerWarn) ui.footerWarn.textContent = "Refocus failed: too few valid chart-center rays.";
-      renderAll();
+      setStatusWarning(`Refocus failed: ${String(af?.reason || "too few valid chart-center rays").replaceAll("_", " ")}.`);
+      scheduleRenderAll({ immediate: true });
+      return;
+    }
+    if (af?.stoppedByMaxIterations) {
+      setStatusWarning("Autofocus stopped: max iterations reached.");
+    }
+    if (!isSafeFocusShift(af.focusShiftMm)) {
+      enterSafeMode(`Autofocus stopped: invalid focus shift ${Number(af.focusShiftMm).toFixed(2)}mm`);
       return;
     }
 
@@ -3733,6 +4095,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     renderAll();
     scheduleRenderPreview();
+    } catch (e) {
+      handleRuntimeError("Autofocus stopped", e);
+    } finally {
+      isAutofocusing = false;
+      clearRuntimeBusy();
+    }
   }
 
   // -------------------- drawing --------------------
@@ -4736,8 +5104,17 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   // -------------------- render scheduler (RAF throttle) --------------------
   let _rafAll = 0;
   let _rafPrev = 0;
+  let _renderAllTimer = 0;
+  let _previewRenderTimer = 0;
   let renderEngineEnabled = true;
   let _previewRenderJobId = 0;
+  let _renderAllRunning = false;
+  let _renderAllQueued = false;
+  let _renderPreviewRunning = false;
+  let _renderPreviewQueued = false;
+  let _renderAllAfterPreview = false;
+  let _forcePreviewRender = false;
+  let _lastRayPaneRedraw = null;
   let debugOutlineOverlayEnabled = false;
 
   function updateRenderEngineButton() {
@@ -4769,6 +5146,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     renderEngineEnabled = next;
 
     _previewRenderJobId++;
+    _renderPreviewQueued = false;
+    if (_previewRenderTimer) {
+      clearTimeout(_previewRenderTimer);
+      _previewRenderTimer = 0;
+    }
 
     if (_rafPrev) {
       cancelAnimationFrame(_rafPrev);
@@ -4790,29 +5172,114 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     setRenderEngineEnabled(!renderEngineEnabled);
   }
 
-  function scheduleRenderAll() {
-    if (_rafAll) return;
-    _rafAll = requestAnimationFrame(() => {
+  function scheduleRenderAll(opts = {}) {
+    const immediate = opts?.immediate === true;
+    if (_renderAllTimer) clearTimeout(_renderAllTimer);
+    if (_rafAll) {
+      cancelAnimationFrame(_rafAll);
       _rafAll = 0;
-      renderAll();
-    });
+    }
+    _renderAllTimer = setTimeout(() => {
+      _renderAllTimer = 0;
+      _rafAll = requestAnimationFrame(() => {
+        _rafAll = 0;
+        renderAll();
+      });
+    }, immediate ? 0 : HEAVY_RENDER_DEBOUNCE_MS);
   }
 
-  function scheduleRenderPreview() {
+  function scheduleRenderPreview(opts = {}) {
     if (!renderEngineEnabled) return;
-    if (_rafPrev) return;
-    _rafPrev = requestAnimationFrame(() => {
+    if (opts?.force === true) _forcePreviewRender = true;
+    if (_renderPreviewRunning) {
+      _renderPreviewQueued = true;
+      _previewRenderJobId++;
+      return;
+    }
+    if (_previewRenderTimer) clearTimeout(_previewRenderTimer);
+    if (_rafPrev) {
+      cancelAnimationFrame(_rafPrev);
       _rafPrev = 0;
-      if (preview.ready && renderEngineEnabled) renderPreview();
-    });
+    }
+    _previewRenderTimer = setTimeout(() => {
+      _previewRenderTimer = 0;
+      _rafPrev = requestAnimationFrame(() => {
+        _rafPrev = 0;
+        if (preview.ready && renderEngineEnabled) renderPreview();
+      });
+    }, opts?.immediate === true ? 0 : HEAVY_RENDER_DEBOUNCE_MS);
+  }
+
+  function renderAll() {
+    if (_renderAllTimer) {
+      clearTimeout(_renderAllTimer);
+      _renderAllTimer = 0;
+    }
+    if (_renderAllRunning) {
+      _renderAllQueued = true;
+      return;
+    }
+    _renderAllRunning = true;
+    markRuntimeBusy("renderAll");
+    try {
+      performRenderAll();
+      clearRuntimeBusy();
+    } catch (e) {
+      handleRuntimeError("Raytrace stopped", e);
+      clearRuntimeBusy();
+    } finally {
+      _renderAllRunning = false;
+      if (_renderAllQueued) {
+        _renderAllQueued = false;
+        scheduleRenderAll();
+      }
+    }
+  }
+
+  function finishPreviewRender() {
+    _renderPreviewRunning = false;
+    clearRuntimeBusy();
+    if (_renderAllAfterPreview) {
+      _renderAllAfterPreview = false;
+      scheduleRenderAll();
+    }
+    if (_renderPreviewQueued && renderEngineEnabled) {
+      _renderPreviewQueued = false;
+      scheduleRenderPreview();
+    }
+  }
+
+  function renderPreview() {
+    if (_previewRenderTimer) {
+      clearTimeout(_previewRenderTimer);
+      _previewRenderTimer = 0;
+    }
+    if (!renderEngineEnabled) {
+      hidePreviewProgress();
+      return;
+    }
+    if (_renderPreviewRunning) {
+      _renderPreviewQueued = true;
+      _previewRenderJobId++;
+      return;
+    }
+    _renderPreviewRunning = true;
+    markRuntimeBusy("renderPreview");
+    try {
+      performRenderPreview();
+    } catch (e) {
+      _renderPreviewRunning = false;
+      clearRuntimeBusy();
+      handleRuntimeError("Preview stopped", e);
+    }
   }
 
   // ===========================
   // RENDER ALL (rays pane)
   // ===========================
-  function renderAll() {
+  function performRenderAll() {
     if (!canvas || !ctx) return;
-    if (ui.footerWarn) ui.footerWarn.textContent = "";
+    if (!_safeModeActive) clearStatusWarning();
     syncActiveZoomConfigFromUI();
 
     const fieldAngle = Number(ui.fieldAngle?.value || 0);
@@ -4984,12 +5451,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     if (ui.fovTop) ui.fovTop.textContent = fovTxt;
     if (ui.covTop) ui.covTop.textContent = ui.cov?.textContent || (covers ? "COV: YES" : "COV: NO");
 
-    if (reachedIMSCount === 0 && ui.footerWarn) {
+    if (!_safeModeActive && reachedIMSCount === 0 && ui.footerWarn) {
       const reasonTxt = Object.entries(failReasonCounts)
         .map(([k, v]) => `${k}:${v}`)
         .join(", ");
       ui.footerWarn.textContent = `No rays reached IMS (${reasonTxt || "unknown"}).`;
-    } else if (tirCount > 0 && ui.footerWarn) {
+    } else if (!_safeModeActive && tirCount > 0 && ui.footerWarn) {
       ui.footerWarn.textContent = `TIR on ${tirCount} rays (check glass / curvature).`;
     }
 
@@ -4999,24 +5466,6 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
     if (ui.metaInfo) ui.metaInfo.textContent = `sensor ${sensorW.toFixed(2)}×${sensorH.toFixed(2)}mm`;
     updateZemaxVerifyPanel({ sensorX: displaySensorX });
-
-    resizeCanvasToCSS();
-    const r = canvas.getBoundingClientRect();
-    drawBackgroundCSS(r.width, r.height);
-
-    const world = makeWorldTransform();
-    drawAxes(world);
-
-    drawRuler(world, 0, -200);
-    const xMinPL = Math.min(frontVx - 20, plX - 20);
-    drawRulerFrom(world, plX, xMinPL, null, "", +12);
-
-    drawPLFlange(world, plX);
-    drawLens(world, displaySurfaces);
-    drawStop(world, displaySurfaces);
-    drawRays(world, traces, displaySensorX);
-    drawPLMountCutout(world, plX);
-    drawSensor(world, displaySensorX, halfH);
 
     const eflTxt = efl == null ? "—" : `${efl.toFixed(2)}mm`;
     const tTxt   = T == null ? "—" : `T${T.toFixed(2)}`;
@@ -5038,7 +5487,25 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       `Rays valid: ${validCount}/${traces.length} • IMS: ${reachedIMSCount}/${traces.length} • TIR: ${tirCount}`,
       `EP radius: ${Number.isFinite(Number(rayBundle?.epRadiusMm)) ? Number(rayBundle.epRadiusMm).toFixed(3) + "mm" : "—"} • Bundle radius: ${Number.isFinite(Number(rayBundle?.bundleRadiusMm)) ? Number(rayBundle.bundleRadiusMm).toFixed(3) + "mm" : "—"} (${String(rayBundle?.mode || "default")})`,
     ];
-    drawTitleOverlay(titleParts);
+    _lastRayPaneRedraw = () => {
+      if (!canvas || !ctx) return;
+      resizeCanvasToCSS();
+      const r = canvas.getBoundingClientRect();
+      drawBackgroundCSS(r.width, r.height);
+      const world = makeWorldTransform();
+      drawAxes(world);
+      drawRuler(world, 0, -200);
+      const xMinPL = Math.min(frontVx - 20, plX - 20);
+      drawRulerFrom(world, plX, xMinPL, null, "", +12);
+      drawPLFlange(world, plX);
+      drawLens(world, displaySurfaces);
+      drawStop(world, displaySurfaces);
+      drawRays(world, traces, displaySensorX);
+      drawPLMountCutout(world, plX);
+      drawSensor(world, displaySensorX, halfH);
+      drawTitleOverlay(titleParts);
+    };
+    _lastRayPaneRedraw();
     if (isImportedZemax) {
       const zoomConfigs = Array.isArray(lens?.zoom?.configs) ? lens.zoom.configs : [];
       const activeIdx = Number(lens?.zoom?.activeConfig);
@@ -5104,6 +5571,18 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   }
 
   // -------------------- view controls (RAYS canvas) --------------------
+  function redrawRayPaneOnly() {
+    if (_lastRayPaneRedraw) {
+      try {
+        _lastRayPaneRedraw();
+        return;
+      } catch (e) {
+        console.warn("Ray pane redraw failed, scheduling full render.", e);
+      }
+    }
+    scheduleRenderAll({ immediate: true });
+  }
+
   function bindViewControls() {
     if (!canvas) return;
 
@@ -5122,7 +5601,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       view.lastY = e.clientY;
       view.panX += dx;
       view.panY += dy;
-      renderAll();
+      redrawRayPaneOnly();
     });
 
     canvas.addEventListener("wheel", (e) => {
@@ -5130,12 +5609,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       const delta = Math.sign(e.deltaY);
       const factor = delta > 0 ? 0.92 : 1.08;
       view.zoom = Math.max(0.12, Math.min(12, view.zoom * factor));
-      renderAll();
+      redrawRayPaneOnly();
     }, { passive: false });
 
     canvas.addEventListener("dblclick", () => {
       view.panX = 0; view.panY = 0; view.zoom = 1.0;
-      renderAll();
+      redrawRayPaneOnly();
     });
   }
 
@@ -5590,7 +6069,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     selectedIndex = atIndex;
     buildTable();
     applySensorToIMS();
-    renderAll();
+    scheduleRenderAll();
     scheduleRenderPreview();
   }
   function insertAfterSelected(surfaceObj) {
@@ -5624,7 +6103,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     selectedIndex = j;
     buildTable();
     applySensorToIMS();
-    renderAll();
+    scheduleRenderAll();
     scheduleRenderPreview();
   }
 
@@ -5639,7 +6118,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     clampAllApertures(lens.surfaces);
     buildTable();
     applySensorToIMS();
-    renderAll();
+    scheduleRenderAll();
     scheduleRenderPreview();
   }
 
@@ -5933,7 +6412,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
 
     buildTable();
     applySensorToIMS();
-    renderAll();
+    scheduleRenderAll();
     scheduleRenderPreview();
   }
 
@@ -6360,15 +6839,39 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const coarseStep = Math.max(0.35, range / 12);
     const fineStep = Math.max(0.05, coarseStep / 6);
 
-    let bestX = sensorX;
-    let best = evaluatePreviewFocusAtSensorX({
-      surfaces, wavePreset, lensShift, sensorX: bestX, objDist: objDistMm, sensorHv: sensorHvMm, autofocusMode: mode,
-    });
-
-    for (let x = sensorX - range; x <= sensorX + range + 1e-9; x += coarseStep) {
-      const ev = evaluatePreviewFocusAtSensorX({
-        surfaces, wavePreset, lensShift, sensorX: x, objDist: objDistMm, sensorHv: sensorHvMm, autofocusMode: mode,
+    let iterations = 0;
+    let stoppedByMaxIterations = false;
+    const evaluateAtSensorX = (xMm) => {
+      if (iterations >= MAX_AUTOFOCUS_ITERATIONS) {
+        stoppedByMaxIterations = true;
+        return null;
+      }
+      iterations++;
+      return evaluatePreviewFocusAtSensorX({
+        surfaces, wavePreset, lensShift, sensorX: xMm, objDist: objDistMm, sensorHv: sensorHvMm, autofocusMode: mode,
       });
+    };
+
+    let bestX = Number.isFinite(Number(sensorX)) ? Number(sensorX) : 0;
+    let best = evaluateAtSensorX(bestX);
+    if (!best || !Number.isFinite(Number(best.score))) {
+      return {
+        sensorX: bestX,
+        sensorPlaneX: null,
+        deltaMm: 0,
+        rmsMm: null,
+        hitRate: null,
+        raysUsed: 0,
+        method: "preview_af_search",
+        iterations,
+        stoppedByMaxIterations,
+      };
+    }
+
+    const searchCenterX = bestX;
+    for (let x = searchCenterX - range; x <= searchCenterX + range + 1e-9; x += coarseStep) {
+      const ev = evaluateAtSensorX(x);
+      if (!ev) break;
       if (ev.score < best.score) {
         best = ev;
         bestX = x;
@@ -6376,9 +6879,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     for (let x = bestX - coarseStep; x <= bestX + coarseStep + 1e-9; x += fineStep) {
-      const ev = evaluatePreviewFocusAtSensorX({
-        surfaces, wavePreset, lensShift, sensorX: x, objDist: objDistMm, sensorHv: sensorHvMm, autofocusMode: mode,
-      });
+      const ev = evaluateAtSensorX(x);
+      if (!ev) break;
       if (ev.score < best.score) {
         best = ev;
         bestX = x;
@@ -6424,6 +6926,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       startRayXMm: startXBest,
       stopXMm: xStopBest,
       method: "preview_af_search",
+      iterations,
+      stoppedByMaxIterations,
     };
   }
 
@@ -6532,12 +7036,16 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
   }
 
- function renderPreview() {
+ function performRenderPreview() {
   if (!renderEngineEnabled) {
     hidePreviewProgress();
+    finishPreviewRender();
     return;
   }
-  if (!pctx || !previewCanvasEl) return;
+  if (!pctx || !previewCanvasEl) {
+    finishPreviewRender();
+    return;
+  }
   syncActiveZoomConfigFromUI();
   if (!preview.worldCtx) preview.worldCtx = preview.worldCanvas.getContext("2d");
   const jobId = ++_previewRenderJobId;
@@ -6613,10 +7121,12 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       activeZoomLabel: String(lens?.zemax?.currentConfigLabel || "—"),
     });
     hidePreviewProgress();
+    finishPreviewRender();
     return;
   }
 
-  const base = Math.max(64, Number(ui.prevRes?.value || 720));
+  const baseRaw = Number(ui.prevRes?.value || 720);
+  const base = Math.max(64, Number.isFinite(baseRaw) ? baseRaw : 720);
   const aspect = sensorW / sensorH;
   const W = Math.max(64, Math.round(base * aspect));
   const H = Math.max(64, base);
@@ -6633,6 +7143,44 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
   const imgH = preview.imgCanvas.height;
   const imgData = hasImg ? preview.imgData : null;
   const autoFill = !!ui.previewAutoFit?.checked;
+  const previewRenderKey = JSON.stringify({
+    mode: previewMode,
+    q,
+    doCA,
+    spp,
+    lutPupilSqrt,
+    wavePreset,
+    focusChartDistanceMm,
+    focusMode: focusCtx.focusMode,
+    focusMechanism: focusCtx.focusMechanism,
+    focusShiftMm: Number(focusCtx.focusShiftMm).toFixed(6),
+    sensorW: Number(sensorW).toFixed(6),
+    sensorH: Number(sensorH).toFixed(6),
+    res: Number(base).toFixed(3),
+    autoFill,
+    orientation: previewOrientation,
+    objW: String(ui.prevObjW?.value || ""),
+    objH: String(ui.prevObjH?.value || ""),
+    imgW,
+    imgH,
+    sourceMode: preview.sourceMode,
+    surfaces: (lens.surfaces || []).map((s) => [
+      String(s?.type || ""),
+      Number(s?.R ?? 0).toFixed(6),
+      Number(s?.t ?? 0).toFixed(6),
+      Number(s?.ap ?? 0).toFixed(6),
+      Number(s?.ap_optical ?? s?.ap ?? 0).toFixed(6),
+      String(s?.glass || "AIR"),
+      s?.stop ? 1 : 0,
+    ]),
+  });
+  if (!_forcePreviewRender && preview.worldReady && preview.dirtyKey === previewRenderKey) {
+    drawPreviewViewport();
+    finishPreviewRender();
+    return;
+  }
+  _forcePreviewRender = false;
+  preview.dirtyKey = previewRenderKey;
 
   let focusInfo = {
     sensorX,
@@ -6664,7 +7212,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     };
   }
 
-  if (focusCtx.autoRun?.ok) scheduleRenderAll();
+  if (focusCtx.autoRun?.ok) _renderAllAfterPreview = true;
   const metricTxt = Number.isFinite(focusCtx?.autoRun?.bestMetricRmsMm)
     ? `auto metric ${Number(focusCtx.autoRun.bestMetricRmsMm).toFixed(4)}mm`
     : "";
@@ -6775,26 +7323,32 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     const fineStep = Math.max(0.05, coarseStep / 6);
 
     let bestShift = Number(startShift) || 0;
-    let best = evaluatePreviewSpotAtSensorPoint({
-      surfaces: lens.surfaces,
-      wavePreset,
-      lensShift,
-      sensorX: bestShift,
-      objDist: focusChartDistanceMm,
-      sy,
-      sz,
-    });
-
-    for (let x = bestShift - range; x <= bestShift + range + 1e-9; x += coarseStep) {
-      const ev = evaluatePreviewSpotAtSensorPoint({
+    let iterations = 0;
+    const evaluateSpotAtShift = (xMm) => {
+      if (iterations >= MAX_AUTOFOCUS_ITERATIONS) return null;
+      iterations++;
+      return evaluatePreviewSpotAtSensorPoint({
         surfaces: lens.surfaces,
         wavePreset,
         lensShift,
-        sensorX: x,
+        sensorX: xMm,
         objDist: focusChartDistanceMm,
         sy,
         sz,
       });
+    };
+    let best = evaluateSpotAtShift(bestShift);
+    if (!best) {
+      return {
+        bestShiftMm: bestShift,
+        bestRmsMm: null,
+        bestSensorPlaneX: null,
+      };
+    }
+
+    for (let x = bestShift - range; x <= bestShift + range + 1e-9; x += coarseStep) {
+      const ev = evaluateSpotAtShift(x);
+      if (!ev) break;
       const evRms = Number(ev?.rmsMm);
       const bestRms = Number(best?.rmsMm);
       if (Number.isFinite(evRms) && (!Number.isFinite(bestRms) || evRms < bestRms)) {
@@ -6804,15 +7358,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     }
 
     for (let x = bestShift - coarseStep; x <= bestShift + coarseStep + 1e-9; x += fineStep) {
-      const ev = evaluatePreviewSpotAtSensorPoint({
-        surfaces: lens.surfaces,
-        wavePreset,
-        lensShift,
-        sensorX: x,
-        objDist: focusChartDistanceMm,
-        sy,
-        sz,
-      });
+      const ev = evaluateSpotAtShift(x);
+      if (!ev) break;
       const evRms = Number(ev?.rmsMm);
       const bestRms = Number(best?.rmsMm);
       if (Number.isFinite(evRms) && (!Number.isFinite(bestRms) || evRms < bestRms)) {
@@ -6936,6 +7483,17 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     [-0.14, -0.82],
   ];
 
+  function requestPreviewFrame(fn) {
+    requestAnimationFrame(() => {
+      try {
+        fn();
+      } catch (e) {
+        finishPreviewRender();
+        handleRuntimeError("Preview stopped", e);
+      }
+    });
+  }
+
   if (Number.isFinite(focusChartDistanceMm) && focusChartDistanceMm > 0.1 && focusChartDistanceMm < 1e8) {
     updatePreviewFieldSpotDebug();
     sensorX = getSensorPlaneX(lens.surfaces, sensorShift);
@@ -6994,6 +7552,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     function buildStep() {
       if (!renderEngineEnabled || jobId !== _previewRenderJobId) {
         hidePreviewProgress();
+        finishPreviewRender();
         return;
       }
       const end = Math.min(LUT_N, k + kPerFrame);
@@ -7069,7 +7628,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       }
 
       if (k < LUT_N) {
-        requestAnimationFrame(buildStep);
+        requestPreviewFrame(buildStep);
         return;
       }
 
@@ -7225,9 +7784,10 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       }
       hidePreviewProgress();
       drawPreviewViewport();
+      finishPreviewRender();
     }
 
-    requestAnimationFrame(buildStep);
+    requestPreviewFrame(buildStep);
   }
 
   function renderDOFPath() {
@@ -7252,6 +7812,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     function step() {
       if (!renderEngineEnabled || jobId !== _previewRenderJobId) {
         hidePreviewProgress();
+        finishPreviewRender();
         return;
       }
       const yEnd = Math.min(H, row + rowsPerChunk);
@@ -7323,7 +7884,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
       preview.worldReady = true;
       drawPreviewViewport();
 
-      if (row < H) requestAnimationFrame(step);
+      if (row < H) requestPreviewFrame(step);
       else {
         setUsableCircleFromRenderedPixels(outD, W, H, sensorW, sensorH);
         if (litPixels <= 0) {
@@ -7336,10 +7897,11 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         }
         hidePreviewProgress();
         drawPreviewViewport();
+        finishPreviewRender();
       }
     }
 
-    requestAnimationFrame(step);
+    requestPreviewFrame(step);
   }
 
   // --- run ---
@@ -7592,7 +8154,7 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
     await togglePaneFullscreen(ui.raysPane);
     setTimeout(() => {
       resizeCanvasToCSS();
-      renderAll();
+      redrawRayPaneOnly();
     }, 50);
   }
 
@@ -7737,6 +8299,8 @@ function traceRayForward(ray, surfaces, wavePreset, opts = {}) {
         const id = preview.imgCtx.getImageData(0, 0, preview.imgCanvas.width, preview.imgCanvas.height);
         preview.imgData = id.data;
         preview.ready = true;
+        preview.worldReady = false;
+        preview.dirtyKey = "";
 
         if (announce && ui.footerWarn) {
           ui.footerWarn.textContent =
@@ -8522,7 +9086,7 @@ function wireUI() {
   if (ui.sensorPreset) {
     ui.sensorPreset.addEventListener("change", (e) => {
       applyPreset(e.target.value);
-      renderAll();
+      scheduleRenderAll();
       scheduleRenderPreview();
     });
   }
@@ -8530,12 +9094,12 @@ function wireUI() {
   // manual sensor dims
   if (ui.sensorW) ui.sensorW.addEventListener("change", () => {
     applySensorToIMS();
-    renderAll();
+    scheduleRenderAll();
     scheduleRenderPreview();
   });
   if (ui.sensorH) ui.sensorH.addEventListener("change", () => {
     applySensorToIMS();
-    renderAll();
+    scheduleRenderAll();
     scheduleRenderPreview();
   });
 
@@ -8549,7 +9113,7 @@ function wireUI() {
     const el = ui[id];
     if (!el) return;
     el.addEventListener("input", () => { scheduleRenderAll(); scheduleRenderPreview(); });
-    el.addEventListener("change", () => { renderAll(); scheduleRenderPreview(); });
+    el.addEventListener("change", () => { scheduleRenderAll(); scheduleRenderPreview(); });
   });
 
   if (ui.lensFocus) {
@@ -8560,7 +9124,7 @@ function wireUI() {
     });
     ui.lensFocus.addEventListener("change", () => {
       setFocusShiftMm(ui.lensFocus.value, { updateStatus: true });
-      renderAll();
+      scheduleRenderAll();
       scheduleRenderPreview();
     });
   }
@@ -8572,7 +9136,7 @@ function wireUI() {
     });
     ui.focusShiftSlider.addEventListener("change", () => {
       setFocusShiftMm(ui.focusShiftSlider.value, { updateStatus: true });
-      renderAll();
+      scheduleRenderAll();
       scheduleRenderPreview();
     });
   }
@@ -8604,7 +9168,6 @@ function wireUI() {
     ui.zoomConfigSelect.addEventListener("change", () => {
       const idx = Number(ui.zoomConfigSelect.value);
       applyZoomConfigToLens(idx, { silent: false, skipBuild: false, skipRender: false });
-      renderAll();
       scheduleRenderPreview();
     });
   }
@@ -8733,7 +9296,7 @@ function wireUI() {
   syncPreviewFitUI();
 
   // preview buttons
-  if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => scheduleRenderPreview());
+  if (ui.btnRenderPreview) ui.btnRenderPreview.addEventListener("click", () => scheduleRenderPreview({ force: true, immediate: true }));
   if (ui.btnPreviewFS) ui.btnPreviewFS.addEventListener("click", togglePreviewFullscreen);
   if (ui.btnPreviewRuler) ui.btnPreviewRuler.addEventListener("click", () => {
     preview.rulerOn = !preview.rulerOn;
@@ -8771,7 +9334,7 @@ function wireUI() {
   window.addEventListener("resize", () => {
     resizeCanvasToCSS();
     resizePreviewCanvasToCSS();
-    renderAll();
+    scheduleRenderAll();
     if (preview.ready) scheduleRenderPreview();
   });
 
@@ -8794,6 +9357,11 @@ function boot() {
   bindPreviewViewControls();
   setFocusShiftMm(getFocusShiftMm(), { updateStatus: false });
   syncFocusControlsUI();
+  const previousBusy = readRuntimeBusyMarker();
+  if (previousBusy) {
+    clearRuntimeBusy();
+    enterSafeMode(`previous ${String(previousBusy.reason || "render")} did not finish`);
+  }
 
   if (typeof window !== "undefined") {
     window.runFiniteDistanceFocusDiagnostics = (opts = {}) => {
