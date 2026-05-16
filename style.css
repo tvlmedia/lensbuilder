@@ -509,54 +509,88 @@ canvas{
   display:flex;
   align-items:center;
   justify-content:center;
-  background:rgba(0,0,0,.55);
-  z-index:999;
+  padding:24px;
+  background:rgba(5,8,13,.92);
+  z-index:10000;
 }
 .hidden{ display:none !important; }
 
 .modalCard{
-  width:min(760px, calc(100vw - 24px));
-  max-height:min(760px, calc(100vh - 24px));
-  background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
-  border:1px solid rgba(255,255,255,.12);
-  border-radius:22px;
+  width:min(920px, calc(100vw - 48px));
+  max-height:min(760px, calc(100vh - 48px));
+  display:flex;
+  flex-direction:column;
+  background:#111720;
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:14px;
   overflow:hidden;
-  box-shadow:0 18px 60px rgba(0,0,0,.55);
+  box-shadow:0 24px 80px rgba(0,0,0,.78);
 }
 .modalTop{
-  padding:16px 16px 12px 16px;
+  padding:18px 20px 14px 20px;
   display:flex;
   justify-content:space-between;
-  align-items:flex-start;
-  border-bottom:1px solid rgba(255,255,255,.10);
+  align-items:center;
+  gap:18px;
+  background:#151c27;
+  border-bottom:1px solid rgba(255,255,255,.14);
 }
-.modalTitle{ font-weight:900; }
-.modalSub{ font-size:12px; color:var(--muted); margin-top:4px; }
+.modalTitle{ font-weight:900; font-size:18px; line-height:1.15; }
+.modalSub{ font-size:12px; color:rgba(255,255,255,.68); margin-top:5px; line-height:1.35; }
 .modalX{
   border:1px solid rgba(255,255,255,.14);
-  background:rgba(0,0,0,.25);
+  background:#0d131d;
   color:rgba(255,255,255,.85);
-  border-radius:12px;
+  border-radius:10px;
   padding:8px 10px;
   cursor:pointer;
 }
-.modalScroll{ padding:14px 16px; overflow:auto; max-height:520px; }
+.modalScroll{
+  flex:1 1 auto;
+  padding:18px 20px;
+  overflow:auto;
+  background:#0f141d;
+}
 
 .modalGrid{
   display:grid;
   grid-template-columns: 1fr 1fr;
-  gap:12px;
+  gap:14px 16px;
 }
 .field{ display:flex; flex-direction:column; gap:6px; }
 .fieldFull{ grid-column: span 2; }
-.field label{ font-size:12px; color:var(--muted); }
+.field label{
+  font-size:12px;
+  font-weight:700;
+  color:rgba(255,255,255,.72);
+}
+
+.modal input,
+.modal select,
+.modal textarea,
+.modal .cellInput,
+.modal .cellSelect{
+  border-color:rgba(255,255,255,.20);
+  background:#0a0f17;
+  color:rgba(255,255,255,.94);
+  box-shadow:none;
+}
+
+.modal input:focus,
+.modal select:focus,
+.modal textarea:focus,
+.modal .cellInput:focus,
+.modal .cellSelect:focus{
+  border-color:rgba(116,177,255,.85);
+  box-shadow:0 0 0 3px rgba(88,152,255,.18);
+}
 
 .glassNote{
   width:100%;
   padding:10px 10px;
-  border-radius:14px;
-  border:1px solid rgba(255,255,255,.10);
-  background:rgba(0,0,0,.20);
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,.16);
+  background:#090e15;
   color:rgba(255,255,255,.82);
   font-size:12px;
   min-height:64px;
@@ -573,19 +607,27 @@ canvas{
 }
 
 .modalBottom{
-  padding:12px 16px 16px 16px;
-  border-top:1px solid rgba(255,255,255,.10);
+  padding:14px 20px;
+  border-top:1px solid rgba(255,255,255,.14);
   display:flex;
   justify-content:flex-end;
+  background:#151c27;
 }
 .modalBottom .btnPrimary,
 .modalBottom .btnPrimary:visited{
   padding:10px 14px;
-  border-radius:14px;
+  border-radius:10px;
   border:1px solid rgba(42,110,242,.55);
-  background:rgba(42,110,242,.14);
+  background:#163d8f;
   color:rgba(255,255,255,.95);
   cursor:pointer;
+}
+
+@media (max-width: 760px){
+  .modal{ padding:12px; align-items:stretch; }
+  .modalCard{ width:100%; max-height:calc(100vh - 24px); }
+  .modalGrid{ grid-template-columns:1fr; }
+  .fieldFull{ grid-column:auto; }
 }
 
 /* ===========================
